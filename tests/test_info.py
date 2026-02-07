@@ -146,6 +146,40 @@ class TestInfoOwnerFallback:
         assert "Owner: Unknown" in out
 
 
+class TestInfoNonExportable:
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch(
+        "gdoc.api.drive.export_doc",
+        side_effect=GdocError(
+            "Cannot export file as markdown: file is not a Google Docs editor document"
+        ),
+    )
+    @patch("gdoc.api.drive.get_file_info", return_value=MOCK_METADATA)
+    def test_info_non_exportable_shows_na(self, mock_info, mock_export, _mock_svc, capsys):
+        args = _make_args()
+        rc = cmd_info(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Title: Test Document" in out
+        assert "Words: N/A" in out
+
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch(
+        "gdoc.api.drive.export_doc",
+        side_effect=GdocError(
+            "Cannot export file as markdown: file is not a Google Docs editor document"
+        ),
+    )
+    @patch("gdoc.api.drive.get_file_info", return_value=MOCK_METADATA)
+    def test_info_non_exportable_json(self, mock_info, mock_export, _mock_svc, capsys):
+        args = _make_args(json=True)
+        rc = cmd_info(args)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert data["words"] == "N/A"
+
+
 class TestInfoErrors:
     def test_info_invalid_doc_id(self):
         args = _make_args(doc="!!invalid!!")

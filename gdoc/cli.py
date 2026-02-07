@@ -58,8 +58,11 @@ def cmd_info(args) -> int:
     from gdoc.format import get_output_mode, format_json
 
     metadata = get_file_info(doc_id)
-    text = export_doc(doc_id, mime_type="text/plain")
-    word_count = len(text.split())
+    try:
+        text = export_doc(doc_id, mime_type="text/plain")
+        word_count = len(text.split())
+    except GdocError:
+        word_count = None
 
     title = metadata.get("name", "")
     owners = metadata.get("owners", [])
@@ -76,6 +79,8 @@ def cmd_info(args) -> int:
 
     mode = get_output_mode(args)
 
+    words_display = word_count if word_count is not None else "N/A"
+
     if mode == "json":
         print(
             format_json(
@@ -83,7 +88,7 @@ def cmd_info(args) -> int:
                 title=title,
                 owner=owner,
                 modified=modified,
-                words=word_count,
+                words=words_display,
             )
         )
     elif mode == "verbose":
@@ -94,12 +99,12 @@ def cmd_info(args) -> int:
         print(f"Last editor: {last_editor}")
         print(f"Type: {mime_type}")
         print(f"Size: {size or 'N/A'}")
-        print(f"Words: {word_count}")
+        print(f"Words: {words_display}")
     else:
         print(f"Title: {title}")
         print(f"Owner: {owner}")
         print(f"Modified: {modified[:10]}")
-        print(f"Words: {word_count}")
+        print(f"Words: {words_display}")
 
     return 0
 
