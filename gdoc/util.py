@@ -26,6 +26,7 @@ CREDS_PATH = CONFIG_DIR / "credentials.json"
 _PATTERNS = [
     re.compile(r"/d/([a-zA-Z0-9_-]+)"),
     re.compile(r"[?&]id=([a-zA-Z0-9_-]+)"),
+    re.compile(r"/folders/([a-zA-Z0-9_-]+)"),
 ]
 
 _BARE_ID = re.compile(r"^[a-zA-Z0-9_-]+$")

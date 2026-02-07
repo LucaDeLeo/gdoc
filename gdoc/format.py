@@ -19,6 +19,15 @@ def format_success(message: str, mode: str = "terse") -> str:
     return message
 
 
+def format_json(**data) -> str:
+    """Format data as a JSON success response.
+
+    Wraps the provided keyword arguments with ``ok=True`` and returns
+    a JSON string.
+    """
+    return json.dumps({"ok": True, **data})
+
+
 def format_error(message: str) -> str:
     """Format an error message. Always plain text, always stderr."""
     return f"ERR: {message}"
