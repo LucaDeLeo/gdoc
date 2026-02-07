@@ -15,6 +15,14 @@ class GdocArgumentParser(argparse.ArgumentParser):
         sys.exit(3)
 
 
+def cmd_auth(args) -> int:
+    """Handler for `gdoc auth`."""
+    from gdoc.auth import authenticate
+
+    authenticate(no_browser=getattr(args, "no_browser", False))
+    return 0
+
+
 def cmd_stub(args) -> int:
     """Placeholder for unimplemented commands."""
     print(f"ERR: {args.command} is not yet implemented", file=sys.stderr)
@@ -44,7 +52,7 @@ def build_parser() -> GdocArgumentParser:
         action="store_true",
         help="Don't open browser, print URL for manual auth",
     )
-    auth_p.set_defaults(func=cmd_stub)
+    auth_p.set_defaults(func=cmd_auth)
 
     # ls
     ls_p = sub.add_parser("ls", help="List files in Drive")
