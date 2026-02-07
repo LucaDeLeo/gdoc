@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from urllib.parse import parse_qs, urlparse
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -45,11 +46,20 @@ def authenticate(no_browser: bool = False) -> Credentials:
     flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
 
     if no_browser:
+        flow.redirect_uri = "http://localhost:1"
+        auth_url, _ = flow.authorization_url(prompt="consent")
         print(
-            "Visit the URL below to authorize gdoc (copy-paste into browser):\n",
+            "Visit this URL to authorize gdoc:\n\n"
+            f"{auth_url}\n\n"
+            "After authorizing, paste the full redirect URL here:",
             file=sys.stderr,
         )
-        creds = flow.run_local_server(port=0, open_browser=False)
+        redirect_response = input().strip()
+        code = parse_qs(urlparse(redirect_response).query).get("code", [None])[0]
+        if not code:
+            code = redirect_response
+        flow.fetch_token(code=code)
+        creds = flow.credentials
     else:
         creds = flow.run_local_server(port=0)
 

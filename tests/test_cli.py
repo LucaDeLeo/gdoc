@@ -2,6 +2,9 @@
 
 import subprocess
 import sys
+from pathlib import Path
+
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 def run_gdoc(*args: str) -> subprocess.CompletedProcess:
@@ -10,7 +13,7 @@ def run_gdoc(*args: str) -> subprocess.CompletedProcess:
         [sys.executable, "-m", "gdoc", *args],
         capture_output=True,
         text=True,
-        cwd="/Users/luca/dev/gdoc",
+        cwd=REPO_ROOT,
     )
 
 

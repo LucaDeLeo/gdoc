@@ -4,12 +4,15 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gdoc.auth import _load_token, _save_token, authenticate, get_credentials
 from gdoc.util import AuthError
+
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 class TestAuthenticate:
@@ -51,7 +54,8 @@ class TestAuthenticate:
         mock_flow = MagicMock()
         mock_creds = MagicMock()
         mock_creds.to_json.return_value = '{"token": "test"}'
-        mock_flow.run_local_server.return_value = mock_creds
+        mock_flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?...", "state")
+        mock_flow.credentials = mock_creds
 
         with (
             patch("gdoc.auth.CREDS_PATH", fake_creds),
@@ -61,13 +65,15 @@ class TestAuthenticate:
                 "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
                 return_value=mock_flow,
             ),
+            patch("builtins.input", return_value="http://localhost:1/?code=test-auth-code&scope=test"),
         ):
             result = authenticate(no_browser=True)
 
         assert result is mock_creds
-        mock_flow.run_local_server.assert_called_once_with(
-            port=0, open_browser=False
-        )
+        assert mock_flow.redirect_uri == "http://localhost:1"
+        mock_flow.authorization_url.assert_called_once_with(prompt="consent")
+        mock_flow.fetch_token.assert_called_once_with(code="test-auth-code")
+        mock_flow.run_local_server.assert_not_called()
 
 
 class TestGetCredentials:
@@ -176,7 +182,7 @@ class TestCmdAuthIntegration:
             capture_output=True,
             text=True,
             env=env,
-            cwd="/Users/luca/dev/gdoc",
+            cwd=REPO_ROOT,
         )
 
         assert result.returncode == 2
