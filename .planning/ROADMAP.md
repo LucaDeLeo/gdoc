@@ -96,11 +96,11 @@ Plans:
   2. User can list all comments (including resolved) with `comments DOC_ID --all`
   3. User can add a comment, reply to a comment, resolve a comment, and reopen a comment
   4. User can export a doc with line-numbered content and comment annotations on un-numbered lines using `cat DOC_ID --comments`
-**Plans**: TBD
+**Plans**: 2 plans in 2 waves
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md — Comment CRUD commands (comments, comment, reply, resolve, reopen) + API layer + state patches
+- [ ] 05-02-PLAN.md — Annotated view (`cat --comments`) with line-numbered content and inline comment annotations
 
 ### Phase 6: File Management
 **Goal**: Users can create, duplicate, and share Google Docs from the CLI
@@ -126,5 +126,5 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 | 2. Read Operations | 3/3 | Complete | 2026-02-07 |
 | 3. Awareness System | 2/2 | Complete | 2026-02-07 |
 | 4. Write Operations | 2/2 | Complete | 2026-02-07 |
-| 5. Comments & Annotations | 0/2 | Not started | - |
+| 5. Comments & Annotations | 0/2 | Planned | - |
 | 6. File Management | 0/1 | Not started | - |
