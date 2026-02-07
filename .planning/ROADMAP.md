@@ -52,11 +52,12 @@ Plans:
   3. User can list files in Drive with `ls` and filter by folder and type
   4. User can search for documents by name or content with `find "query"`
   5. User can view doc metadata (title, owner, last modified, word count) with `info DOC_ID`
-**Plans**: TBD
+**Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md — API layer (Drive service factory, API wrappers, error translation), format_json, folder URL support
+- [ ] 02-02-PLAN.md — cat + info commands (document export, metadata display)
+- [ ] 02-03-PLAN.md — ls + find commands (file listing, search)
 
 ### Phase 3: Awareness System
 **Goal**: Users get automatic situational awareness of what changed in a document since their last interaction, enabling safe concurrent human-agent collaboration
@@ -121,7 +122,7 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation & Auth | 3/3 | Complete | 2026-02-07 |
-| 2. Read Operations | 0/2 | Not started | - |
+| 2. Read Operations | 0/3 | Not started | - |
 | 3. Awareness System | 0/2 | Not started | - |
 | 4. Write Operations | 0/1 | Not started | - |
 | 5. Comments & Annotations | 0/2 | Not started | - |
