@@ -16,7 +16,7 @@ gdoc delivers a token-efficient CLI for AI agents to interact with Google Docs a
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation & Auth** - Project scaffolding, OAuth2, output formatting, and CLI infrastructure
+- [x] **Phase 1: Foundation & Auth** - Project scaffolding, OAuth2, output formatting, and CLI infrastructure
 - [ ] **Phase 2: Read Operations** - Export docs as markdown/plain text, list and search files, view metadata
 - [ ] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
 - [ ] **Phase 4: Write Operations** - String-match editing and full document write with version guards
@@ -38,9 +38,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 01-01-PLAN.md — Project scaffolding, core utilities (URL-to-ID, error classes), output formatting
-- [ ] 01-02-PLAN.md — CLI infrastructure (custom parser, exit codes, stub subcommands, CI gate)
-- [ ] 01-03-PLAN.md — OAuth2 authentication (browser + headless flows, token management)
+- [x] 01-01-PLAN.md — Project scaffolding, core utilities (URL-to-ID, error classes), output formatting
+- [x] 01-02-PLAN.md — CLI infrastructure (custom parser, exit codes, stub subcommands, CI gate)
+- [x] 01-03-PLAN.md — OAuth2 authentication (browser + headless flows, token management)
 
 ### Phase 2: Read Operations
 **Goal**: Users can read document content, list files, search for documents, and view metadata through the CLI
@@ -120,7 +120,7 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation & Auth | 0/3 | Planned | - |
+| 1. Foundation & Auth | 3/3 | Complete | 2026-02-07 |
 | 2. Read Operations | 0/2 | Not started | - |
 | 3. Awareness System | 0/2 | Not started | - |
 | 4. Write Operations | 0/1 | Not started | - |
