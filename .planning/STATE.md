@@ -53,6 +53,7 @@ Recent decisions affecting current work:
 - _format_file_list shared by ls and find for consistent terse/verbose/json output
 - Query parts list joined with ' and ' for composable Drive API queries
 - Terse date truncated to YYYY-MM-DD, verbose keeps full ISO 8601
+- Non-exportable files in `info` show Words: N/A (graceful degradation)
 
 ### Pending Todos
 

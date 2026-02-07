@@ -17,7 +17,7 @@ gdoc delivers a token-efficient CLI for AI agents to interact with Google Docs a
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation & Auth** - Project scaffolding, OAuth2, output formatting, and CLI infrastructure
-- [ ] **Phase 2: Read Operations** - Export docs as markdown/plain text, list and search files, view metadata
+- [x] **Phase 2: Read Operations** - Export docs as markdown/plain text, list and search files, view metadata
 - [ ] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
 - [ ] **Phase 4: Write Operations** - String-match editing and full document write with version guards
 - [ ] **Phase 5: Comments & Annotations** - Comment CRUD and line-numbered comment annotations in doc output
@@ -55,9 +55,9 @@ Plans:
 **Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 02-01-PLAN.md — API layer (Drive service factory, API wrappers, error translation), format_json, folder URL support
-- [ ] 02-02-PLAN.md — cat + info commands (document export, metadata display)
-- [ ] 02-03-PLAN.md — ls + find commands (file listing, search)
+- [x] 02-01-PLAN.md — API layer (Drive service factory, API wrappers, error translation), format_json, folder URL support
+- [x] 02-02-PLAN.md — cat + info commands (document export, metadata display)
+- [x] 02-03-PLAN.md — ls + find commands (file listing, search)
 
 ### Phase 3: Awareness System
 **Goal**: Users get automatic situational awareness of what changed in a document since their last interaction, enabling safe concurrent human-agent collaboration
@@ -122,7 +122,7 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation & Auth | 3/3 | Complete | 2026-02-07 |
-| 2. Read Operations | 0/3 | Not started | - |
+| 2. Read Operations | 3/3 | Complete | 2026-02-07 |
 | 3. Awareness System | 0/2 | Not started | - |
 | 4. Write Operations | 0/1 | Not started | - |
 | 5. Comments & Annotations | 0/2 | Not started | - |
