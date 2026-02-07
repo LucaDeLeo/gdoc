@@ -76,6 +76,29 @@ class TestAuthenticate:
         mock_flow.run_local_server.assert_not_called()
 
 
+    def test_headless_flow_fetch_token_error(self, tmp_path):
+        fake_creds = tmp_path / "credentials.json"
+        fake_creds.write_text("{}")
+        fake_token = tmp_path / "token.json"
+
+        mock_flow = MagicMock()
+        mock_flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?...", "state")
+        mock_flow.fetch_token.side_effect = Exception("invalid_grant")
+
+        with (
+            patch("gdoc.auth.CREDS_PATH", fake_creds),
+            patch("gdoc.auth.TOKEN_PATH", fake_token),
+            patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch(
+                "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
+                return_value=mock_flow,
+            ),
+            patch("builtins.input", return_value="http://localhost:1/?code=bad-code&scope=test"),
+        ):
+            with pytest.raises(AuthError, match="Failed to exchange authorization code"):
+                authenticate(no_browser=True)
+
+
 class TestGetCredentials:
     def test_valid_cached_token(self):
         mock_creds = MagicMock()
@@ -170,6 +193,28 @@ class TestSaveToken:
 
         assert fake_token.exists()
         assert oct(os.stat(fake_token).st_mode & 0o777) == "0o600"
+
+    def test_saves_atomically_with_restricted_permissions(self, tmp_path):
+        """Token file is created with 0o600 from the start (no chmod race)."""
+        fake_token = tmp_path / "token.json"
+        mock_creds = MagicMock()
+        mock_creds.to_json.return_value = '{"token": "test"}'
+
+        original_open = os.open
+
+        def spy_open(path, flags, mode=0o777):
+            fd = original_open(path, flags, mode)
+            # Verify mode is restrictive at creation time
+            stat = os.fstat(fd)
+            assert oct(stat.st_mode & 0o777) == "0o600"
+            return fd
+
+        with (
+            patch("gdoc.auth.TOKEN_PATH", fake_token),
+            patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.auth.os.open", side_effect=spy_open),
+        ):
+            _save_token(mock_creds)
 
 
 class TestCmdAuthIntegration:

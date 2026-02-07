@@ -58,7 +58,10 @@ def authenticate(no_browser: bool = False) -> Credentials:
         code = parse_qs(urlparse(redirect_response).query).get("code", [None])[0]
         if not code:
             code = redirect_response
-        flow.fetch_token(code=code)
+        try:
+            flow.fetch_token(code=code)
+        except Exception as e:
+            raise AuthError(f"Failed to exchange authorization code: {e}") from e
         creds = flow.credentials
     else:
         creds = flow.run_local_server(port=0)
@@ -92,5 +95,6 @@ def _load_token() -> Credentials | None:
 def _save_token(creds: Credentials) -> None:
     """Save credentials to token.json with restricted permissions."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    TOKEN_PATH.write_text(creds.to_json())
-    os.chmod(TOKEN_PATH, 0o600)
+    fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(creds.to_json())

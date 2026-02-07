@@ -59,6 +59,18 @@ class TestMutuallyExclusiveFlags:
         result = run_gdoc("--verbose", "ls")
         assert result.returncode == 4  # stub runs, flag accepted
 
+    def test_json_after_subcommand(self):
+        result = run_gdoc("info", "1aBcDeFg", "--json")
+        assert result.returncode == 4  # stub runs, flag accepted
+
+    def test_verbose_after_subcommand(self):
+        result = run_gdoc("ls", "--verbose")
+        assert result.returncode == 4  # stub runs, flag accepted
+
+    def test_json_and_verbose_conflict_after_subcommand(self):
+        result = run_gdoc("ls", "--json", "--verbose")
+        assert result.returncode != 0
+
 
 class TestHelpText:
     def test_help_exits_0(self):

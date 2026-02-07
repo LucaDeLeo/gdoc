@@ -36,17 +36,26 @@ def build_parser() -> GdocArgumentParser:
         description="CLI for Google Docs & Drive",
     )
 
-    # Global output mode flags (mutually exclusive)
-    output_group = parser.add_mutually_exclusive_group()
+    # Global output mode flags via a parent parser so they work
+    # both before and after the subcommand name.
+    output_parent = argparse.ArgumentParser(add_help=False)
+    output_group = output_parent.add_mutually_exclusive_group()
     output_group.add_argument("--json", action="store_true", help="JSON output")
     output_group.add_argument(
+        "--verbose", action="store_true", help="Detailed output"
+    )
+
+    # Also add to the top-level parser for `gdoc --json <cmd>` form
+    top_output_group = parser.add_mutually_exclusive_group()
+    top_output_group.add_argument("--json", action="store_true", help="JSON output")
+    top_output_group.add_argument(
         "--verbose", action="store_true", help="Detailed output"
     )
 
     sub = parser.add_subparsers(dest="command")
 
     # auth
-    auth_p = sub.add_parser("auth", help="Authenticate with Google")
+    auth_p = sub.add_parser("auth", parents=[output_parent], help="Authenticate with Google")
     auth_p.add_argument(
         "--no-browser",
         action="store_true",
@@ -55,7 +64,7 @@ def build_parser() -> GdocArgumentParser:
     auth_p.set_defaults(func=cmd_auth)
 
     # ls
-    ls_p = sub.add_parser("ls", help="List files in Drive")
+    ls_p = sub.add_parser("ls", parents=[output_parent], help="List files in Drive")
     ls_p.add_argument("folder_id", nargs="?", help="Folder ID to list")
     ls_p.add_argument(
         "--type",
@@ -66,12 +75,12 @@ def build_parser() -> GdocArgumentParser:
     ls_p.set_defaults(func=cmd_stub)
 
     # find
-    find_p = sub.add_parser("find", help="Search files by name/content")
+    find_p = sub.add_parser("find", parents=[output_parent], help="Search files by name/content")
     find_p.add_argument("query", help="Search query")
     find_p.set_defaults(func=cmd_stub)
 
     # cat
-    cat_p = sub.add_parser("cat", help="Export doc as markdown")
+    cat_p = sub.add_parser("cat", parents=[output_parent], help="Export doc as markdown")
     cat_p.add_argument("doc", help="Document ID or URL")
     cat_output = cat_p.add_mutually_exclusive_group()
     cat_output.add_argument(
@@ -86,7 +95,7 @@ def build_parser() -> GdocArgumentParser:
     cat_p.set_defaults(func=cmd_stub)
 
     # edit
-    edit_p = sub.add_parser("edit", help="Find and replace text")
+    edit_p = sub.add_parser("edit", parents=[output_parent], help="Find and replace text")
     edit_p.add_argument("doc", help="Document ID or URL")
     edit_p.add_argument("old_text", help="Text to find")
     edit_p.add_argument("new_text", help="Replacement text")
@@ -102,7 +111,7 @@ def build_parser() -> GdocArgumentParser:
     edit_p.set_defaults(func=cmd_stub)
 
     # write
-    write_p = sub.add_parser("write", help="Overwrite doc from local file")
+    write_p = sub.add_parser("write", parents=[output_parent], help="Overwrite doc from local file")
     write_p.add_argument("doc", help="Document ID or URL")
     write_p.add_argument("file", help="Local markdown file")
     write_p.add_argument(
@@ -114,7 +123,7 @@ def build_parser() -> GdocArgumentParser:
     write_p.set_defaults(func=cmd_stub)
 
     # comments
-    comments_p = sub.add_parser("comments", help="List comments on a doc")
+    comments_p = sub.add_parser("comments", parents=[output_parent], help="List comments on a doc")
     comments_p.add_argument("doc", help="Document ID or URL")
     comments_p.add_argument(
         "--all", action="store_true", help="Include resolved comments"
@@ -125,7 +134,7 @@ def build_parser() -> GdocArgumentParser:
     comments_p.set_defaults(func=cmd_stub)
 
     # comment
-    comment_p = sub.add_parser("comment", help="Add a comment to a doc")
+    comment_p = sub.add_parser("comment", parents=[output_parent], help="Add a comment to a doc")
     comment_p.add_argument("doc", help="Document ID or URL")
     comment_p.add_argument("text", help="Comment text")
     comment_p.add_argument(
@@ -134,7 +143,7 @@ def build_parser() -> GdocArgumentParser:
     comment_p.set_defaults(func=cmd_stub)
 
     # reply
-    reply_p = sub.add_parser("reply", help="Reply to a comment")
+    reply_p = sub.add_parser("reply", parents=[output_parent], help="Reply to a comment")
     reply_p.add_argument("doc", help="Document ID or URL")
     reply_p.add_argument("comment_id", help="Comment ID to reply to")
     reply_p.add_argument("text", help="Reply text")
@@ -144,7 +153,7 @@ def build_parser() -> GdocArgumentParser:
     reply_p.set_defaults(func=cmd_stub)
 
     # resolve
-    resolve_p = sub.add_parser("resolve", help="Resolve a comment")
+    resolve_p = sub.add_parser("resolve", parents=[output_parent], help="Resolve a comment")
     resolve_p.add_argument("doc", help="Document ID or URL")
     resolve_p.add_argument("comment_id", help="Comment ID to resolve")
     resolve_p.add_argument(
@@ -153,7 +162,7 @@ def build_parser() -> GdocArgumentParser:
     resolve_p.set_defaults(func=cmd_stub)
 
     # reopen
-    reopen_p = sub.add_parser("reopen", help="Reopen a resolved comment")
+    reopen_p = sub.add_parser("reopen", parents=[output_parent], help="Reopen a resolved comment")
     reopen_p.add_argument("doc", help="Document ID or URL")
     reopen_p.add_argument("comment_id", help="Comment ID to reopen")
     reopen_p.add_argument(
@@ -162,7 +171,7 @@ def build_parser() -> GdocArgumentParser:
     reopen_p.set_defaults(func=cmd_stub)
 
     # info
-    info_p = sub.add_parser("info", help="Show document metadata")
+    info_p = sub.add_parser("info", parents=[output_parent], help="Show document metadata")
     info_p.add_argument("doc", help="Document ID or URL")
     info_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
@@ -170,7 +179,7 @@ def build_parser() -> GdocArgumentParser:
     info_p.set_defaults(func=cmd_stub)
 
     # share
-    share_p = sub.add_parser("share", help="Share a document")
+    share_p = sub.add_parser("share", parents=[output_parent], help="Share a document")
     share_p.add_argument("doc", help="Document ID or URL")
     share_p.add_argument("email", help="Email to share with")
     share_p.add_argument(
@@ -182,13 +191,13 @@ def build_parser() -> GdocArgumentParser:
     share_p.set_defaults(func=cmd_stub)
 
     # new
-    new_p = sub.add_parser("new", help="Create a blank document")
+    new_p = sub.add_parser("new", parents=[output_parent], help="Create a blank document")
     new_p.add_argument("title", help="Document title")
     new_p.add_argument("--folder", help="Folder ID to place doc in")
     new_p.set_defaults(func=cmd_stub)
 
     # cp
-    cp_p = sub.add_parser("cp", help="Duplicate a document")
+    cp_p = sub.add_parser("cp", parents=[output_parent], help="Duplicate a document")
     cp_p.add_argument("doc", help="Document ID or URL")
     cp_p.add_argument("title", help="Title for the copy")
     cp_p.set_defaults(func=cmd_stub)
