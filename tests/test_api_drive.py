@@ -13,6 +13,7 @@ from gdoc.api.drive import (
     get_file_info,
     list_files,
     search_files,
+    update_doc_content,
 )
 from gdoc.util import AuthError, GdocError
 
@@ -221,3 +222,62 @@ class TestGetFileInfo:
 
         with pytest.raises(GdocError, match="Document not found"):
             get_file_info("abc")
+
+
+@patch("gdoc.api.drive.get_drive_service")
+class TestUpdateDocContent:
+    def test_success(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().update().execute.return_value = {
+            "version": "42",
+        }
+
+        result = update_doc_content("abc123", "# Hello")
+        assert result == 42
+
+    def test_request_params(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().update().execute.return_value = {
+            "version": "10",
+        }
+
+        update_doc_content("abc123", "# Hello")
+
+        call_kwargs = mock_service.files().update.call_args
+        assert call_kwargs is not None
+        body = call_kwargs.kwargs.get("body", call_kwargs[1].get("body"))
+        assert body["mimeType"] == (
+            "application/vnd.google-apps.document"
+        )
+
+    def test_http_error_401(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().update().execute.side_effect = (
+            _make_http_error(401)
+        )
+
+        with pytest.raises(AuthError, match="Authentication expired"):
+            update_doc_content("abc123", "content")
+
+    def test_http_error_403(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().update().execute.side_effect = (
+            _make_http_error(403, reason="forbidden")
+        )
+
+        with pytest.raises(GdocError, match="Permission denied"):
+            update_doc_content("abc123", "content")
+
+    def test_http_error_404(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().update().execute.side_effect = (
+            _make_http_error(404)
+        )
+
+        with pytest.raises(GdocError, match="Document not found"):
+            update_doc_content("abc123", "content")

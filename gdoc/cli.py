@@ -290,6 +290,105 @@ def cmd_edit(args) -> int:
     return 0
 
 
+def cmd_write(args) -> int:
+    """Handler for `gdoc write`."""
+    import os
+
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    force = getattr(args, "force", False)
+    file_path = args.file
+
+    # Read local file first (fail fast on missing file)
+    if not os.path.isfile(file_path):
+        raise GdocError(f"file not found: {file_path}", exit_code=3)
+    try:
+        with open(file_path) as f:
+            content = f.read()
+    except OSError as e:
+        raise GdocError(f"cannot read file: {e}", exit_code=3)
+
+    # Conflict detection (complex, per Decisions #2, #5, #6)
+    change_info = None
+
+    if not quiet:
+        # Normal mode: full pre-flight (2 API calls + banner)
+        from gdoc.notify import pre_flight
+
+        change_info = pre_flight(doc_id, quiet=False)
+
+        if not force:
+            # Decision #5: absent last_read_version → block
+            if change_info.last_read_version is None:
+                raise GdocError(
+                    "no read baseline. Run 'gdoc cat' first, "
+                    "or use --force to overwrite.",
+                    exit_code=3,
+                )
+            # Check conflict: block if doc changed since last read
+            if change_info.has_conflict:
+                raise GdocError(
+                    "doc changed since last read. "
+                    "Run 'gdoc cat' first, "
+                    "or use --force to overwrite.",
+                    exit_code=3,
+                )
+    elif not force:
+        # Quiet + no force: lightweight version check (Decision #2)
+        from gdoc.state import load_state
+
+        state = load_state(doc_id)
+
+        # Decision #5: absent last_read_version → block
+        if state is None or state.last_read_version is None:
+            raise GdocError(
+                "no read baseline. Run 'gdoc cat' first, "
+                "or use --force to overwrite.",
+                exit_code=3,
+            )
+
+        # Lightweight version check (1 API call)
+        from gdoc.api.drive import get_file_version
+
+        version_data = get_file_version(doc_id)
+        current_version = version_data.get("version")
+        if (
+            current_version is not None
+            and current_version != state.last_read_version
+        ):
+            raise GdocError(
+                "doc changed since last read. "
+                "Run 'gdoc cat' first, "
+                "or use --force to overwrite.",
+                exit_code=3,
+            )
+    # else: quiet + force → skip everything (Decision #6)
+
+    # Upload content via Drive API
+    from gdoc.api.drive import update_doc_content
+
+    command_version = update_doc_content(doc_id, content)
+
+    # Output
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(written=True, version=command_version))
+    else:
+        print("OK written")
+
+    # Update state (Decision #4: last_version only)
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="write",
+        quiet=quiet, command_version=command_version,
+    )
+
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     from gdoc.auth import authenticate
@@ -398,7 +497,7 @@ def build_parser() -> GdocArgumentParser:
     write_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    write_p.set_defaults(func=cmd_stub)
+    write_p.set_defaults(func=cmd_write)
 
     # comments
     comments_p = sub.add_parser("comments", parents=[output_parent], help="List comments on a doc")

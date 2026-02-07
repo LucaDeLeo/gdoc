@@ -36,6 +36,10 @@ class TestExitCode4OnStubs:
         result = run_gdoc("edit", "doc123", "old", "new")
         assert result.returncode != 4  # no longer a stub
 
+    def test_write_no_longer_stub(self):
+        result = run_gdoc("write", "doc123", "/tmp/nonexistent.md")
+        assert result.returncode != 4  # no longer a stub
+
 
 class TestMutuallyExclusiveFlags:
     def test_json_and_verbose_conflict(self):

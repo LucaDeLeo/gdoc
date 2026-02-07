@@ -118,6 +118,49 @@ def get_file_info(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
+def update_doc_content(doc_id: str, content: str) -> int:
+    """Overwrite a Google Doc's content with markdown.
+
+    Uploads markdown content via files.update with media, triggering
+    automatic conversion to Google Docs format.
+
+    Args:
+        doc_id: The document ID.
+        content: Markdown content string to upload.
+
+    Returns:
+        The new document version (int) from the API response.
+    """
+    import io
+
+    from googleapiclient.http import MediaIoBaseUpload
+
+    try:
+        service = get_drive_service()
+        media = MediaIoBaseUpload(
+            io.BytesIO(content.encode("utf-8")),
+            mimetype="text/markdown",
+            resumable=False,
+        )
+        result = (
+            service.files()
+            .update(
+                fileId=doc_id,
+                body={
+                    "mimeType": (
+                        "application/vnd.google-apps.document"
+                    ),
+                },
+                media_body=media,
+                fields="version",
+            )
+            .execute()
+        )
+        return int(result["version"])
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
 def get_file_version(doc_id: str) -> dict:
     """Get lightweight version metadata for pre-flight checks.
 
