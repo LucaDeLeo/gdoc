@@ -1,0 +1,81 @@
+"""Tests for gdoc.cli: argument parsing, exit codes, and error formatting."""
+
+import subprocess
+import sys
+
+
+def run_gdoc(*args: str) -> subprocess.CompletedProcess:
+    """Run gdoc as a subprocess and return the result."""
+    return subprocess.run(
+        [sys.executable, "-m", "gdoc", *args],
+        capture_output=True,
+        text=True,
+        cwd="/Users/luca/dev/gdoc",
+    )
+
+
+class TestExitCode3OnUsageErrors:
+    def test_no_command(self):
+        result = run_gdoc()
+        assert result.returncode == 3
+
+    def test_bad_flag(self):
+        result = run_gdoc("--bad-flag")
+        assert result.returncode == 3
+
+    def test_missing_required_arg(self):
+        result = run_gdoc("cat")
+        assert result.returncode == 3
+
+
+class TestExitCode4OnStubs:
+    def test_ls_stub(self):
+        result = run_gdoc("ls")
+        assert result.returncode == 4
+        assert "ERR: ls is not yet implemented" in result.stderr
+
+    def test_cat_stub(self):
+        result = run_gdoc("cat", "some-doc-id")
+        assert result.returncode == 4
+
+    def test_find_stub(self):
+        result = run_gdoc("find", "query")
+        assert result.returncode == 4
+
+
+class TestMutuallyExclusiveFlags:
+    def test_json_and_verbose_conflict(self):
+        result = run_gdoc("--json", "--verbose", "ls")
+        assert result.returncode == 3
+
+    def test_json_accepted(self):
+        result = run_gdoc("--json", "ls")
+        assert result.returncode == 4  # stub runs, flag accepted
+
+    def test_verbose_accepted(self):
+        result = run_gdoc("--verbose", "ls")
+        assert result.returncode == 4  # stub runs, flag accepted
+
+
+class TestHelpText:
+    def test_help_exits_0(self):
+        result = run_gdoc("--help")
+        assert result.returncode == 0
+        assert "auth" in result.stdout
+        assert "cat" in result.stdout
+        assert "edit" in result.stdout
+
+    def test_auth_help_shows_no_browser(self):
+        result = run_gdoc("auth", "--help")
+        assert result.returncode == 0
+        assert "--no-browser" in result.stdout
+
+
+class TestErrorFormat:
+    def test_stub_error_prefix(self):
+        result = run_gdoc("ls")
+        assert result.stderr.startswith("ERR: ")
+
+    def test_usage_error_prefix(self):
+        result = run_gdoc("cat")
+        assert "ERR: " in result.stderr
