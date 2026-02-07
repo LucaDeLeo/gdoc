@@ -104,6 +104,76 @@ def cmd_info(args) -> int:
     return 0
 
 
+def _format_file_list(files: list[dict], mode: str) -> str:
+    """Format a list of file dicts for output."""
+    if mode == "json":
+        from gdoc.format import format_json
+
+        return format_json(files=files)
+
+    if not files:
+        return ""
+
+    lines = []
+    for f in files:
+        fid = f.get("id", "")
+        name = f.get("name", "")
+        modified = f.get("modifiedTime", "")
+        if mode == "verbose":
+            mime = f.get("mimeType", "")
+            lines.append(f"{fid}\t{name}\t{modified}\t{mime}")
+        else:
+            lines.append(f"{fid}\t{name}\t{modified[:10]}")
+    return "\n".join(lines)
+
+
+def cmd_ls(args) -> int:
+    """Handler for `gdoc ls`."""
+    from gdoc.api.drive import list_files
+    from gdoc.format import get_output_mode
+
+    query_parts = []
+
+    if getattr(args, "folder_id", None):
+        folder_id = _resolve_doc_id(args.folder_id)
+        query_parts.append(f"'{folder_id}' in parents")
+    else:
+        query_parts.append("'root' in parents")
+
+    query_parts.append("trashed=false")
+
+    type_filter = getattr(args, "type", "all")
+    if type_filter == "docs":
+        query_parts.append("mimeType='application/vnd.google-apps.document'")
+    elif type_filter == "sheets":
+        query_parts.append("mimeType='application/vnd.google-apps.spreadsheet'")
+
+    query = " and ".join(query_parts)
+    files = list_files(query)
+
+    mode = get_output_mode(args)
+    output = _format_file_list(files, mode)
+    if output:
+        print(output)
+
+    return 0
+
+
+def cmd_find(args) -> int:
+    """Handler for `gdoc find`."""
+    from gdoc.api.drive import search_files
+    from gdoc.format import get_output_mode
+
+    files = search_files(args.query)
+
+    mode = get_output_mode(args)
+    output = _format_file_list(files, mode)
+    if output:
+        print(output)
+
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     from gdoc.auth import authenticate
@@ -164,12 +234,12 @@ def build_parser() -> GdocArgumentParser:
         default="all",
         help="File type filter",
     )
-    ls_p.set_defaults(func=cmd_stub)
+    ls_p.set_defaults(func=cmd_ls)
 
     # find
     find_p = sub.add_parser("find", parents=[output_parent], help="Search files by name/content")
     find_p.add_argument("query", help="Search query")
-    find_p.set_defaults(func=cmd_stub)
+    find_p.set_defaults(func=cmd_find)
 
     # cat
     cat_p = sub.add_parser("cat", parents=[output_parent], help="Export doc as markdown")

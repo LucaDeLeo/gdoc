@@ -32,14 +32,10 @@ class TestExitCode3OnUsageErrors:
 
 
 class TestExitCode4OnStubs:
-    def test_ls_stub(self):
-        result = run_gdoc("ls")
+    def test_edit_stub(self):
+        result = run_gdoc("edit", "doc123", "old", "new")
         assert result.returncode == 4
-        assert "ERR: ls is not yet implemented" in result.stderr
-
-    def test_find_stub(self):
-        result = run_gdoc("find", "query")
-        assert result.returncode == 4
+        assert "ERR: edit is not yet implemented" in result.stderr
 
 
 class TestMutuallyExclusiveFlags:
@@ -48,11 +44,11 @@ class TestMutuallyExclusiveFlags:
         assert result.returncode == 3
 
     def test_json_accepted(self):
-        result = run_gdoc("--json", "ls")
+        result = run_gdoc("--json", "edit", "doc123", "old", "new")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_verbose_accepted(self):
-        result = run_gdoc("--verbose", "ls")
+        result = run_gdoc("--verbose", "edit", "doc123", "old", "new")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_json_after_subcommand(self):
@@ -60,7 +56,7 @@ class TestMutuallyExclusiveFlags:
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_verbose_after_subcommand(self):
-        result = run_gdoc("ls", "--verbose")
+        result = run_gdoc("edit", "doc123", "old", "new", "--verbose")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_json_and_verbose_conflict_after_subcommand(self):
@@ -94,7 +90,7 @@ class TestHelpText:
 
 class TestErrorFormat:
     def test_stub_error_prefix(self):
-        result = run_gdoc("ls")
+        result = run_gdoc("edit", "doc123", "old", "new")
         assert result.stderr.startswith("ERR: ")
 
     def test_usage_error_prefix(self):
