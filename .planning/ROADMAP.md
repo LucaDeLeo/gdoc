@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation & Auth** - Project scaffolding, OAuth2, output formatting, and CLI infrastructure
 - [x] **Phase 2: Read Operations** - Export docs as markdown/plain text, list and search files, view metadata
 - [x] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
-- [ ] **Phase 4: Write Operations** - String-match editing and full document write with version guards
+- [x] **Phase 4: Write Operations** - String-match editing and full document write with version guards
 - [ ] **Phase 5: Comments & Annotations** - Comment CRUD and line-numbered comment annotations in doc output
 - [ ] **Phase 6: File Management** - Create, duplicate, and share documents
 
@@ -81,10 +81,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. User can find a unique string and replace it with `edit DOC_ID "old" "new"`, with `--all` to replace all occurrences
   2. User can overwrite an entire doc from a local markdown file with `write DOC_ID FILE.md`, and write is blocked when the doc changed since last read unless `--force` is passed
-**Plans**: TBD
+**Plans**: 2 plans in 2 waves
 
 Plans:
-- [ ] 04-01: TBD
+- [x] 04-01-PLAN.md — `edit` command: Docs API v1 wrapper, find-and-replace with uniqueness pre-check, state update extension
+- [x] 04-02-PLAN.md — `write` command: Drive API media upload, full-doc overwrite with conflict safety
 
 ### Phase 5: Comments & Annotations
 **Goal**: Users can manage document comments (list, create, reply, resolve, reopen) and view documents with line-numbered comment annotations for full collaboration context
@@ -124,6 +125,6 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 | 1. Foundation & Auth | 3/3 | Complete | 2026-02-07 |
 | 2. Read Operations | 3/3 | Complete | 2026-02-07 |
 | 3. Awareness System | 2/2 | Complete | 2026-02-07 |
-| 4. Write Operations | 0/1 | Not started | - |
+| 4. Write Operations | 2/2 | Complete | 2026-02-07 |
 | 5. Comments & Annotations | 0/2 | Not started | - |
 | 6. File Management | 0/1 | Not started | - |
