@@ -20,13 +20,10 @@ Agents can read, edit, and comment on Google Docs through terse bash commands wi
 - [ ] `ls` — list files in Drive (with folder filtering, type filtering)
 - [ ] `find` — search by name/content
 - [ ] `cat` — export doc as markdown to stdout
-- [ ] `cat --comments` — annotated view with inline comments as HTML comments
+- [ ] `cat --comments` — annotated view with line-numbered content and comment annotations
 - [ ] `cat --plain` — export as plain text
-- [ ] `replace` — find & replace all occurrences
-- [ ] `insert` — insert text at character index
-- [ ] `append` — append text at end of doc
-- [ ] `delete` — delete text range by index
-- [ ] `push` — overwrite doc body from local markdown file
+- [ ] `edit` — find unique string match and replace (`--all` for all occurrences)
+- [ ] `write` — overwrite doc body from local markdown file
 - [ ] `comments` — list open comments (with `--all` for resolved)
 - [ ] `comment` — add unanchored comment
 - [ ] `reply` — reply to a comment
@@ -36,7 +33,7 @@ Agents can read, edit, and comment on Google Docs through terse bash commands wi
 - [ ] `new` — create blank doc (with optional folder)
 - [ ] `cp` — duplicate a doc
 - [ ] Awareness system — pre-flight change detection on every command
-- [ ] Conflict detection — warn on edits since last read, block `push` unless `--force`
+- [ ] Conflict detection — warn on edits since last read, block `write` unless `--force`
 - [ ] `--quiet` flag to skip pre-flight checks
 - [ ] `--json` output mode for machine parsing
 - [ ] `--verbose` output mode for humans
@@ -62,8 +59,8 @@ Agents can read, edit, and comment on Google Docs through terse bash commands wi
 - Google Drive API v3 handles file operations, comments, and markdown export (native since July 2024)
 - Google Docs API v1 handles surgical text edits via `batchUpdate`
 - Comments CRUD is exclusively through Drive API v3 (not Docs API)
-- `replaceAllText` is the workhorse edit primitive for agents — no index math needed
-- `push` uses Drive `files.update` with media upload — markdown auto-converts to Google Doc format
+- `edit` uses `replaceAllText` with uniqueness check — no index math needed, mirrors Claude Code Edit tool
+- `write` uses Drive `files.update` with media upload — markdown auto-converts to Google Doc format
 - Comment resolution requires creating a reply with `action: "resolve"` (can't set `resolved=true` directly)
 
 ## Constraints
@@ -80,9 +77,10 @@ Agents can read, edit, and comment on Google Docs through terse bash commands wi
 | Python over Go/Rust | Google API client libraries are best in Python; target audience (AI agents) doesn't need binary distribution | — Pending |
 | Unix verb names (cat, ls, cp) | Intuitive for agents trained on unix commands; reduces prompt engineering needed | — Pending |
 | Awareness system on by default | Agents need situational context; opt-out via `--quiet` for batch ops | — Pending |
-| `push` blocks on stale read | Full overwrite is destructive; `replace` warns but doesn't block (it's safe) | — Pending |
-| HTML comments for annotation | Valid markdown, doesn't affect rendering, safe for `push` round-trips | — Pending |
+| `write` blocks on stale read | Full overwrite is destructive; `edit` warns but doesn't block (it's safe) | — Pending |
+| Line-numbered annotation for `--comments` | Mirrors Claude Code Read/Edit pattern — numbered lines are content, un-numbered are metadata. No content/annotation confusion. | — Decided |
 | Drive API for comments | Docs API can read comment structure but CRUD is Drive API v3 only | — Pending |
+| `edit` mirrors Claude Code Edit tool | Agents already know unique-string-match pattern; drop index-based ops (insert/delete/append) | — Decided |
 
 ---
 *Last updated: 2026-02-07 after initialization*

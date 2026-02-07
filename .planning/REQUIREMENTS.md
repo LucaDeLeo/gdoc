@@ -14,7 +14,7 @@
 ### Read Operations
 
 - [ ] **READ-01**: User can export a doc as markdown to stdout (`cat DOC_ID`)
-- [ ] **READ-02**: User can export a doc with inline comments as HTML comments (`cat DOC_ID --comments`)
+- [ ] **READ-02**: User can export a doc with line-numbered content and comment annotations on un-numbered lines (`cat DOC_ID --comments`)
 - [ ] **READ-03**: User can export a doc as plain text (`cat DOC_ID --plain`)
 - [ ] **READ-04**: User can list files in a folder with type filtering (`ls [FOLDER_ID] [--type docs|sheets|all]`)
 - [ ] **READ-05**: User can search files by name/content (`find "query"`)
@@ -22,12 +22,9 @@
 
 ### Write Operations
 
-- [ ] **WRITE-01**: User can find & replace all occurrences of text in a doc (`replace DOC_ID "old" "new"`)
-- [ ] **WRITE-02**: User can insert text at a character index (`insert DOC_ID INDEX "text"`)
-- [ ] **WRITE-03**: User can append text at end of doc (`append DOC_ID "text"`)
-- [ ] **WRITE-04**: User can delete a text range by start/end index (`delete DOC_ID START END`)
-- [ ] **WRITE-05**: User can overwrite entire doc body from a local markdown file (`push DOC_ID FILE.md`)
-- [ ] **WRITE-06**: Push blocks when doc has been modified since last read unless `--force` is passed
+- [ ] **WRITE-01**: User can find a unique string match and replace it (`edit DOC_ID "old" "new"`); errors if match is not unique unless `--all` is passed
+- [ ] **WRITE-02**: User can overwrite entire doc body from a local markdown file (`write DOC_ID FILE.md`)
+- [ ] **WRITE-03**: `write` blocks when doc has been modified since last read unless `--force` is passed
 
 ### Comments
 
@@ -42,7 +39,7 @@
 
 - [ ] **AWARE-01**: Every command runs a pre-flight check detecting changes since last interaction
 - [ ] **AWARE-02**: Notification banner shows doc edits, new comments, replies, resolved/reopened comments
-- [ ] **AWARE-03**: Conflict detection warns when doc changed since last read (warning for replace, block for push)
+- [ ] **AWARE-03**: Conflict detection warns when doc changed since last read (warning for edit, block for write)
 - [ ] **AWARE-04**: `--quiet` flag skips pre-flight checks entirely (saves 2 API calls)
 
 ### File Operations
@@ -101,9 +98,6 @@
 | WRITE-01 | Phase 4 | Pending |
 | WRITE-02 | Phase 4 | Pending |
 | WRITE-03 | Phase 4 | Pending |
-| WRITE-04 | Phase 4 | Pending |
-| WRITE-05 | Phase 4 | Pending |
-| WRITE-06 | Phase 4 | Pending |
 | COMM-01 | Phase 5 | Pending |
 | COMM-02 | Phase 5 | Pending |
 | COMM-03 | Phase 5 | Pending |
@@ -125,8 +119,8 @@
 | OUT-06 | Phase 1 | Pending |
 
 **Coverage:**
-- v1 requirements: 34 total
-- Mapped to phases: 34
+- v1 requirements: 31 total
+- Mapped to phases: 31
 - Unmapped: 0
 
 ---
