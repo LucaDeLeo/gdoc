@@ -101,4 +101,9 @@ def update_state_after_command(
         if change_info.all_resolved_ids is not None:
             state.known_resolved_ids = change_info.all_resolved_ids
 
+    # Override last_version with post-mutation version for edit/write
+    # (the pre-flight version is from BEFORE the mutation; this is from AFTER)
+    if command_version is not None and command not in ("cat", "info"):
+        state.last_version = command_version
+
     save_state(doc_id, state)

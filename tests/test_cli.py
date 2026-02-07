@@ -32,10 +32,9 @@ class TestExitCode3OnUsageErrors:
 
 
 class TestExitCode4OnStubs:
-    def test_edit_stub(self):
+    def test_edit_no_longer_stub(self):
         result = run_gdoc("edit", "doc123", "old", "new")
-        assert result.returncode == 4
-        assert "ERR: edit is not yet implemented" in result.stderr
+        assert result.returncode != 4  # no longer a stub
 
 
 class TestMutuallyExclusiveFlags:
@@ -44,19 +43,19 @@ class TestMutuallyExclusiveFlags:
         assert result.returncode == 3
 
     def test_json_accepted(self):
-        result = run_gdoc("--json", "edit", "doc123", "old", "new")
+        result = run_gdoc("--json", "comment", "doc123", "text")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_verbose_accepted(self):
-        result = run_gdoc("--verbose", "edit", "doc123", "old", "new")
+        result = run_gdoc("--verbose", "comment", "doc123", "text")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_json_after_subcommand(self):
-        result = run_gdoc("edit", "1aBcDeFg", "old", "new", "--json")
+        result = run_gdoc("comment", "1aBcDeFg", "text", "--json")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_verbose_after_subcommand(self):
-        result = run_gdoc("edit", "doc123", "old", "new", "--verbose")
+        result = run_gdoc("comment", "doc123", "text", "--verbose")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_json_and_verbose_conflict_after_subcommand(self):
@@ -90,7 +89,7 @@ class TestHelpText:
 
 class TestErrorFormat:
     def test_stub_error_prefix(self):
-        result = run_gdoc("edit", "doc123", "old", "new")
+        result = run_gdoc("comment", "doc123", "text")
         assert result.stderr.startswith("ERR: ")
 
     def test_usage_error_prefix(self):

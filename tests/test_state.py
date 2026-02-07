@@ -181,3 +181,51 @@ class TestUpdateStateAfterCommand:
             state = load_state("doc1")
             assert state.last_seen != ""
             assert "T" in state.last_seen
+
+    def test_edit_command_version_updates_last_version(self, tmp_path):
+        """edit with command_version updates last_version."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=10)
+            update_state_after_command(
+                "doc1", info, command="edit",
+                quiet=False, command_version=15,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 15  # from command_version, not pre-flight
+
+    def test_edit_command_version_does_not_update_read_version(self, tmp_path):
+        """edit with command_version does not update last_read_version."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_read_version=5))
+            info = self._make_change_info(current_version=10)
+            update_state_after_command(
+                "doc1", info, command="edit",
+                quiet=False, command_version=15,
+            )
+            state = load_state("doc1")
+            assert state.last_read_version == 5  # unchanged
+
+    def test_write_command_version_updates_last_version(self, tmp_path):
+        """write with command_version updates last_version."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=10)
+            update_state_after_command(
+                "doc1", info, command="write",
+                quiet=False, command_version=20,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 20
+
+    def test_edit_with_preflight_then_command_version(self, tmp_path):
+        """Pre-flight sets version, command_version overrides last_version."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_read_version=5, last_version=5))
+            info = self._make_change_info(current_version=10)
+            update_state_after_command(
+                "doc1", info, command="edit",
+                quiet=False, command_version=15,
+            )
+            state = load_state("doc1")
+            # Pre-flight set last_version=10, then command_version overrides to 15
+            assert state.last_version == 15
+            assert state.last_read_version == 5  # unchanged by edit

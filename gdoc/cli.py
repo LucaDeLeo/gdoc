@@ -206,6 +206,90 @@ def cmd_find(args) -> int:
     return 0
 
 
+def cmd_edit(args) -> int:
+    """Handler for `gdoc edit`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    replace_all = getattr(args, "all", False)
+    case_sensitive = getattr(args, "case_sensitive", False)
+
+    # Pre-flight awareness check
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    # Conflict warning (warn but don't block, per spec)
+    if change_info and change_info.has_conflict:
+        print("WARN: doc changed since last read", file=sys.stderr)
+
+    old_text = args.old_text
+    new_text = args.new_text
+
+    # Uniqueness pre-check (skip when --all, per Decision #3)
+    if not replace_all:
+        from gdoc.api.drive import export_doc
+
+        plain_text = export_doc(doc_id, mime_type="text/plain")
+
+        if case_sensitive:
+            count = plain_text.count(old_text)
+        else:
+            count = plain_text.lower().count(old_text.lower())
+
+        if count == 0:
+            raise GdocError("no match found", exit_code=3)
+        if count > 1:
+            raise GdocError(
+                f"multiple matches ({count} found). Use --all",
+                exit_code=3,
+            )
+
+    # Perform replacement via Docs API
+    from gdoc.api.docs import replace_all_text
+
+    occurrences = replace_all_text(
+        doc_id, old_text, new_text, match_case=case_sensitive,
+    )
+
+    # Post-call reconciliation
+    if occurrences == 0:
+        raise GdocError("no match found", exit_code=3)
+
+    # Warn if pre-check count != API count (only relevant without --all)
+    if not replace_all and occurrences > 1:
+        print(
+            f"WARN: expected 1 match but API replaced {occurrences}; "
+            "text/plain export may differ from API matching",
+            file=sys.stderr,
+        )
+
+    # Get post-edit version for state tracking (Decision #12)
+    from gdoc.api.drive import get_file_version
+
+    version_data = get_file_version(doc_id)
+    command_version = version_data.get("version")
+
+    # Output
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    label = "occurrence" if occurrences == 1 else "occurrences"
+    if mode == "json":
+        print(format_json(replaced=occurrences))
+    else:
+        print(f"OK replaced {occurrences} {label}")
+
+    # Update state
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="edit",
+        quiet=quiet, command_version=command_version,
+    )
+
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     from gdoc.auth import authenticate
@@ -302,7 +386,7 @@ def build_parser() -> GdocArgumentParser:
     edit_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    edit_p.set_defaults(func=cmd_stub)
+    edit_p.set_defaults(func=cmd_edit)
 
     # write
     write_p = sub.add_parser("write", parents=[output_parent], help="Overwrite doc from local file")
