@@ -22,6 +22,7 @@ class AuthError(GdocError):
 CONFIG_DIR = Path.home() / ".gdoc"
 TOKEN_PATH = CONFIG_DIR / "token.json"
 CREDS_PATH = CONFIG_DIR / "credentials.json"
+STATE_DIR = CONFIG_DIR / "state"
 
 _PATTERNS = [
     re.compile(r"/d/([a-zA-Z0-9_-]+)"),

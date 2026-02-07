@@ -101,15 +101,40 @@ def get_file_info(doc_id: str) -> dict:
     """Get metadata for a single file."""
     try:
         service = get_drive_service()
-        return (
+        result = (
             service.files()
             .get(
                 fileId=doc_id,
                 fields="id, name, mimeType, modifiedTime, createdTime, "
                 "owners(emailAddress, displayName), "
-                "lastModifyingUser(emailAddress, displayName), size",
+                "lastModifyingUser(emailAddress, displayName), size, version",
             )
             .execute()
         )
+        if "version" in result:
+            result["version"] = int(result["version"])
+        return result
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def get_file_version(doc_id: str) -> dict:
+    """Get lightweight version metadata for pre-flight checks.
+
+    Returns dict with keys: modifiedTime, version (int), lastModifyingUser.
+    """
+    try:
+        service = get_drive_service()
+        result = (
+            service.files()
+            .get(
+                fileId=doc_id,
+                fields="modifiedTime, version, lastModifyingUser(displayName, emailAddress)",
+            )
+            .execute()
+        )
+        if "version" in result:
+            result["version"] = int(result["version"])
+        return result
     except HttpError as e:
         _translate_http_error(e, doc_id)
