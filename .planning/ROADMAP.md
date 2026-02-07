@@ -4,6 +4,10 @@
 
 gdoc delivers a token-efficient CLI for AI agents to interact with Google Docs and Drive. The roadmap follows the natural dependency chain: foundation and auth first, then read operations (needed before anything else works), then the awareness system (the killer feature that must exist before writes), then write operations (which depend on awareness for conflict detection), then comments and inline annotations, and finally file management operations. Six phases deliver all 31 v1 requirements in dependency order.
 
+## Milestones
+
+- 🚧 **v1.0** — Core CLI with full read/write/comment capabilities — Phases 1-6
+
 ## Phases
 
 **Phase Numbering:**
@@ -31,12 +35,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can authenticate in a headless environment (no browser available)
   4. Subsequent commands reuse stored credentials without re-prompting (silent token refresh)
   5. Any Google Docs URL or bare document ID is accepted interchangeably as input
-**Plans**: TBD
+**Plans**: 3 plans in 3 waves
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
-- [ ] 01-03: TBD
+- [ ] 01-01-PLAN.md — Project scaffolding, core utilities (URL-to-ID, error classes), output formatting
+- [ ] 01-02-PLAN.md — CLI infrastructure (custom parser, exit codes, stub subcommands, CI gate)
+- [ ] 01-03-PLAN.md — OAuth2 authentication (browser + headless flows, token management)
 
 ### Phase 2: Read Operations
 **Goal**: Users can read document content, list files, search for documents, and view metadata through the CLI
@@ -116,7 +120,7 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation & Auth | 0/3 | Not started | - |
+| 1. Foundation & Auth | 0/3 | Planned | - |
 | 2. Read Operations | 0/2 | Not started | - |
 | 3. Awareness System | 0/2 | Not started | - |
 | 4. Write Operations | 0/1 | Not started | - |
