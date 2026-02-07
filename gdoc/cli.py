@@ -29,12 +29,40 @@ def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
     doc_id = _resolve_doc_id(args.doc)
 
+    quiet = getattr(args, "quiet", False)
+
     if getattr(args, "comments", False):
-        print("ERR: cat --comments is not yet implemented", file=sys.stderr)
-        return 4  # STUB — removed when real implementation added
+        # Annotated view: line-numbered content + inline comment annotations
+        from gdoc.notify import pre_flight
+        change_info = pre_flight(doc_id, quiet=quiet)
+
+        from gdoc.api.drive import export_doc
+        markdown = export_doc(doc_id, mime_type="text/markdown")
+
+        from gdoc.api.comments import list_comments
+        include_resolved = getattr(args, "all", False)
+        comments = list_comments(
+            doc_id,
+            include_resolved=include_resolved,
+            include_anchor=True,
+        )
+
+        from gdoc.annotate import annotate_markdown
+        annotated = annotate_markdown(markdown, comments, show_resolved=include_resolved)
+
+        from gdoc.format import get_output_mode, format_json
+        mode = get_output_mode(args)
+        if mode == "json":
+            print(format_json(content=annotated))
+        else:
+            print(annotated, end="")
+
+        from gdoc.state import update_state_after_command
+        update_state_after_command(doc_id, change_info, command="cat", quiet=quiet)
+
+        return 0
 
     # Pre-flight awareness check
-    quiet = getattr(args, "quiet", False)
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
 

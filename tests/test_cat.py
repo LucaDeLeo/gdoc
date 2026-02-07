@@ -18,6 +18,7 @@ def _make_args(**overrides):
         "doc": "abc123",
         "plain": False,
         "comments": False,
+        "all": False,
         "json": False,
         "verbose": False,
         "quiet": False,
@@ -79,12 +80,107 @@ class TestCatJson:
 
 
 class TestCatComments:
-    def test_cat_comments_stub(self, capsys):
-        args = _make_args(comments=True)
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    def test_cat_comments_calls_list_with_anchor(
+        self, mock_export, _svc, mock_list, _csvc, _pf, _update
+    ):
+        args = _make_args(comments=True, quiet=True)
         rc = cmd_cat(args)
-        assert rc == 4
-        err = capsys.readouterr().err
-        assert "not yet implemented" in err
+        assert rc == 0
+        mock_list.assert_called_once_with(
+            "abc123", include_resolved=False, include_anchor=True,
+        )
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    def test_cat_comments_all_includes_resolved(
+        self, mock_export, _svc, mock_list, _csvc, _pf, _update
+    ):
+        args = _make_args(comments=True, quiet=True, **{"all": True})
+        rc = cmd_cat(args)
+        assert rc == 0
+        mock_list.assert_called_once_with(
+            "abc123", include_resolved=True, include_anchor=True,
+        )
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="Some content here\n")
+    def test_cat_comments_output_annotated(
+        self, mock_export, _svc, mock_list, _csvc, _pf, _update, capsys
+    ):
+        mock_list.return_value = [{
+            "id": "c1",
+            "content": "Nice",
+            "author": {"emailAddress": "alice@co.com"},
+            "resolved": False,
+            "createdTime": "2025-06-15T10:00:00Z",
+            "quotedFileContent": {"value": "Some content"},
+            "replies": [],
+        }]
+        args = _make_args(comments=True, quiet=True)
+        rc = cmd_cat(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "     1\t" in out
+        assert "[#c1 open]" in out
+        assert 'on "Some content"' in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    def test_cat_comments_json_output(
+        self, mock_export, _svc, mock_list, _csvc, _pf, _update, capsys
+    ):
+        args = _make_args(comments=True, json=True, quiet=True)
+        rc = cmd_cat(args)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert "content" in data
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    def test_cat_comments_no_stub_exit_code(
+        self, mock_export, _svc, mock_list, _csvc, _pf, _update
+    ):
+        args = _make_args(comments=True, quiet=True)
+        rc = cmd_cat(args)
+        assert rc == 0  # not 4 (stub)
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    def test_cat_comments_state_update(
+        self, mock_export, _svc, mock_list, _csvc, _pf, mock_update
+    ):
+        args = _make_args(comments=True, quiet=True)
+        cmd_cat(args)
+        mock_update.assert_called_once_with(
+            "abc123", None, command="cat", quiet=True,
+        )
 
 
 class TestCatErrors:
@@ -164,14 +260,20 @@ class TestCatAwareness:
         )
 
     @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.notify.pre_flight")
-    def test_comments_stub_skips_preflight(self, mock_pf, mock_update):
-        """--comments stub returns before pre_flight is called."""
-        args = _make_args(comments=True)
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    def test_comments_calls_preflight(
+        self, _export, _svc, _list, _csvc, mock_pf, mock_update
+    ):
+        """--comments calls pre_flight and update_state_after_command."""
+        args = _make_args(comments=True, quiet=True)
         rc = cmd_cat(args)
-        assert rc == 4
-        mock_pf.assert_not_called()
-        mock_update.assert_not_called()
+        assert rc == 0
+        mock_pf.assert_called_once()
+        mock_update.assert_called_once()
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight")
