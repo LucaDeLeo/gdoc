@@ -37,10 +37,6 @@ class TestExitCode4OnStubs:
         assert result.returncode == 4
         assert "ERR: ls is not yet implemented" in result.stderr
 
-    def test_cat_stub(self):
-        result = run_gdoc("cat", "some-doc-id")
-        assert result.returncode == 4
-
     def test_find_stub(self):
         result = run_gdoc("find", "query")
         assert result.returncode == 4
@@ -60,7 +56,7 @@ class TestMutuallyExclusiveFlags:
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_json_after_subcommand(self):
-        result = run_gdoc("info", "1aBcDeFg", "--json")
+        result = run_gdoc("edit", "1aBcDeFg", "old", "new", "--json")
         assert result.returncode == 4  # stub runs, flag accepted
 
     def test_verbose_after_subcommand(self):

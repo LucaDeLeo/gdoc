@@ -15,6 +15,94 @@ class GdocArgumentParser(argparse.ArgumentParser):
         sys.exit(3)
 
 
+def _resolve_doc_id(raw: str) -> str:
+    """Extract doc ID, wrapping ValueError as GdocError(exit_code=3)."""
+    from gdoc.util import extract_doc_id
+
+    try:
+        return extract_doc_id(raw)
+    except ValueError as e:
+        raise GdocError(str(e), exit_code=3)
+
+
+def cmd_cat(args) -> int:
+    """Handler for `gdoc cat`."""
+    doc_id = _resolve_doc_id(args.doc)
+
+    if getattr(args, "comments", False):
+        print("ERR: cat --comments is not yet implemented", file=sys.stderr)
+        return 4  # STUB — removed when real implementation added
+
+    mime_type = "text/plain" if getattr(args, "plain", False) else "text/markdown"
+
+    from gdoc.api.drive import export_doc
+
+    content = export_doc(doc_id, mime_type=mime_type)
+
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(content=content))
+    else:
+        print(content, end="")
+
+    return 0
+
+
+def cmd_info(args) -> int:
+    """Handler for `gdoc info`."""
+    doc_id = _resolve_doc_id(args.doc)
+
+    from gdoc.api.drive import get_file_info, export_doc
+    from gdoc.format import get_output_mode, format_json
+
+    metadata = get_file_info(doc_id)
+    text = export_doc(doc_id, mime_type="text/plain")
+    word_count = len(text.split())
+
+    title = metadata.get("name", "")
+    owner_info = metadata.get("owners", [{}])[0]
+    owner = owner_info.get("displayName") or owner_info.get("emailAddress", "Unknown")
+    modified = metadata.get("modifiedTime", "")
+    created = metadata.get("createdTime", "")
+    last_editor_info = metadata.get("lastModifyingUser", {})
+    last_editor = last_editor_info.get("displayName") or last_editor_info.get(
+        "emailAddress", ""
+    )
+    mime_type = metadata.get("mimeType", "")
+    size = metadata.get("size")
+
+    mode = get_output_mode(args)
+
+    if mode == "json":
+        print(
+            format_json(
+                id=doc_id,
+                title=title,
+                owner=owner,
+                modified=modified,
+                words=word_count,
+            )
+        )
+    elif mode == "verbose":
+        print(f"Title: {title}")
+        print(f"Owner: {owner}")
+        print(f"Modified: {modified}")
+        print(f"Created: {created}")
+        print(f"Last editor: {last_editor}")
+        print(f"Type: {mime_type}")
+        print(f"Size: {size or 'N/A'}")
+        print(f"Words: {word_count}")
+    else:
+        print(f"Title: {title}")
+        print(f"Owner: {owner}")
+        print(f"Modified: {modified[:10]}")
+        print(f"Words: {word_count}")
+
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     from gdoc.auth import authenticate
@@ -95,7 +183,7 @@ def build_parser() -> GdocArgumentParser:
     cat_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    cat_p.set_defaults(func=cmd_stub)
+    cat_p.set_defaults(func=cmd_cat)
 
     # edit
     edit_p = sub.add_parser("edit", parents=[output_parent], help="Find and replace text")
@@ -179,7 +267,7 @@ def build_parser() -> GdocArgumentParser:
     info_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    info_p.set_defaults(func=cmd_stub)
+    info_p.set_defaults(func=cmd_info)
 
     # share
     share_p = sub.add_parser("share", parents=[output_parent], help="Share a document")
