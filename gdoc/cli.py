@@ -389,6 +389,167 @@ def cmd_write(args) -> int:
     return 0
 
 
+def cmd_comments(args) -> int:
+    """Handler for `gdoc comments`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+
+    # Pre-flight awareness check
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    # Full fetch for display (separate from pre-flight, per CONTEXT.md Decision #8)
+    from gdoc.api.comments import list_comments
+    include_resolved = getattr(args, "all", False)
+    comments = list_comments(doc_id, include_resolved=include_resolved)
+
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(comments=comments))
+    else:
+        for c in comments:
+            cid = c.get("id", "")
+            resolved = c.get("resolved", False)
+            status = "resolved" if resolved else "open"
+            author = c.get("author", {})
+            author_str = author.get("emailAddress") or author.get("displayName", "unknown")
+            created = c.get("createdTime", "")
+            if mode == "verbose":
+                date_str = created
+            else:
+                date_str = created[:10] if created else ""
+            print(f"#{cid} [{status}] {author_str} {date_str}")
+            content = c.get("content", "")
+            print(f'  "{content}"')
+            for r in c.get("replies", []):
+                reply_content = r.get("content", "")
+                if not reply_content:
+                    continue  # Skip action-only replies
+                r_author = r.get("author", {})
+                r_author_str = r_author.get("emailAddress") or r_author.get("displayName", "unknown")
+                print(f'  -> {r_author_str}: "{reply_content}"')
+
+    # Update state
+    from gdoc.state import update_state_after_command
+    update_state_after_command(doc_id, change_info, command="comments", quiet=quiet)
+
+    return 0
+
+
+def cmd_comment(args) -> int:
+    """Handler for `gdoc comment`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.comments import create_comment
+    result = create_comment(doc_id, args.text)
+    new_id = result["id"]
+
+    from gdoc.format import get_output_mode, format_json
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(id=new_id, status="created"))
+    else:
+        print(f"OK comment #{new_id}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="comment", quiet=quiet,
+        comment_state_patch={"add_comment_id": new_id},
+    )
+
+    return 0
+
+
+def cmd_reply(args) -> int:
+    """Handler for `gdoc reply`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    comment_id = args.comment_id
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.comments import create_reply
+    result = create_reply(doc_id, comment_id, content=args.text)
+    reply_id = result["id"]
+
+    from gdoc.format import get_output_mode, format_json
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(commentId=comment_id, replyId=reply_id, status="created"))
+    else:
+        print(f"OK reply on #{comment_id}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="reply", quiet=quiet,
+    )
+
+    return 0
+
+
+def cmd_resolve(args) -> int:
+    """Handler for `gdoc resolve`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    comment_id = args.comment_id
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.comments import create_reply
+    create_reply(doc_id, comment_id, action="resolve")
+
+    from gdoc.format import get_output_mode, format_json
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(id=comment_id, status="resolved"))
+    else:
+        print(f"OK resolved comment #{comment_id}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="resolve", quiet=quiet,
+        comment_state_patch={"add_resolved_id": comment_id},
+    )
+
+    return 0
+
+
+def cmd_reopen(args) -> int:
+    """Handler for `gdoc reopen`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    comment_id = args.comment_id
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.comments import create_reply
+    create_reply(doc_id, comment_id, action="reopen")
+
+    from gdoc.format import get_output_mode, format_json
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(id=comment_id, status="reopened"))
+    else:
+        print(f"OK reopened comment #{comment_id}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="reopen", quiet=quiet,
+        comment_state_patch={"remove_resolved_id": comment_id},
+    )
+
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     from gdoc.auth import authenticate
@@ -467,6 +628,10 @@ def build_parser() -> GdocArgumentParser:
         "--plain", action="store_true", help="Export as plain text"
     )
     cat_p.add_argument(
+        "--all", action="store_true",
+        help="Include resolved comments (with --comments)",
+    )
+    cat_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     cat_p.set_defaults(func=cmd_cat)
@@ -508,7 +673,7 @@ def build_parser() -> GdocArgumentParser:
     comments_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    comments_p.set_defaults(func=cmd_stub)
+    comments_p.set_defaults(func=cmd_comments)
 
     # comment
     comment_p = sub.add_parser("comment", parents=[output_parent], help="Add a comment to a doc")
@@ -517,7 +682,7 @@ def build_parser() -> GdocArgumentParser:
     comment_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    comment_p.set_defaults(func=cmd_stub)
+    comment_p.set_defaults(func=cmd_comment)
 
     # reply
     reply_p = sub.add_parser("reply", parents=[output_parent], help="Reply to a comment")
@@ -527,7 +692,7 @@ def build_parser() -> GdocArgumentParser:
     reply_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    reply_p.set_defaults(func=cmd_stub)
+    reply_p.set_defaults(func=cmd_reply)
 
     # resolve
     resolve_p = sub.add_parser("resolve", parents=[output_parent], help="Resolve a comment")
@@ -536,7 +701,7 @@ def build_parser() -> GdocArgumentParser:
     resolve_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    resolve_p.set_defaults(func=cmd_stub)
+    resolve_p.set_defaults(func=cmd_resolve)
 
     # reopen
     reopen_p = sub.add_parser("reopen", parents=[output_parent], help="Reopen a resolved comment")
@@ -545,7 +710,7 @@ def build_parser() -> GdocArgumentParser:
     reopen_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    reopen_p.set_defaults(func=cmd_stub)
+    reopen_p.set_defaults(func=cmd_reopen)
 
     # info
     info_p = sub.add_parser("info", parents=[output_parent], help="Show document metadata")

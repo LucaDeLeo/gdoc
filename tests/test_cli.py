@@ -48,19 +48,19 @@ class TestMutuallyExclusiveFlags:
 
     def test_json_accepted(self):
         result = run_gdoc("--json", "comment", "doc123", "text")
-        assert result.returncode == 4  # stub runs, flag accepted
+        assert result.returncode != 3  # flag accepted (not a usage error)
 
     def test_verbose_accepted(self):
         result = run_gdoc("--verbose", "comment", "doc123", "text")
-        assert result.returncode == 4  # stub runs, flag accepted
+        assert result.returncode != 3  # flag accepted (not a usage error)
 
     def test_json_after_subcommand(self):
         result = run_gdoc("comment", "1aBcDeFg", "text", "--json")
-        assert result.returncode == 4  # stub runs, flag accepted
+        assert result.returncode != 3  # flag accepted (not a usage error)
 
     def test_verbose_after_subcommand(self):
         result = run_gdoc("comment", "doc123", "text", "--verbose")
-        assert result.returncode == 4  # stub runs, flag accepted
+        assert result.returncode != 3  # flag accepted (not a usage error)
 
     def test_json_and_verbose_conflict_after_subcommand(self):
         result = run_gdoc("ls", "--json", "--verbose")

@@ -229,3 +229,140 @@ class TestUpdateStateAfterCommand:
             # Pre-flight set last_version=10, then command_version overrides to 15
             assert state.last_version == 15
             assert state.last_read_version == 5  # unchanged by edit
+
+
+class TestCommentStatePatch:
+    def _make_change_info(self, **overrides):
+        from types import SimpleNamespace
+        defaults = {
+            "current_version": 10,
+            "preflight_timestamp": "2025-01-20T14:30:00.000000Z",
+            "all_comment_ids": ["c1", "c2"],
+            "all_resolved_ids": ["c2"],
+        }
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def test_add_comment_id(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_comment_ids=["c1"]))
+            update_state_after_command(
+                "doc1", None, command="comment", quiet=True,
+                comment_state_patch={"add_comment_id": "c2"},
+            )
+            state = load_state("doc1")
+            assert "c2" in state.known_comment_ids
+
+    def test_add_resolved_id(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_resolved_ids=[]))
+            update_state_after_command(
+                "doc1", None, command="resolve", quiet=True,
+                comment_state_patch={"add_resolved_id": "c1"},
+            )
+            state = load_state("doc1")
+            assert "c1" in state.known_resolved_ids
+
+    def test_remove_resolved_id(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_resolved_ids=["c1", "c2"]))
+            update_state_after_command(
+                "doc1", None, command="reopen", quiet=True,
+                comment_state_patch={"remove_resolved_id": "c1"},
+            )
+            state = load_state("doc1")
+            assert "c1" not in state.known_resolved_ids
+            assert "c2" in state.known_resolved_ids
+
+    def test_no_duplicate_add_comment_id(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_comment_ids=["c1"]))
+            update_state_after_command(
+                "doc1", None, command="comment", quiet=True,
+                comment_state_patch={"add_comment_id": "c1"},
+            )
+            state = load_state("doc1")
+            assert state.known_comment_ids.count("c1") == 1
+
+    def test_no_duplicate_add_resolved_id(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_resolved_ids=["c1"]))
+            update_state_after_command(
+                "doc1", None, command="resolve", quiet=True,
+                comment_state_patch={"add_resolved_id": "c1"},
+            )
+            state = load_state("doc1")
+            assert state.known_resolved_ids.count("c1") == 1
+
+    def test_patch_none_is_noop(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(
+                known_comment_ids=["c1"],
+                known_resolved_ids=["c2"],
+            ))
+            update_state_after_command(
+                "doc1", None, command="reply", quiet=True,
+                comment_state_patch=None,
+            )
+            state = load_state("doc1")
+            assert state.known_comment_ids == ["c1"]
+            assert state.known_resolved_ids == ["c2"]
+
+    def test_nonquiet_preflight_then_patch(self, tmp_path):
+        """Non-quiet: pre-flight merged IDs written, THEN patch adds new ID."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_comment_ids=["c1"]))
+            info = self._make_change_info(
+                all_comment_ids=["c1", "c2"],
+                all_resolved_ids=[],
+            )
+            update_state_after_command(
+                "doc1", info, command="comment", quiet=False,
+                comment_state_patch={"add_comment_id": "c3"},
+            )
+            state = load_state("doc1")
+            # Pre-flight set ["c1","c2"], then patch adds "c3"
+            assert "c1" in state.known_comment_ids
+            assert "c2" in state.known_comment_ids
+            assert "c3" in state.known_comment_ids
+
+    def test_nonquiet_resolve_preflight_then_patch(self, tmp_path):
+        """Non-quiet: pre-flight merged IDs, then patch adds resolved ID."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_resolved_ids=[]))
+            info = self._make_change_info(
+                all_comment_ids=["c1", "c2"],
+                all_resolved_ids=[],
+            )
+            update_state_after_command(
+                "doc1", info, command="resolve", quiet=False,
+                comment_state_patch={"add_resolved_id": "c1"},
+            )
+            state = load_state("doc1")
+            assert "c1" in state.known_resolved_ids
+
+    def test_nonquiet_reopen_preflight_then_patch(self, tmp_path):
+        """Non-quiet: pre-flight merged IDs, then patch removes resolved ID."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(known_resolved_ids=["c1"]))
+            info = self._make_change_info(
+                all_comment_ids=["c1", "c2"],
+                all_resolved_ids=["c1"],
+            )
+            update_state_after_command(
+                "doc1", info, command="reopen", quiet=False,
+                comment_state_patch={"remove_resolved_id": "c1"},
+            )
+            state = load_state("doc1")
+            assert "c1" not in state.known_resolved_ids
+
+    def test_quiet_does_not_advance_comment_check(self, tmp_path):
+        """Quiet mode: last_comment_check unchanged with patch."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_comment_check="2025-01-20T00:00:00Z"))
+            update_state_after_command(
+                "doc1", None, command="comment", quiet=True,
+                comment_state_patch={"add_comment_id": "c_new"},
+            )
+            state = load_state("doc1")
+            assert state.last_comment_check == "2025-01-20T00:00:00Z"

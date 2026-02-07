@@ -61,6 +61,7 @@ def update_state_after_command(
     command: str,
     quiet: bool = False,
     command_version: int | None = None,
+    comment_state_patch: dict | None = None,
 ) -> None:
     """Update per-doc state after a successful command.
 
@@ -70,6 +71,8 @@ def update_state_after_command(
         command: The command name (e.g., "cat", "info", "edit").
         quiet: Whether --quiet was passed.
         command_version: Version from command's own API response (for info command).
+        comment_state_patch: Optional dict with targeted comment state mutations.
+            Keys: "add_comment_id", "add_resolved_id", "remove_resolved_id".
     """
     from datetime import datetime, timezone
 
@@ -105,5 +108,20 @@ def update_state_after_command(
     # (the pre-flight version is from BEFORE the mutation; this is from AFTER)
     if command_version is not None and command not in ("cat", "info"):
         state.last_version = command_version
+
+    # Apply comment mutation patch (both quiet and non-quiet)
+    # Per CONTEXT.md Decision #10
+    if comment_state_patch:
+        if "add_comment_id" in comment_state_patch:
+            cid = comment_state_patch["add_comment_id"]
+            if cid not in state.known_comment_ids:
+                state.known_comment_ids.append(cid)
+        if "add_resolved_id" in comment_state_patch:
+            rid = comment_state_patch["add_resolved_id"]
+            if rid not in state.known_resolved_ids:
+                state.known_resolved_ids.append(rid)
+        if "remove_resolved_id" in comment_state_patch:
+            rid = comment_state_patch["remove_resolved_id"]
+            state.known_resolved_ids = [x for x in state.known_resolved_ids if x != rid]
 
     save_state(doc_id, state)
