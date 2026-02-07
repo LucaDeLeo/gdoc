@@ -62,7 +62,8 @@ def cmd_info(args) -> int:
     word_count = len(text.split())
 
     title = metadata.get("name", "")
-    owner_info = metadata.get("owners", [{}])[0]
+    owners = metadata.get("owners", [])
+    owner_info = owners[0] if owners else {}
     owner = owner_info.get("displayName") or owner_info.get("emailAddress", "Unknown")
     modified = metadata.get("modifiedTime", "")
     created = metadata.get("createdTime", "")
