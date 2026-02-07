@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gdoc.state import DocState, load_state, save_state, _state_path
+from gdoc.state import DocState, load_state, save_state, update_state_after_command, _state_path
 
 
 class TestDocState:
@@ -90,3 +90,94 @@ class TestSaveLoadState:
         with patch("gdoc.state.STATE_DIR", tmp_path):
             path = _state_path("abc123")
             assert path == tmp_path / "abc123.json"
+
+
+class TestUpdateStateAfterCommand:
+    def _make_change_info(self, **overrides):
+        """Create a mock ChangeInfo-like object."""
+        from types import SimpleNamespace
+        defaults = {
+            "current_version": 10,
+            "preflight_timestamp": "2025-01-20T14:30:00.000000Z",
+            "all_comment_ids": ["c1", "c2"],
+            "all_resolved_ids": ["c2"],
+        }
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    def test_normal_cat_updates_all_fields(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=42)
+            update_state_after_command("doc1", info, command="cat", quiet=False)
+            state = load_state("doc1")
+            assert state.last_version == 42
+            assert state.last_read_version == 42  # cat is a read
+            assert state.last_comment_check == "2025-01-20T14:30:00.000000Z"
+            assert state.known_comment_ids == ["c1", "c2"]
+            assert state.known_resolved_ids == ["c2"]
+
+    def test_normal_info_updates_all_fields(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=50)
+            update_state_after_command("doc1", info, command="info", quiet=False)
+            state = load_state("doc1")
+            assert state.last_version == 50
+            assert state.last_read_version == 50  # info is a read
+
+    def test_quiet_cat_version_stays_stale(self, tmp_path):
+        """Decision #14: --quiet cat does not update version fields."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_version=10, last_read_version=10))
+            update_state_after_command("doc1", None, command="cat", quiet=True)
+            state = load_state("doc1")
+            assert state.last_version == 10  # unchanged
+            assert state.last_read_version == 10  # unchanged
+            assert state.last_seen != ""  # last_seen IS updated
+
+    def test_quiet_info_version_from_command(self, tmp_path):
+        """Decision #14: --quiet info updates version from command response."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_version=10, last_read_version=10))
+            update_state_after_command(
+                "doc1", None, command="info",
+                quiet=True, command_version=20,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 20
+            assert state.last_read_version == 20
+
+    def test_quiet_does_not_advance_comment_check(self, tmp_path):
+        """Decision #6: --quiet does not advance last_comment_check."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_comment_check="2025-01-20T00:00:00Z"))
+            update_state_after_command("doc1", None, command="cat", quiet=True)
+            state = load_state("doc1")
+            assert state.last_comment_check == "2025-01-20T00:00:00Z"
+
+    def test_first_interaction_creates_state(self, tmp_path):
+        """First interaction (no existing state) initializes from change_info."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=5)
+            update_state_after_command("doc1", info, command="cat", quiet=False)
+            state = load_state("doc1")
+            assert state is not None
+            assert state.last_version == 5
+            assert state.last_read_version == 5
+            assert state.known_comment_ids == ["c1", "c2"]
+
+    def test_non_read_command_does_not_set_read_version(self, tmp_path):
+        """edit/write commands do not update last_read_version."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_read_version=5))
+            info = self._make_change_info(current_version=10)
+            update_state_after_command("doc1", info, command="edit", quiet=False)
+            state = load_state("doc1")
+            assert state.last_version == 10
+            assert state.last_read_version == 5  # unchanged
+
+    def test_last_seen_always_updated(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            update_state_after_command("doc1", None, command="cat", quiet=True)
+            state = load_state("doc1")
+            assert state.last_seen != ""
+            assert "T" in state.last_seen

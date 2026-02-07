@@ -53,3 +53,52 @@ def save_state(doc_id: str, state: DocState) -> None:
         except OSError:
             pass
         raise
+
+
+def update_state_after_command(
+    doc_id: str,
+    change_info,  # ChangeInfo | None (from pre_flight)
+    command: str,
+    quiet: bool = False,
+    command_version: int | None = None,
+) -> None:
+    """Update per-doc state after a successful command.
+
+    Args:
+        doc_id: The document ID.
+        change_info: ChangeInfo from pre_flight, or None if --quiet.
+        command: The command name (e.g., "cat", "info", "edit").
+        quiet: Whether --quiet was passed.
+        command_version: Version from command's own API response (for info command).
+    """
+    from datetime import datetime, timezone
+
+    state = load_state(doc_id) or DocState()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    state.last_seen = now
+
+    is_read = command in ("cat", "info")
+
+    if quiet:
+        # Decision #14: --quiet state update rules
+        if command == "info" and command_version is not None:
+            state.last_version = command_version
+            state.last_read_version = command_version
+    elif change_info is not None:
+        # Normal (non-quiet) run: update from pre-flight data
+        if change_info.current_version is not None:
+            state.last_version = change_info.current_version
+            if is_read:
+                state.last_read_version = change_info.current_version
+
+        # Advance last_comment_check to pre-request timestamp (Decision #12)
+        if change_info.preflight_timestamp:
+            state.last_comment_check = change_info.preflight_timestamp
+
+        # Update comment ID sets
+        if change_info.all_comment_ids:
+            state.known_comment_ids = change_info.all_comment_ids
+        if change_info.all_resolved_ids is not None:
+            state.known_resolved_ids = change_info.all_resolved_ids
+
+    save_state(doc_id, state)

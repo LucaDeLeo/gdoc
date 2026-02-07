@@ -33,6 +33,11 @@ def cmd_cat(args) -> int:
         print("ERR: cat --comments is not yet implemented", file=sys.stderr)
         return 4  # STUB — removed when real implementation added
 
+    # Pre-flight awareness check
+    quiet = getattr(args, "quiet", False)
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
     mime_type = "text/plain" if getattr(args, "plain", False) else "text/markdown"
 
     from gdoc.api.drive import export_doc
@@ -47,12 +52,21 @@ def cmd_cat(args) -> int:
     else:
         print(content, end="")
 
+    # Update state after success
+    from gdoc.state import update_state_after_command
+    update_state_after_command(doc_id, change_info, command="cat", quiet=quiet)
+
     return 0
 
 
 def cmd_info(args) -> int:
     """Handler for `gdoc info`."""
     doc_id = _resolve_doc_id(args.doc)
+
+    # Pre-flight awareness check
+    quiet = getattr(args, "quiet", False)
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
 
     from gdoc.api.drive import get_file_info, export_doc
     from gdoc.format import get_output_mode, format_json
@@ -108,6 +122,16 @@ def cmd_info(args) -> int:
         print(f"Owner: {owner}")
         print(f"Modified: {modified[:10]}")
         print(f"Words: {words_display}")
+
+    # Update state after success (version from get_file_info, Decision #14)
+    command_version = metadata.get("version")
+    if command_version is not None:
+        command_version = int(command_version)
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="info",
+        quiet=quiet, command_version=command_version,
+    )
 
     return 0
 
@@ -358,6 +382,9 @@ def build_parser() -> GdocArgumentParser:
         default="reader",
         help="Permission role",
     )
+    share_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
     share_p.set_defaults(func=cmd_stub)
 
     # new
@@ -370,6 +397,9 @@ def build_parser() -> GdocArgumentParser:
     cp_p = sub.add_parser("cp", parents=[output_parent], help="Duplicate a document")
     cp_p.add_argument("doc", help="Document ID or URL")
     cp_p.add_argument("title", help="Title for the copy")
+    cp_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
     cp_p.set_defaults(func=cmd_stub)
 
     return parser
