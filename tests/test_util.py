@@ -49,6 +49,14 @@ class TestExtractDocId:
         with pytest.raises(ValueError, match="Cannot extract"):
             extract_doc_id("hello world!")
 
+    def test_folder_url(self):
+        url = "https://drive.google.com/drive/folders/1aBcDeFg"
+        assert extract_doc_id(url) == "1aBcDeFg"
+
+    def test_folder_url_with_params(self):
+        url = "https://drive.google.com/drive/folders/abc123?usp=sharing"
+        assert extract_doc_id(url) == "abc123"
+
 
 class TestErrorClasses:
     def test_gdoc_error_default_exit_code(self):

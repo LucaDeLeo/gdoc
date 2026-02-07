@@ -3,7 +3,7 @@
 import json
 from types import SimpleNamespace
 
-from gdoc.format import format_error, format_success, get_output_mode
+from gdoc.format import format_error, format_json, format_success, get_output_mode
 
 
 class TestGetOutputMode:
@@ -35,6 +35,22 @@ class TestFormatSuccess:
 
     def test_verbose_returns_plain(self):
         assert format_success("done", mode="verbose") == "done"
+
+
+class TestFormatJson:
+    def test_single_field(self):
+        result = json.loads(format_json(content="hello"))
+        assert result == {"ok": True, "content": "hello"}
+
+    def test_multiple_fields(self):
+        result = json.loads(format_json(a=1, b="two"))
+        assert result["ok"] is True
+        assert result["a"] == 1
+        assert result["b"] == "two"
+
+    def test_nested(self):
+        result = json.loads(format_json(files=[{"id": "1"}]))
+        assert result == {"ok": True, "files": [{"id": "1"}]}
 
 
 class TestFormatError:
