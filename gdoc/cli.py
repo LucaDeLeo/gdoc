@@ -40,9 +40,12 @@ def build_parser() -> GdocArgumentParser:
     # both before and after the subcommand name.
     output_parent = argparse.ArgumentParser(add_help=False)
     output_group = output_parent.add_mutually_exclusive_group()
-    output_group.add_argument("--json", action="store_true", help="JSON output")
     output_group.add_argument(
-        "--verbose", action="store_true", help="Detailed output"
+        "--json", action="store_true", default=argparse.SUPPRESS, help="JSON output",
+    )
+    output_group.add_argument(
+        "--verbose", action="store_true", default=argparse.SUPPRESS,
+        help="Detailed output",
     )
 
     # Also add to the top-level parser for `gdoc --json <cmd>` form
@@ -213,6 +216,9 @@ def main() -> int:
     if args.command is None:
         parser.print_help(sys.stderr)
         return 3
+
+    if getattr(args, "json", False) and getattr(args, "verbose", False):
+        parser.error("argument --verbose: not allowed with argument --json")
 
     try:
         return args.func(args)

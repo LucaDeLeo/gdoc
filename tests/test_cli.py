@@ -71,6 +71,16 @@ class TestMutuallyExclusiveFlags:
         result = run_gdoc("ls", "--json", "--verbose")
         assert result.returncode != 0
 
+    def test_json_before_verbose_after_subcommand_conflict(self):
+        result = run_gdoc("--json", "ls", "--verbose")
+        assert result.returncode == 3
+        assert "ERR:" in result.stderr
+
+    def test_verbose_before_json_after_subcommand_conflict(self):
+        result = run_gdoc("--verbose", "ls", "--json")
+        assert result.returncode == 3
+        assert "ERR:" in result.stderr
+
 
 class TestHelpText:
     def test_help_exits_0(self):
