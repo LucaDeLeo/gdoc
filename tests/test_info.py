@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from gdoc.cli import cmd_info
-from gdoc.util import GdocError
+from gdoc.util import AuthError, GdocError
 
 MOCK_METADATA = {
     "id": "abc123",
@@ -195,4 +195,40 @@ class TestInfoErrors:
     def test_info_api_error(self, mock_info, _mock_svc):
         args = _make_args()
         with pytest.raises(GdocError, match="Document not found"):
+            cmd_info(args)
+
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch(
+        "gdoc.api.drive.export_doc",
+        side_effect=GdocError("Permission denied: abc123"),
+    )
+    @patch("gdoc.api.drive.get_file_info", return_value=MOCK_METADATA)
+    def test_info_export_permission_error_propagates(self, mock_info, mock_export, _mock_svc):
+        """Permission errors from export_doc should NOT be silently suppressed."""
+        args = _make_args()
+        with pytest.raises(GdocError, match="Permission denied"):
+            cmd_info(args)
+
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch(
+        "gdoc.api.drive.export_doc",
+        side_effect=AuthError("Authentication expired. Run `gdoc auth`."),
+    )
+    @patch("gdoc.api.drive.get_file_info", return_value=MOCK_METADATA)
+    def test_info_export_auth_error_propagates(self, mock_info, mock_export, _mock_svc):
+        """Auth errors from export_doc should NOT be silently suppressed."""
+        args = _make_args()
+        with pytest.raises(AuthError, match="Authentication expired"):
+            cmd_info(args)
+
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch(
+        "gdoc.api.drive.export_doc",
+        side_effect=GdocError("API error (500): Internal Server Error"),
+    )
+    @patch("gdoc.api.drive.get_file_info", return_value=MOCK_METADATA)
+    def test_info_export_api_error_propagates(self, mock_info, mock_export, _mock_svc):
+        """Generic API errors from export_doc should NOT be silently suppressed."""
+        args = _make_args()
+        with pytest.raises(GdocError, match="API error"):
             cmd_info(args)

@@ -61,8 +61,11 @@ def cmd_info(args) -> int:
     try:
         text = export_doc(doc_id, mime_type="text/plain")
         word_count = len(text.split())
-    except GdocError:
-        word_count = None
+    except GdocError as e:
+        if "file is not a Google Docs editor document" in str(e):
+            word_count = None
+        else:
+            raise
 
     title = metadata.get("name", "")
     owners = metadata.get("owners", [])
