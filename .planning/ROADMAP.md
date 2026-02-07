@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation & Auth** - Project scaffolding, OAuth2, output formatting, and CLI infrastructure
 - [x] **Phase 2: Read Operations** - Export docs as markdown/plain text, list and search files, view metadata
-- [ ] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
+- [x] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
 - [ ] **Phase 4: Write Operations** - String-match editing and full document write with version guards
 - [ ] **Phase 5: Comments & Annotations** - Comment CRUD and line-numbered comment annotations in doc output
 - [ ] **Phase 6: File Management** - Create, duplicate, and share documents
@@ -68,11 +68,11 @@ Plans:
   2. Running `edit` on a doc that changed since last read shows a warning but proceeds
   3. Running `write` on a doc that changed since last read is blocked with an error (requires `--force` to override)
   4. User can pass `--quiet` to any command to skip pre-flight checks entirely
-**Plans**: TBD
+**Plans**: 2 plans in 2 waves
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [x] 03-01-PLAN.md — State persistence, comments API, pre-flight check, banner formatting
+- [x] 03-02-PLAN.md — CLI integration (cmd_cat, cmd_info), state update lifecycle, --quiet behavior
 
 ### Phase 4: Write Operations
 **Goal**: Users can edit document content through string-match replacement and full-document overwrite, with conflict safety enforced by the awareness system
@@ -123,7 +123,7 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 |-------|----------------|--------|-----------|
 | 1. Foundation & Auth | 3/3 | Complete | 2026-02-07 |
 | 2. Read Operations | 3/3 | Complete | 2026-02-07 |
-| 3. Awareness System | 0/2 | Not started | - |
+| 3. Awareness System | 2/2 | Complete | 2026-02-07 |
 | 4. Write Operations | 0/1 | Not started | - |
 | 5. Comments & Annotations | 0/2 | Not started | - |
 | 6. File Management | 0/1 | Not started | - |
