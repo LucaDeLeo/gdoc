@@ -1,0 +1,128 @@
+# Roadmap: gdoc
+
+## Overview
+
+gdoc delivers a token-efficient CLI for AI agents to interact with Google Docs and Drive. The roadmap follows the natural dependency chain: foundation and auth first, then read operations (needed before anything else works), then the awareness system (the killer feature that must exist before writes), then write operations (which depend on awareness for conflict detection), then comments and inline annotations, and finally file management operations. Six phases deliver all 34 v1 requirements in dependency order.
+
+## Phases
+
+**Phase Numbering:**
+- Integer phases (1, 2, 3): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+Decimal phases appear between their surrounding integers in numeric order.
+
+- [ ] **Phase 1: Foundation & Auth** - Project scaffolding, OAuth2, output formatting, and CLI infrastructure
+- [ ] **Phase 2: Read Operations** - Export docs as markdown/plain text, list and search files, view metadata
+- [ ] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
+- [ ] **Phase 4: Write Operations** - Text editing primitives and full document push with version guards
+- [ ] **Phase 5: Comments & Annotations** - Comment CRUD and inline comment annotations in doc output
+- [ ] **Phase 6: File Management** - Create, duplicate, and share documents
+
+## Phase Details
+
+### Phase 1: Foundation & Auth
+**Goal**: Users can authenticate and the CLI framework handles input parsing, output formatting, and error reporting consistently across all future commands
+**Depends on**: Nothing (first phase)
+**Requirements**: AUTH-01, AUTH-02, AUTH-03, OUT-01, OUT-02, OUT-03, OUT-04, OUT-05, OUT-06
+**Success Criteria** (what must be TRUE):
+  1. User can run `gdoc` and see help text listing available commands
+  2. User can authenticate via browser-based OAuth2 flow and credentials persist in `~/.gdoc/`
+  3. User can authenticate in a headless environment (no browser available)
+  4. Subsequent commands reuse stored credentials without re-prompting (silent token refresh)
+  5. Any Google Docs URL or bare document ID is accepted interchangeably as input
+**Plans**: TBD
+
+Plans:
+- [ ] 01-01: TBD
+- [ ] 01-02: TBD
+- [ ] 01-03: TBD
+
+### Phase 2: Read Operations
+**Goal**: Users can read document content, list files, search for documents, and view metadata through the CLI
+**Depends on**: Phase 1
+**Requirements**: READ-01, READ-03, READ-04, READ-05, READ-06
+**Success Criteria** (what must be TRUE):
+  1. User can export a Google Doc as markdown to stdout with `cat DOC_ID`
+  2. User can export a Google Doc as plain text with `cat DOC_ID --plain`
+  3. User can list files in Drive with `ls` and filter by folder and type
+  4. User can search for documents by name or content with `find "query"`
+  5. User can view doc metadata (title, owner, last modified, word count) with `info DOC_ID`
+**Plans**: TBD
+
+Plans:
+- [ ] 02-01: TBD
+- [ ] 02-02: TBD
+
+### Phase 3: Awareness System
+**Goal**: Users get automatic situational awareness of what changed in a document since their last interaction, enabling safe concurrent human-agent collaboration
+**Depends on**: Phase 2
+**Requirements**: AWARE-01, AWARE-02, AWARE-03, AWARE-04
+**Success Criteria** (what must be TRUE):
+  1. Every command automatically shows a banner (on stderr) if the document was edited, or comments were added/resolved since the last interaction
+  2. Running `replace` on a doc that changed since last read shows a warning but proceeds
+  3. Running `push` on a doc that changed since last read is blocked with an error (requires `--force` to override)
+  4. User can pass `--quiet` to any command to skip pre-flight checks entirely
+**Plans**: TBD
+
+Plans:
+- [ ] 03-01: TBD
+- [ ] 03-02: TBD
+
+### Phase 4: Write Operations
+**Goal**: Users can edit document content through surgical text operations and full-document overwrite, with conflict safety enforced by the awareness system
+**Depends on**: Phase 3
+**Requirements**: WRITE-01, WRITE-02, WRITE-03, WRITE-04, WRITE-05, WRITE-06
+**Success Criteria** (what must be TRUE):
+  1. User can find and replace all occurrences of text in a doc with `replace DOC_ID "old" "new"`
+  2. User can insert text at a specific position with `insert DOC_ID INDEX "text"`
+  3. User can append text to the end of a doc with `append DOC_ID "text"`
+  4. User can delete a range of text with `delete DOC_ID START END`
+  5. User can overwrite an entire doc from a local markdown file with `push DOC_ID FILE.md`, and push is blocked when the doc changed since last read unless `--force` is passed
+**Plans**: TBD
+
+Plans:
+- [ ] 04-01: TBD
+- [ ] 04-02: TBD
+
+### Phase 5: Comments & Annotations
+**Goal**: Users can manage document comments (list, create, reply, resolve, reopen) and view documents with inline comment annotations for full collaboration context
+**Depends on**: Phase 2, Phase 4
+**Requirements**: COMM-01, COMM-02, COMM-03, COMM-04, COMM-05, COMM-06, READ-02
+**Success Criteria** (what must be TRUE):
+  1. User can list open comments on a doc with `comments DOC_ID`
+  2. User can list all comments (including resolved) with `comments DOC_ID --all`
+  3. User can add a comment, reply to a comment, resolve a comment, and reopen a comment
+  4. User can export a doc with inline comments rendered as HTML comments using `cat DOC_ID --comments`
+**Plans**: TBD
+
+Plans:
+- [ ] 05-01: TBD
+- [ ] 05-02: TBD
+
+### Phase 6: File Management
+**Goal**: Users can create, duplicate, and share Google Docs from the CLI
+**Depends on**: Phase 1
+**Requirements**: FILE-01, FILE-02, FILE-03
+**Success Criteria** (what must be TRUE):
+  1. User can create a blank doc with `new "Title"` and optionally place it in a folder with `--folder FOLDER_ID`
+  2. User can duplicate a doc with `cp DOC_ID "Copy Title"`
+  3. User can share a doc with an email address and set the role (reader, writer, commenter) with `share DOC_ID EMAIL --role writer`
+**Plans**: TBD
+
+Plans:
+- [ ] 06-01: TBD
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Foundation & Auth | 0/3 | Not started | - |
+| 2. Read Operations | 0/2 | Not started | - |
+| 3. Awareness System | 0/2 | Not started | - |
+| 4. Write Operations | 0/2 | Not started | - |
+| 5. Comments & Annotations | 0/2 | Not started | - |
+| 6. File Management | 0/1 | Not started | - |

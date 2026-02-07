@@ -87,17 +87,48 @@
 
 ## Traceability
 
-Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmap) | | |
+| AUTH-01 | Phase 1 | Pending |
+| AUTH-02 | Phase 1 | Pending |
+| AUTH-03 | Phase 1 | Pending |
+| READ-01 | Phase 2 | Pending |
+| READ-02 | Phase 5 | Pending |
+| READ-03 | Phase 2 | Pending |
+| READ-04 | Phase 2 | Pending |
+| READ-05 | Phase 2 | Pending |
+| READ-06 | Phase 2 | Pending |
+| WRITE-01 | Phase 4 | Pending |
+| WRITE-02 | Phase 4 | Pending |
+| WRITE-03 | Phase 4 | Pending |
+| WRITE-04 | Phase 4 | Pending |
+| WRITE-05 | Phase 4 | Pending |
+| WRITE-06 | Phase 4 | Pending |
+| COMM-01 | Phase 5 | Pending |
+| COMM-02 | Phase 5 | Pending |
+| COMM-03 | Phase 5 | Pending |
+| COMM-04 | Phase 5 | Pending |
+| COMM-05 | Phase 5 | Pending |
+| COMM-06 | Phase 5 | Pending |
+| AWARE-01 | Phase 3 | Pending |
+| AWARE-02 | Phase 3 | Pending |
+| AWARE-03 | Phase 3 | Pending |
+| AWARE-04 | Phase 3 | Pending |
+| FILE-01 | Phase 6 | Pending |
+| FILE-02 | Phase 6 | Pending |
+| FILE-03 | Phase 6 | Pending |
+| OUT-01 | Phase 1 | Pending |
+| OUT-02 | Phase 1 | Pending |
+| OUT-03 | Phase 1 | Pending |
+| OUT-04 | Phase 1 | Pending |
+| OUT-05 | Phase 1 | Pending |
+| OUT-06 | Phase 1 | Pending |
 
 **Coverage:**
-- v1 requirements: 28 total
-- Mapped to phases: 0
-- Unmapped: 28 ⚠️
+- v1 requirements: 34 total
+- Mapped to phases: 34
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-07*
-*Last updated: 2026-02-07 after initial definition*
+*Last updated: 2026-02-07 after roadmap creation*
