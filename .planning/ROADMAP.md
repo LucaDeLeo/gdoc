@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Read Operations** - Export docs as markdown/plain text, list and search files, view metadata
 - [x] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
 - [x] **Phase 4: Write Operations** - String-match editing and full document write with version guards
-- [ ] **Phase 5: Comments & Annotations** - Comment CRUD and line-numbered comment annotations in doc output
+- [x] **Phase 5: Comments & Annotations** - Comment CRUD and line-numbered comment annotations in doc output
 - [ ] **Phase 6: File Management** - Create, duplicate, and share documents
 
 ## Phase Details
@@ -99,8 +99,8 @@ Plans:
 **Plans**: 2 plans in 2 waves
 
 Plans:
-- [ ] 05-01-PLAN.md — Comment CRUD commands (comments, comment, reply, resolve, reopen) + API layer + state patches
-- [ ] 05-02-PLAN.md — Annotated view (`cat --comments`) with line-numbered content and inline comment annotations
+- [x] 05-01-PLAN.md — Comment CRUD commands (comments, comment, reply, resolve, reopen) + API layer + state patches
+- [x] 05-02-PLAN.md — Annotated view (`cat --comments`) with line-numbered content and inline comment annotations
 
 ### Phase 6: File Management
 **Goal**: Users can create, duplicate, and share Google Docs from the CLI
@@ -126,5 +126,5 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 | 2. Read Operations | 3/3 | Complete | 2026-02-07 |
 | 3. Awareness System | 2/2 | Complete | 2026-02-07 |
 | 4. Write Operations | 2/2 | Complete | 2026-02-07 |
-| 5. Comments & Annotations | 0/2 | Planned | - |
+| 5. Comments & Annotations | 2/2 | Complete | 2026-02-07 |
 | 6. File Management | 0/1 | Not started | - |
