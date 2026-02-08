@@ -120,13 +120,12 @@ class TestCmdReply:
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r1"})
-    def test_reply_no_state_patch(self, mock_reply, _svc, _pf, mock_update):
+    def test_reply_state_patch_adds_comment_id(self, mock_reply, _svc, _pf, mock_update):
         args = _make_args("reply", comment_id="c1", text="thanks", quiet=True)
         cmd_reply(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
-        # reply should NOT have comment_state_patch
-        assert "comment_state_patch" not in call_kwargs[1]
+        assert call_kwargs[1].get("comment_state_patch") == {"add_comment_id": "c1"}
 
 
 # --- cmd_resolve tests ---
@@ -162,7 +161,7 @@ class TestCmdResolve:
         cmd_resolve(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
-        assert call_kwargs[1].get("comment_state_patch") == {"add_resolved_id": "c1"}
+        assert call_kwargs[1].get("comment_state_patch") == {"add_comment_id": "c1", "add_resolved_id": "c1"}
 
 
 # --- cmd_reopen tests ---
@@ -198,7 +197,7 @@ class TestCmdReopen:
         cmd_reopen(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
-        assert call_kwargs[1].get("comment_state_patch") == {"remove_resolved_id": "c1"}
+        assert call_kwargs[1].get("comment_state_patch") == {"add_comment_id": "c1", "remove_resolved_id": "c1"}
 
 
 # --- cmd_comments (list) tests ---

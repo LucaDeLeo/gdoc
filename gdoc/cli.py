@@ -517,6 +517,7 @@ def cmd_reply(args) -> int:
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="reply", quiet=quiet,
+        comment_state_patch={"add_comment_id": comment_id},
     )
 
     return 0
@@ -544,7 +545,7 @@ def cmd_resolve(args) -> int:
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="resolve", quiet=quiet,
-        comment_state_patch={"add_resolved_id": comment_id},
+        comment_state_patch={"add_comment_id": comment_id, "add_resolved_id": comment_id},
     )
 
     return 0
@@ -572,7 +573,7 @@ def cmd_reopen(args) -> int:
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="reopen", quiet=quiet,
-        comment_state_patch={"remove_resolved_id": comment_id},
+        comment_state_patch={"add_comment_id": comment_id, "remove_resolved_id": comment_id},
     )
 
     return 0

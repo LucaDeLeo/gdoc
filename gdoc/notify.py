@@ -142,7 +142,12 @@ def pre_flight(doc_id: str, quiet: bool = False) -> ChangeInfo | None:
                 info.new_comments.append(c)
             else:
                 # Existing comment — check for new replies and resolve/reopen
-                if c.get("replies"):
+                replies = c.get("replies", [])
+                has_new_content_reply = any(
+                    not r.get("action") and r.get("createdTime", "") > start_time
+                    for r in replies
+                )
+                if has_new_content_reply:
                     info.new_replies.append(c)
 
                 if resolved and cid not in known_resolved:

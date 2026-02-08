@@ -248,7 +248,8 @@ class TestPreFlightChanges:
         mock_ver.return_value = {"version": 847, "modifiedTime": "2025-01-20T14:30:00Z", "lastModifyingUser": {}}
         mock_comments.return_value = [
             {"id": "c1", "resolved": False, "replies": [
-                {"author": {"emailAddress": "bob@co.com"}, "content": "Done"},
+                {"author": {"emailAddress": "bob@co.com"}, "content": "Done",
+                 "createdTime": "2025-01-20T15:00:00Z"},
             ]},
         ]
 
@@ -256,6 +257,46 @@ class TestPreFlightChanges:
         assert len(result.new_replies) == 1
         err = capsys.readouterr().err
         assert "bob@co.com" in err
+
+    @patch("gdoc.api.comments.list_comments")
+    @patch("gdoc.api.drive.get_file_version")
+    @patch("gdoc.state.load_state")
+    def test_resolve_action_does_not_trigger_new_reply(self, mock_load, mock_ver, mock_comments, capsys):
+        """Resolve action-only replies should not appear as new replies."""
+        mock_load.return_value = self._make_state(known_comment_ids=["c1"], known_resolved_ids=[])
+        mock_ver.return_value = {"version": 847, "modifiedTime": "2025-01-20T14:30:00Z", "lastModifyingUser": {}}
+        mock_comments.return_value = [
+            {"id": "c1", "resolved": True, "replies": [
+                {"action": "resolve", "author": {"emailAddress": "alice@co.com"},
+                 "createdTime": "2025-01-20T15:00:00Z"},
+            ]},
+        ]
+
+        result = pre_flight("doc1")
+        assert len(result.newly_resolved) == 1
+        assert len(result.new_replies) == 0
+
+    @patch("gdoc.api.comments.list_comments")
+    @patch("gdoc.api.drive.get_file_version")
+    @patch("gdoc.state.load_state")
+    def test_old_replies_not_flagged_as_new(self, mock_load, mock_ver, mock_comments, capsys):
+        """Old content replies on a modified comment should not be flagged as new."""
+        mock_load.return_value = self._make_state(known_comment_ids=["c1"], known_resolved_ids=[])
+        mock_ver.return_value = {"version": 847, "modifiedTime": "2025-01-20T14:30:00Z", "lastModifyingUser": {}}
+        mock_comments.return_value = [
+            {"id": "c1", "resolved": True, "replies": [
+                # Old content reply (before last_comment_check)
+                {"author": {"emailAddress": "bob@co.com"}, "content": "old reply",
+                 "createdTime": "2025-01-19T10:00:00Z"},
+                # Resolve action (not a content reply)
+                {"action": "resolve", "author": {"emailAddress": "alice@co.com"},
+                 "createdTime": "2025-01-20T15:00:00Z"},
+            ]},
+        ]
+
+        result = pre_flight("doc1")
+        assert len(result.newly_resolved) == 1
+        assert len(result.new_replies) == 0
 
     @patch("gdoc.api.comments.list_comments", return_value=[])
     @patch("gdoc.api.drive.get_file_version")
