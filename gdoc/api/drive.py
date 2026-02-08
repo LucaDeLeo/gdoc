@@ -181,3 +181,95 @@ def get_file_version(doc_id: str) -> dict:
         return result
     except HttpError as e:
         _translate_http_error(e, doc_id)
+
+
+def create_doc(title: str, folder_id: str | None = None) -> dict:
+    """Create a new blank Google Doc.
+
+    Args:
+        title: Document title.
+        folder_id: Optional folder ID to place the doc in.
+
+    Returns:
+        Dict with keys: id, name, version (int), webViewLink.
+    """
+    body = {
+        "name": title,
+        "mimeType": "application/vnd.google-apps.document",
+    }
+    if folder_id:
+        body["parents"] = [folder_id]
+    try:
+        service = get_drive_service()
+        result = (
+            service.files()
+            .create(
+                body=body,
+                fields="id, name, version, webViewLink",
+            )
+            .execute()
+        )
+        if "version" in result:
+            result["version"] = int(result["version"])
+        return result
+    except HttpError as e:
+        _translate_http_error(e, folder_id or "")
+
+
+def copy_doc(doc_id: str, title: str) -> dict:
+    """Duplicate a Google Doc.
+
+    Args:
+        doc_id: Source document ID.
+        title: Title for the copy.
+
+    Returns:
+        Dict with keys: id, name, version (int), webViewLink.
+    """
+    try:
+        service = get_drive_service()
+        result = (
+            service.files()
+            .copy(
+                fileId=doc_id,
+                body={"name": title},
+                fields="id, name, version, webViewLink",
+            )
+            .execute()
+        )
+        if "version" in result:
+            result["version"] = int(result["version"])
+        return result
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def create_permission(doc_id: str, email: str, role: str) -> dict:
+    """Share a document with a user.
+
+    Args:
+        doc_id: Document ID.
+        email: Email address to share with.
+        role: Permission role ('reader', 'writer', 'commenter').
+
+    Returns:
+        Permission resource dict from the API.
+    """
+    try:
+        service = get_drive_service()
+        result = (
+            service.permissions()
+            .create(
+                fileId=doc_id,
+                body={
+                    "type": "user",
+                    "role": role,
+                    "emailAddress": email,
+                },
+                sendNotificationEmail=True,
+            )
+            .execute()
+        )
+        return result
+    except HttpError as e:
+        _translate_http_error(e, doc_id)

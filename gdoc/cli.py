@@ -586,10 +586,119 @@ def cmd_auth(args) -> int:
     return 0
 
 
-def cmd_stub(args) -> int:
-    """Placeholder for unimplemented commands."""
-    print(f"ERR: {args.command} is not yet implemented", file=sys.stderr)
-    return 4  # STUB — removed when real implementation added
+def cmd_new(args) -> int:
+    """Handler for `gdoc new`."""
+    title = args.title
+    folder_id = None
+    if getattr(args, "folder", None):
+        folder_id = _resolve_doc_id(args.folder)
+
+    from gdoc.api.drive import create_doc
+
+    result = create_doc(title, folder_id=folder_id)
+    new_id = result["id"]
+    version = result.get("version")
+    url = result.get("webViewLink", "")
+
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(id=new_id, title=result.get("name", title), url=url))
+    elif mode == "verbose":
+        print(f"Created: {result.get('name', title)}")
+        print(f"ID: {new_id}")
+        print(f"URL: {url}")
+    else:
+        print(new_id)
+
+    # Seed state for the new doc
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        new_id, None, command="new",
+        quiet=False, command_version=version,
+    )
+
+    return 0
+
+
+def cmd_cp(args) -> int:
+    """Handler for `gdoc cp`."""
+    doc_id = _resolve_doc_id(args.doc)
+    title = args.title
+    quiet = getattr(args, "quiet", False)
+
+    # Pre-flight on the source doc
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.drive import copy_doc
+
+    result = copy_doc(doc_id, title)
+    new_id = result["id"]
+    version = result.get("version")
+    url = result.get("webViewLink", "")
+
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(id=new_id, title=result.get("name", title), url=url))
+    elif mode == "verbose":
+        print(f"Copied: {result.get('name', title)}")
+        print(f"ID: {new_id}")
+        print(f"URL: {url}")
+    else:
+        print(new_id)
+
+    # Update state for the source doc
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="cp", quiet=quiet,
+    )
+
+    # Seed state for the new copy
+    update_state_after_command(
+        new_id, None, command="cp",
+        quiet=False, command_version=version,
+    )
+
+    return 0
+
+
+def cmd_share(args) -> int:
+    """Handler for `gdoc share`."""
+    doc_id = _resolve_doc_id(args.doc)
+    email = args.email
+    role = getattr(args, "role", "reader")
+    quiet = getattr(args, "quiet", False)
+
+    # Pre-flight awareness check
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.drive import create_permission
+
+    create_permission(doc_id, email, role)
+
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(email=email, role=role, status="shared"))
+    else:
+        print(f"OK shared with {email} as {role}")
+
+    # Update state for the doc
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(doc_id, change_info, command="share", quiet=quiet)
+
+    return 0
 
 
 def build_parser() -> GdocArgumentParser:
@@ -761,13 +870,13 @@ def build_parser() -> GdocArgumentParser:
     share_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    share_p.set_defaults(func=cmd_stub)
+    share_p.set_defaults(func=cmd_share)
 
     # new
     new_p = sub.add_parser("new", parents=[output_parent], help="Create a blank document")
     new_p.add_argument("title", help="Document title")
     new_p.add_argument("--folder", help="Folder ID to place doc in")
-    new_p.set_defaults(func=cmd_stub)
+    new_p.set_defaults(func=cmd_new)
 
     # cp
     cp_p = sub.add_parser("cp", parents=[output_parent], help="Duplicate a document")
@@ -776,7 +885,7 @@ def build_parser() -> GdocArgumentParser:
     cp_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
-    cp_p.set_defaults(func=cmd_stub)
+    cp_p.set_defaults(func=cmd_cp)
 
     return parser
 
