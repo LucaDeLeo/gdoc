@@ -27,6 +27,7 @@ def _make_args(**kwargs):
     defaults = {
         "command": "find",
         "query": "meeting",
+        "title": False,
         "json": False,
         "verbose": False,
     }
@@ -42,7 +43,7 @@ class TestFindBasic:
         args = _make_args(query="meeting")
         rc = cmd_find(args)
         assert rc == 0
-        mock_search.assert_called_once_with("meeting")
+        mock_search.assert_called_once_with("meeting", title_only=False)
         out = capsys.readouterr().out
         lines = out.strip().split("\n")
         assert len(lines) == 2
@@ -55,7 +56,7 @@ class TestFindBasic:
         rc = cmd_find(args)
         assert rc == 0
         out = capsys.readouterr().out
-        assert out == ""
+        assert out.strip() == "No files."
 
 
 @patch("gdoc.api.get_drive_service")
@@ -103,10 +104,41 @@ class TestFindSpecialChars:
         mock_search.return_value = []
         args = _make_args(query="it's")
         cmd_find(args)
-        mock_search.assert_called_once_with("it's")
+        mock_search.assert_called_once_with("it's", title_only=False)
 
     def test_find_with_backslash(self, mock_search, mock_svc):
         mock_search.return_value = []
         args = _make_args(query="path\\to")
         cmd_find(args)
-        mock_search.assert_called_once_with("path\\to")
+        mock_search.assert_called_once_with("path\\to", title_only=False)
+
+
+@patch("gdoc.api.get_drive_service")
+@patch("gdoc.api.drive.search_files")
+class TestFindTitleOnly:
+    def test_title_flag_passes_title_only(self, mock_search, mock_svc):
+        mock_search.return_value = []
+        args = _make_args(query="Resume", title=True)
+        cmd_find(args)
+        mock_search.assert_called_once_with("Resume", title_only=True)
+
+    def test_no_title_flag_passes_false(self, mock_search, mock_svc):
+        mock_search.return_value = []
+        args = _make_args(query="Resume")
+        cmd_find(args)
+        mock_search.assert_called_once_with("Resume", title_only=False)
+
+    def test_empty_verbose_shows_message(self, mock_search, mock_svc, capsys):
+        mock_search.return_value = []
+        args = _make_args(query="nope", verbose=True)
+        cmd_find(args)
+        out = capsys.readouterr().out
+        assert out.strip() == "No files."
+
+    def test_empty_json_unchanged(self, mock_search, mock_svc, capsys):
+        mock_search.return_value = []
+        args = _make_args(query="nope", json=True)
+        cmd_find(args)
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert data["files"] == []

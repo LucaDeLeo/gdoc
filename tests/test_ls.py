@@ -55,7 +55,7 @@ class TestLsTerse:
         rc = cmd_ls(args)
         assert rc == 0
         out = capsys.readouterr().out
-        assert out == ""
+        assert out.strip() == "No files."
 
     def test_ls_default_query_root(self, mock_list, mock_svc):
         mock_list.return_value = []

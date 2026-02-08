@@ -83,17 +83,24 @@ def list_files(query: str) -> list[dict]:
         _translate_http_error(e, "")
 
 
-def search_files(query: str) -> list[dict]:
+def search_files(query: str, title_only: bool = False) -> list[dict]:
     """Search for files by name or full-text content.
 
     Escapes special characters in the query before embedding in the
     Drive API query string.
+
+    Args:
+        query: Search term.
+        title_only: When True, only match against the file name.
     """
     escaped = _escape_query_value(query)
-    drive_query = (
-        f"(name contains '{escaped}' or fullText contains '{escaped}') "
-        f"and trashed=false"
-    )
+    if title_only:
+        drive_query = f"name contains '{escaped}' and trashed=false"
+    else:
+        drive_query = (
+            f"(name contains '{escaped}' or fullText contains '{escaped}') "
+            f"and trashed=false"
+        )
     return list_files(drive_query)
 
 

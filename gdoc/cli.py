@@ -215,6 +215,8 @@ def cmd_ls(args) -> int:
     output = _format_file_list(files, mode)
     if output:
         print(output)
+    elif mode != "json":
+        print("No files.")
 
     return 0
 
@@ -224,12 +226,15 @@ def cmd_find(args) -> int:
     from gdoc.api.drive import search_files
     from gdoc.format import get_output_mode
 
-    files = search_files(args.query)
+    title_only = getattr(args, "title", False)
+    files = search_files(args.query, title_only=title_only)
 
     mode = get_output_mode(args)
     output = _format_file_list(files, mode)
     if output:
         print(output)
+    elif mode != "json":
+        print("No files.")
 
     return 0
 
@@ -436,6 +441,8 @@ def cmd_comments(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(comments=comments))
+    elif not comments:
+        print("No comments.")
     else:
         for c in comments:
             cid = c.get("id", "")
@@ -753,6 +760,7 @@ def build_parser() -> GdocArgumentParser:
     # find
     find_p = sub.add_parser("find", parents=[output_parent], help="Search files by name/content")
     find_p.add_argument("query", help="Search query")
+    find_p.add_argument("--title", action="store_true", help="Search title only")
     find_p.set_defaults(func=cmd_find)
 
     # cat

@@ -197,6 +197,25 @@ class TestSearchFiles:
         query = mock_list_files.call_args[0][0]
         assert "a\\\\b" in query
 
+    def test_title_only_search(self, mock_list_files):
+        mock_list_files.return_value = []
+
+        search_files("Resume", title_only=True)
+
+        query = mock_list_files.call_args[0][0]
+        assert "name contains 'Resume'" in query
+        assert "fullText" not in query
+        assert "trashed=false" in query
+
+    def test_default_searches_both(self, mock_list_files):
+        mock_list_files.return_value = []
+
+        search_files("Resume")
+
+        query = mock_list_files.call_args[0][0]
+        assert "name contains 'Resume'" in query
+        assert "fullText contains 'Resume'" in query
+
 
 @patch("gdoc.api.drive.get_drive_service")
 class TestGetFileInfo:

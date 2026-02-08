@@ -311,7 +311,19 @@ class TestCmdComments:
         args = _make_args("comments", quiet=True)
         rc = cmd_comments(args)
         assert rc == 0
-        assert capsys.readouterr().out == ""
+        assert capsys.readouterr().out.strip() == "No comments."
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
+    def test_comments_empty_json(self, mock_list, _svc, _pf, _update, capsys):
+        mock_list.return_value = []
+        args = _make_args("comments", json=True, quiet=True)
+        rc = cmd_comments(args)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data == {"ok": True, "comments": []}
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
