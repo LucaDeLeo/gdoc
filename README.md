@@ -1,0 +1,214 @@
+# gdoc
+
+A token-efficient CLI for AI agents to read, write, and collaborate on Google Docs.
+
+`gdoc` gives AI coding agents (Claude Code, Cursor, Codex, etc.) a simple command-line interface to Google Docs and Drive. Every command is designed to minimize token usage while providing the context agents need — change detection banners, conflict prevention, structured output modes, and inline comment annotations.
+
+## Install
+
+```bash
+uv tool install .
+```
+
+Or for development:
+
+```bash
+uv sync --extra dev
+```
+
+## Setup
+
+1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable the **Google Drive API** and **Google Docs API**
+3. Create **OAuth 2.0 credentials** (Desktop application type)
+4. Download the credentials JSON and place it at `~/.gdoc/credentials.json`
+5. Authenticate:
+
+```bash
+gdoc auth
+```
+
+This opens a browser for the OAuth flow. Use `--no-browser` for headless environments (prints a URL to visit manually).
+
+## Quick start
+
+```bash
+# List files in Drive root
+gdoc ls
+
+# Search for a document
+gdoc find "quarterly report"
+
+# Read a document as markdown
+gdoc cat DOC_ID
+
+# Read with inline comment annotations
+gdoc cat --comments DOC_ID
+
+# Get document metadata
+gdoc info DOC_ID
+
+# Find and replace text (single match)
+gdoc edit DOC_ID "old text" "new text"
+
+# Overwrite a document from a local file
+gdoc write DOC_ID draft.md
+
+# Create a new blank document
+gdoc new "Meeting Notes"
+
+# Duplicate a document
+gdoc cp DOC_ID "Copy of Report"
+```
+
+All commands accept a full Google Docs URL or a bare document ID:
+
+```bash
+gdoc cat https://docs.google.com/document/d/1aBcDeFg.../edit
+gdoc cat 1aBcDeFg...
+```
+
+## Commands
+
+### Reading
+
+| Command | Description |
+|---------|-------------|
+| `cat DOC` | Export document as markdown (or `--plain` for plain text) |
+| `cat --comments DOC` | Line-numbered content with inline comment annotations |
+| `info DOC` | Show title, owner, modified date, word count |
+| `ls [FOLDER]` | List files in Drive root or a folder (`--type docs\|sheets\|all`) |
+| `find QUERY` | Search files by name or content |
+
+### Writing
+
+| Command | Description |
+|---------|-------------|
+| `edit DOC OLD NEW` | Find and replace text (single match by default, `--all` for all) |
+| `write DOC FILE` | Overwrite document from a local markdown file |
+| `new TITLE` | Create a blank document (`--folder` to specify location) |
+| `cp DOC TITLE` | Duplicate a document |
+
+### Comments
+
+| Command | Description |
+|---------|-------------|
+| `comments DOC` | List all open comments (`--all` to include resolved) |
+| `comment DOC TEXT` | Add a comment |
+| `reply DOC COMMENT_ID TEXT` | Reply to a comment |
+| `resolve DOC COMMENT_ID` | Resolve a comment |
+| `reopen DOC COMMENT_ID` | Reopen a resolved comment |
+
+### Other
+
+| Command | Description |
+|---------|-------------|
+| `auth` | Authenticate with Google (`--no-browser` for headless) |
+| `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`) |
+
+## Output modes
+
+Every command supports three output modes:
+
+```bash
+gdoc info DOC              # terse (default) — compact, human-readable
+gdoc info --verbose DOC    # verbose — all fields, full timestamps
+gdoc info --json DOC       # json — machine-readable, wrapped in {"ok": true, ...}
+```
+
+The `--json` and `--verbose` flags are mutually exclusive and can go before or after the subcommand.
+
+## Awareness system
+
+`gdoc` tracks per-document state to help agents stay aware of external changes. Before most commands, a **pre-flight check** runs automatically and prints a banner to stderr:
+
+```
+--- first interaction with this doc ---
+ 📄 "Project Spec" by alice@example.com, last edited 2026-02-07
+ 💬 3 open comments, 1 resolved
+---
+```
+
+On subsequent interactions:
+
+```
+--- since last interaction (12 min ago) ---
+ ✎ doc edited by bob@example.com (v4 → v6)
+ 💬 new comment #abc by carol@example.com: "Should we add error handling here?"
+ ✓ comment #def resolved by alice@example.com
+---
+```
+
+If nothing changed: `--- no changes ---`
+
+### Conflict prevention
+
+The `write` command blocks if the document was modified since your last read:
+
+```bash
+gdoc cat DOC               # establishes a read baseline
+# ... someone else edits the doc ...
+gdoc write DOC draft.md    # ERR: doc changed since last read
+gdoc cat DOC               # re-read to update baseline
+gdoc write DOC draft.md    # OK written
+```
+
+Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight checks entirely (saves 2 API calls).
+
+## Annotated view
+
+`cat --comments` produces line-numbered output with comments placed inline next to the text they reference:
+
+```
+     1	# Project Spec
+     2
+     3	The system should handle up to 1000 concurrent users.
+      	  [#abc open] alice@example.com on "up to 1000 concurrent users":
+      	    "Is this enough? We had 1500 at peak last month."
+      	    > bob@example.com: "Good point, let's bump to 2000."
+     4
+     5	Authentication uses OAuth2.
+```
+
+Comments whose anchor text has been deleted, is too short, or is ambiguous are grouped in an `[UNANCHORED]` section at the end.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | API or unexpected error |
+| 2 | Authentication error (run `gdoc auth`) |
+| 3 | Usage or validation error |
+
+Errors always print `ERR: <message>` to stderr, even in `--json` mode.
+
+## Configuration
+
+All files are stored under `~/.gdoc/`:
+
+| File | Purpose |
+|------|---------|
+| `credentials.json` | OAuth client credentials (from Google Cloud Console) |
+| `token.json` | Stored OAuth token (created by `gdoc auth`) |
+| `state/<DOC_ID>.json` | Per-document state for change detection |
+
+## Development
+
+```bash
+# Install dev dependencies
+uv sync --extra dev
+
+# Run tests
+uv run pytest tests/ -v
+
+# Run a single test
+uv run pytest tests/test_cat.py -k "test_name" -v
+
+# Lint
+uv run ruff check gdoc/ tests/
+```
+
+## License
+
+MIT
