@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Awareness System** - Pre-flight change detection, notification banners, conflict detection
 - [x] **Phase 4: Write Operations** - String-match editing and full document write with version guards
 - [x] **Phase 5: Comments & Annotations** - Comment CRUD and line-numbered comment annotations in doc output
-- [ ] **Phase 6: File Management** - Create, duplicate, and share documents
+- [x] **Phase 6: File Management** - Create, duplicate, and share documents
 
 ## Phase Details
 
@@ -110,10 +110,10 @@ Plans:
   1. User can create a blank doc with `new "Title"` and optionally place it in a folder with `--folder FOLDER_ID`
   2. User can duplicate a doc with `cp DOC_ID "Copy Title"`
   3. User can share a doc with an email address and set the role (reader, writer, commenter) with `share DOC_ID EMAIL --role writer`
-**Plans**: TBD
+**Plans**: 1 plan in 1 wave
 
 Plans:
-- [ ] 06-01: TBD
+- [x] 06-01-PLAN.md — File management commands (new, cp, share) + Drive API wrappers + state seeding + stub removal
 
 ## Progress
 
@@ -127,4 +127,4 @@ Phases execute in numeric order: 1 --> 2 --> 3 --> 4 --> 5 --> 6
 | 3. Awareness System | 2/2 | Complete | 2026-02-07 |
 | 4. Write Operations | 2/2 | Complete | 2026-02-07 |
 | 5. Comments & Annotations | 2/2 | Complete | 2026-02-07 |
-| 6. File Management | 0/1 | Not started | - |
+| 6. File Management | 1/1 | Complete | 2026-02-07 |
