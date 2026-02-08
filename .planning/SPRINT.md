@@ -1,0 +1,12 @@
+| 01 | 16:00 | passed | plan | OK  |
+| 01 | 16:27 | passed | code | OK  |
+| 02 | 17:21 | passed | plan | OK  |
+| 02 | 17:55 | passed | code | OK  |
+| 03 | 18:39 | passed | plan | OK  |
+| 03 | 18:53 | passed | code | OK  |
+| 04 | 19:24 | passed | plan | OK  |
+| 04 | 19:37 | passed | code | OK  |
+| 05 | 20:22 | passed | plan | OK  |
+| 05 | 20:36 | passed | code | OK  |
+| 06 | 20:56 | passed | plan | OK  |
+| 06 | 21:14 | passed | code | OK  |
