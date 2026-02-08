@@ -7,13 +7,15 @@ A token-efficient CLI for AI agents to read, write, and collaborate on Google Do
 ## Install
 
 ```bash
-uv tool install .
+uv tool install git+https://github.com/LucaDeLeo/gdoc.git
 ```
 
-Or for development:
+Or from a local clone:
 
 ```bash
-uv sync --extra dev
+git clone https://github.com/LucaDeLeo/gdoc.git
+cd gdoc
+uv tool install .
 ```
 
 ## Setup
