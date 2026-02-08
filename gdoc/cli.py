@@ -482,7 +482,8 @@ def cmd_comment(args) -> int:
     change_info = pre_flight(doc_id, quiet=quiet)
 
     from gdoc.api.comments import create_comment
-    result = create_comment(doc_id, args.text)
+    quote = getattr(args, "quote", "") or ""
+    result = create_comment(doc_id, args.text, quote=quote)
     new_id = result["id"]
 
     from gdoc.api.drive import get_file_version
@@ -873,6 +874,9 @@ def build_parser() -> GdocArgumentParser:
     comment_p = sub.add_parser("comment", parents=[output_parent], help="Add a comment to a doc")
     comment_p.add_argument("doc", help="Document ID or URL")
     comment_p.add_argument("text", help="Comment text")
+    comment_p.add_argument(
+        "--quote", help="Quoted text the comment refers to",
+    )
     comment_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )

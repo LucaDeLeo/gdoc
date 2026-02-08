@@ -97,21 +97,31 @@ def delete_comment(file_id: str, comment_id: str) -> None:
         _translate_http_error(e, file_id)
 
 
-def create_comment(file_id: str, content: str) -> dict:
-    """Create an unanchored comment on a file.
+def create_comment(
+    file_id: str, content: str, quote: str = "",
+) -> dict:
+    """Create a comment on a file.
 
     Args:
         file_id: The document ID.
         content: The comment text.
+        quote: Quoted text the comment refers to. Stored as
+            quotedFileContent metadata for client-side annotation
+            (e.g. cat --comments). Note: Google Docs does not
+            support API-created anchored comments, so this will
+            not appear visually anchored in the Docs UI.
 
     Returns:
         Comment dict with id, content, author, createdTime, resolved.
     """
     try:
         service = get_drive_service()
+        body: dict = {"content": content}
+        if quote:
+            body["quotedFileContent"] = {"value": quote}
         result = service.comments().create(
             fileId=file_id,
-            body={"content": content},
+            body=body,
             fields="id, content, author(displayName, emailAddress), createdTime, resolved",
         ).execute()
         return result
