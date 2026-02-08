@@ -129,7 +129,7 @@ def create_reply(
             body["content"] = content
         if action:
             body["action"] = action
-        result = service.comments().replies().create(
+        result = service.replies().create(
             fileId=file_id,
             commentId=comment_id,
             body=body,

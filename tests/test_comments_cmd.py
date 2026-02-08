@@ -40,12 +40,16 @@ def _make_comment(cid="c1", content="test comment", email="alice@co.com",
 
 # --- cmd_comment tests ---
 
+_MOCK_VERSION = {"version": 50}
+
+
 class TestCmdComment:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_comment", return_value={"id": "c_new"})
-    def test_comment_ok_output(self, mock_create, _svc, _pf, _update, capsys):
+    def test_comment_ok_output(self, mock_create, _svc, _ver, _pf, _update, capsys):
         args = _make_args("comment", text="hello", quiet=True)
         rc = cmd_comment(args)
         assert rc == 0
@@ -53,9 +57,10 @@ class TestCmdComment:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_comment", return_value={"id": "c_new"})
-    def test_comment_json_output(self, mock_create, _svc, _pf, _update, capsys):
+    def test_comment_json_output(self, mock_create, _svc, _ver, _pf, _update, capsys):
         args = _make_args("comment", text="hello", json=True, quiet=True)
         rc = cmd_comment(args)
         assert rc == 0
@@ -64,32 +69,36 @@ class TestCmdComment:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_comment", side_effect=GdocError("Document not found: abc123"))
-    def test_comment_api_error(self, mock_create, _svc, _pf, _update):
+    def test_comment_api_error(self, mock_create, _svc, _ver, _pf, _update):
         args = _make_args("comment", text="hello", quiet=True)
         with pytest.raises(GdocError, match="Document not found"):
             cmd_comment(args)
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_comment", side_effect=AuthError("Authentication expired"))
-    def test_comment_auth_error(self, mock_create, _svc, _pf, _update):
+    def test_comment_auth_error(self, mock_create, _svc, _ver, _pf, _update):
         args = _make_args("comment", text="hello", quiet=True)
         with pytest.raises(AuthError):
             cmd_comment(args)
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_comment", return_value={"id": "c_new"})
-    def test_comment_state_patch(self, mock_create, _svc, _pf, mock_update):
+    def test_comment_state_patch(self, mock_create, _svc, _ver, _pf, mock_update):
         args = _make_args("comment", text="hello", quiet=True)
         cmd_comment(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
         assert call_kwargs[1].get("comment_state_patch") == {"add_comment_id": "c_new"}
+        assert call_kwargs[1].get("command_version") == 50
 
 
 # --- cmd_reply tests ---
@@ -97,9 +106,10 @@ class TestCmdComment:
 class TestCmdReply:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r1"})
-    def test_reply_ok_output(self, mock_reply, _svc, _pf, _update, capsys):
+    def test_reply_ok_output(self, mock_reply, _svc, _ver, _pf, _update, capsys):
         args = _make_args("reply", comment_id="c1", text="thanks", quiet=True)
         rc = cmd_reply(args)
         assert rc == 0
@@ -107,9 +117,10 @@ class TestCmdReply:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r1"})
-    def test_reply_json_output(self, mock_reply, _svc, _pf, _update, capsys):
+    def test_reply_json_output(self, mock_reply, _svc, _ver, _pf, _update, capsys):
         args = _make_args("reply", comment_id="c1", text="thanks", json=True, quiet=True)
         rc = cmd_reply(args)
         assert rc == 0
@@ -118,14 +129,16 @@ class TestCmdReply:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r1"})
-    def test_reply_state_patch_adds_comment_id(self, mock_reply, _svc, _pf, mock_update):
+    def test_reply_state_patch_adds_comment_id(self, mock_reply, _svc, _ver, _pf, mock_update):
         args = _make_args("reply", comment_id="c1", text="thanks", quiet=True)
         cmd_reply(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
         assert call_kwargs[1].get("comment_state_patch") == {"add_comment_id": "c1"}
+        assert call_kwargs[1].get("command_version") == 50
 
 
 # --- cmd_resolve tests ---
@@ -133,9 +146,10 @@ class TestCmdReply:
 class TestCmdResolve:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r2", "action": "resolve"})
-    def test_resolve_ok_output(self, mock_reply, _svc, _pf, _update, capsys):
+    def test_resolve_ok_output(self, mock_reply, _svc, _ver, _pf, _update, capsys):
         args = _make_args("resolve", comment_id="c1", quiet=True)
         rc = cmd_resolve(args)
         assert rc == 0
@@ -143,9 +157,10 @@ class TestCmdResolve:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r2", "action": "resolve"})
-    def test_resolve_json_output(self, mock_reply, _svc, _pf, _update, capsys):
+    def test_resolve_json_output(self, mock_reply, _svc, _ver, _pf, _update, capsys):
         args = _make_args("resolve", comment_id="c1", json=True, quiet=True)
         rc = cmd_resolve(args)
         assert rc == 0
@@ -154,14 +169,16 @@ class TestCmdResolve:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r2", "action": "resolve"})
-    def test_resolve_state_patch(self, mock_reply, _svc, _pf, mock_update):
+    def test_resolve_state_patch(self, mock_reply, _svc, _ver, _pf, mock_update):
         args = _make_args("resolve", comment_id="c1", quiet=True)
         cmd_resolve(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
         assert call_kwargs[1].get("comment_state_patch") == {"add_comment_id": "c1", "add_resolved_id": "c1"}
+        assert call_kwargs[1].get("command_version") == 50
 
 
 # --- cmd_reopen tests ---
@@ -169,9 +186,10 @@ class TestCmdResolve:
 class TestCmdReopen:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r3", "action": "reopen"})
-    def test_reopen_ok_output(self, mock_reply, _svc, _pf, _update, capsys):
+    def test_reopen_ok_output(self, mock_reply, _svc, _ver, _pf, _update, capsys):
         args = _make_args("reopen", comment_id="c1", quiet=True)
         rc = cmd_reopen(args)
         assert rc == 0
@@ -179,9 +197,10 @@ class TestCmdReopen:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r3", "action": "reopen"})
-    def test_reopen_json_output(self, mock_reply, _svc, _pf, _update, capsys):
+    def test_reopen_json_output(self, mock_reply, _svc, _ver, _pf, _update, capsys):
         args = _make_args("reopen", comment_id="c1", json=True, quiet=True)
         rc = cmd_reopen(args)
         assert rc == 0
@@ -190,14 +209,16 @@ class TestCmdReopen:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r3", "action": "reopen"})
-    def test_reopen_state_patch(self, mock_reply, _svc, _pf, mock_update):
+    def test_reopen_state_patch(self, mock_reply, _svc, _ver, _pf, mock_update):
         args = _make_args("reopen", comment_id="c1", quiet=True)
         cmd_reopen(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
         assert call_kwargs[1].get("comment_state_patch") == {"add_comment_id": "c1", "remove_resolved_id": "c1"}
+        assert call_kwargs[1].get("command_version") == 50
 
 
 # --- cmd_comments (list) tests ---

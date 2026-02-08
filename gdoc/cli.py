@@ -485,6 +485,9 @@ def cmd_comment(args) -> int:
     result = create_comment(doc_id, args.text)
     new_id = result["id"]
 
+    from gdoc.api.drive import get_file_version
+    command_version = get_file_version(doc_id).get("version")
+
     from gdoc.format import get_output_mode, format_json
     mode = get_output_mode(args)
     if mode == "json":
@@ -495,6 +498,7 @@ def cmd_comment(args) -> int:
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="comment", quiet=quiet,
+        command_version=command_version,
         comment_state_patch={"add_comment_id": new_id},
     )
 
@@ -514,6 +518,9 @@ def cmd_reply(args) -> int:
     result = create_reply(doc_id, comment_id, content=args.text)
     reply_id = result["id"]
 
+    from gdoc.api.drive import get_file_version
+    command_version = get_file_version(doc_id).get("version")
+
     from gdoc.format import get_output_mode, format_json
     mode = get_output_mode(args)
     if mode == "json":
@@ -524,6 +531,7 @@ def cmd_reply(args) -> int:
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="reply", quiet=quiet,
+        command_version=command_version,
         comment_state_patch={"add_comment_id": comment_id},
     )
 
@@ -542,6 +550,9 @@ def cmd_resolve(args) -> int:
     from gdoc.api.comments import create_reply
     create_reply(doc_id, comment_id, action="resolve")
 
+    from gdoc.api.drive import get_file_version
+    command_version = get_file_version(doc_id).get("version")
+
     from gdoc.format import get_output_mode, format_json
     mode = get_output_mode(args)
     if mode == "json":
@@ -552,6 +563,7 @@ def cmd_resolve(args) -> int:
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="resolve", quiet=quiet,
+        command_version=command_version,
         comment_state_patch={"add_comment_id": comment_id, "add_resolved_id": comment_id},
     )
 
@@ -570,6 +582,9 @@ def cmd_reopen(args) -> int:
     from gdoc.api.comments import create_reply
     create_reply(doc_id, comment_id, action="reopen")
 
+    from gdoc.api.drive import get_file_version
+    command_version = get_file_version(doc_id).get("version")
+
     from gdoc.format import get_output_mode, format_json
     mode = get_output_mode(args)
     if mode == "json":
@@ -580,6 +595,7 @@ def cmd_reopen(args) -> int:
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="reopen", quiet=quiet,
+        command_version=command_version,
         comment_state_patch={"add_comment_id": comment_id, "remove_resolved_id": comment_id},
     )
 

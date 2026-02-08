@@ -183,13 +183,13 @@ class TestCreateReply:
     def test_create_reply_with_content(self, mock_svc):
         mock_service = MagicMock()
         mock_svc.return_value = mock_service
-        mock_service.comments().replies().create().execute.return_value = {
+        mock_service.replies().create().execute.return_value = {
             "id": "r1", "content": "thanks",
         }
         result = create_reply("doc1", "c1", content="thanks")
         assert result["id"] == "r1"
         # Verify body has content, no action
-        call_kwargs = mock_service.comments().replies().create.call_args
+        call_kwargs = mock_service.replies().create.call_args
         body = call_kwargs[1].get("body", {}) if call_kwargs[1] else {}
         assert body.get("content") == "thanks"
         assert "action" not in body
@@ -198,12 +198,12 @@ class TestCreateReply:
     def test_create_reply_with_action_resolve(self, mock_svc):
         mock_service = MagicMock()
         mock_svc.return_value = mock_service
-        mock_service.comments().replies().create().execute.return_value = {
+        mock_service.replies().create().execute.return_value = {
             "id": "r2", "action": "resolve",
         }
         result = create_reply("doc1", "c1", action="resolve")
         assert result["id"] == "r2"
-        call_kwargs = mock_service.comments().replies().create.call_args
+        call_kwargs = mock_service.replies().create.call_args
         body = call_kwargs[1].get("body", {}) if call_kwargs[1] else {}
         assert body.get("action") == "resolve"
         assert "content" not in body
@@ -212,12 +212,12 @@ class TestCreateReply:
     def test_create_reply_with_action_reopen(self, mock_svc):
         mock_service = MagicMock()
         mock_svc.return_value = mock_service
-        mock_service.comments().replies().create().execute.return_value = {
+        mock_service.replies().create().execute.return_value = {
             "id": "r3", "action": "reopen",
         }
         result = create_reply("doc1", "c1", action="reopen")
         assert result["id"] == "r3"
-        call_kwargs = mock_service.comments().replies().create.call_args
+        call_kwargs = mock_service.replies().create.call_args
         body = call_kwargs[1].get("body", {}) if call_kwargs[1] else {}
         assert body.get("action") == "reopen"
         assert "content" not in body
@@ -226,6 +226,6 @@ class TestCreateReply:
     def test_create_reply_auth_error(self, mock_svc):
         mock_service = MagicMock()
         mock_svc.return_value = mock_service
-        mock_service.comments().replies().create().execute.side_effect = _make_http_error(401)
+        mock_service.replies().create().execute.side_effect = _make_http_error(401)
         with pytest.raises(AuthError):
             create_reply("doc1", "c1", content="hello")
