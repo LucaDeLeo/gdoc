@@ -356,6 +356,39 @@ class TestCommentStatePatch:
             state = load_state("doc1")
             assert "c1" not in state.known_resolved_ids
 
+    def test_remove_comment_id_prunes_both_lists(self, tmp_path):
+        """remove_comment_id removes from known_comment_ids and known_resolved_ids."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(
+                known_comment_ids=["c1", "c2", "c3"],
+                known_resolved_ids=["c1", "c3"],
+            ))
+            update_state_after_command(
+                "doc1", None, command="delete-comment", quiet=True,
+                comment_state_patch={"remove_comment_id": "c1"},
+            )
+            state = load_state("doc1")
+            assert "c1" not in state.known_comment_ids
+            assert "c1" not in state.known_resolved_ids
+            assert "c2" in state.known_comment_ids
+            assert "c3" in state.known_comment_ids
+            assert "c3" in state.known_resolved_ids
+
+    def test_remove_comment_id_nonexistent_is_noop(self, tmp_path):
+        """Removing a comment ID that doesn't exist is a no-op."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(
+                known_comment_ids=["c1"],
+                known_resolved_ids=["c1"],
+            ))
+            update_state_after_command(
+                "doc1", None, command="delete-comment", quiet=True,
+                comment_state_patch={"remove_comment_id": "c999"},
+            )
+            state = load_state("doc1")
+            assert state.known_comment_ids == ["c1"]
+            assert state.known_resolved_ids == ["c1"]
+
     def test_quiet_does_not_advance_comment_check(self, tmp_path):
         """Quiet mode: last_comment_check unchanged with patch."""
         with patch("gdoc.state.STATE_DIR", tmp_path):

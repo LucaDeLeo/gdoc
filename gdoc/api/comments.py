@@ -86,6 +86,17 @@ def list_comments(
         _translate_http_error(e, file_id)
 
 
+def delete_comment(file_id: str, comment_id: str) -> None:
+    """Delete a comment from a file."""
+    try:
+        service = get_drive_service()
+        service.comments().delete(
+            fileId=file_id, commentId=comment_id,
+        ).execute()
+    except HttpError as e:
+        _translate_http_error(e, file_id)
+
+
 def create_comment(file_id: str, content: str) -> dict:
     """Create an unanchored comment on a file.
 

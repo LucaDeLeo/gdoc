@@ -123,5 +123,9 @@ def update_state_after_command(
         if "remove_resolved_id" in comment_state_patch:
             rid = comment_state_patch["remove_resolved_id"]
             state.known_resolved_ids = [x for x in state.known_resolved_ids if x != rid]
+        if "remove_comment_id" in comment_state_patch:
+            cid = comment_state_patch["remove_comment_id"]
+            state.known_comment_ids = [x for x in state.known_comment_ids if x != cid]
+            state.known_resolved_ids = [x for x in state.known_resolved_ids if x != cid]
 
     save_state(doc_id, state)

@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from gdoc.cli import cmd_comments, cmd_comment, cmd_reply, cmd_resolve, cmd_reopen
+from gdoc.cli import cmd_comments, cmd_comment, cmd_reply, cmd_resolve, cmd_reopen, cmd_delete_comment
 from gdoc.notify import ChangeInfo
 from gdoc.util import AuthError, GdocError
 
@@ -358,3 +358,53 @@ class TestCmdComments:
         cmd_comments(args)
         out = capsys.readouterr().out
         assert "[resolved]" in out
+
+
+# --- cmd_delete_comment tests ---
+
+class TestCmdDeleteComment:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.delete_comment", return_value=None)
+    def test_delete_comment_ok_output(self, mock_delete, _svc, _ver, _pf, _update, capsys):
+        args = _make_args("delete-comment", comment_id="c1", quiet=True)
+        rc = cmd_delete_comment(args)
+        assert rc == 0
+        assert "OK deleted comment #c1" in capsys.readouterr().out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.delete_comment", return_value=None)
+    def test_delete_comment_json_output(self, mock_delete, _svc, _ver, _pf, _update, capsys):
+        args = _make_args("delete-comment", comment_id="c1", json=True, quiet=True)
+        rc = cmd_delete_comment(args)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data == {"ok": True, "id": "c1", "status": "deleted"}
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.delete_comment", return_value=None)
+    def test_delete_comment_state_patch(self, mock_delete, _svc, _ver, _pf, mock_update):
+        args = _make_args("delete-comment", comment_id="c1", quiet=True)
+        cmd_delete_comment(args)
+        mock_update.assert_called_once()
+        call_kwargs = mock_update.call_args
+        assert call_kwargs[1].get("comment_state_patch") == {"remove_comment_id": "c1"}
+        assert call_kwargs[1].get("command_version") == 50
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.delete_comment", side_effect=GdocError("Document not found: abc123"))
+    def test_delete_comment_api_error(self, mock_delete, _svc, _ver, _pf, _update):
+        args = _make_args("delete-comment", comment_id="c1", quiet=True)
+        with pytest.raises(GdocError, match="Document not found"):
+            cmd_delete_comment(args)

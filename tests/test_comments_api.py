@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from gdoc.api.comments import list_comments, create_comment, create_reply
+from gdoc.api.comments import list_comments, create_comment, create_reply, delete_comment
 from gdoc.util import AuthError, GdocError
 
 
@@ -229,3 +229,29 @@ class TestCreateReply:
         mock_service.replies().create().execute.side_effect = _make_http_error(401)
         with pytest.raises(AuthError):
             create_reply("doc1", "c1", content="hello")
+
+
+class TestDeleteComment:
+    @patch("gdoc.api.comments.get_drive_service")
+    def test_delete_comment_success(self, mock_svc):
+        mock_service = MagicMock()
+        mock_svc.return_value = mock_service
+        mock_service.comments().delete().execute.return_value = None
+        result = delete_comment("doc1", "c1")
+        assert result is None
+
+    @patch("gdoc.api.comments.get_drive_service")
+    def test_delete_comment_404_raises_gdoc_error(self, mock_svc):
+        mock_service = MagicMock()
+        mock_svc.return_value = mock_service
+        mock_service.comments().delete().execute.side_effect = _make_http_error(404)
+        with pytest.raises(GdocError, match="Document not found"):
+            delete_comment("doc1", "c1")
+
+    @patch("gdoc.api.comments.get_drive_service")
+    def test_delete_comment_401_raises_auth_error(self, mock_svc):
+        mock_service = MagicMock()
+        mock_svc.return_value = mock_service
+        mock_service.comments().delete().execute.side_effect = _make_http_error(401)
+        with pytest.raises(AuthError):
+            delete_comment("doc1", "c1")

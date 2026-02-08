@@ -602,6 +602,38 @@ def cmd_reopen(args) -> int:
     return 0
 
 
+def cmd_delete_comment(args) -> int:
+    """Handler for `gdoc delete-comment`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    comment_id = args.comment_id
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.comments import delete_comment
+    delete_comment(doc_id, comment_id)
+
+    from gdoc.api.drive import get_file_version
+    command_version = get_file_version(doc_id).get("version")
+
+    from gdoc.format import get_output_mode, format_json
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(id=comment_id, status="deleted"))
+    else:
+        print(f"OK deleted comment #{comment_id}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="delete-comment", quiet=quiet,
+        command_version=command_version,
+        comment_state_patch={"remove_comment_id": comment_id},
+    )
+
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     from gdoc.auth import authenticate
@@ -873,6 +905,18 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     reopen_p.set_defaults(func=cmd_reopen)
+
+    # delete-comment
+    del_comment_p = sub.add_parser(
+        "delete-comment", parents=[output_parent],
+        help="Delete a comment",
+    )
+    del_comment_p.add_argument("doc", help="Document ID or URL")
+    del_comment_p.add_argument("comment_id", help="Comment ID to delete")
+    del_comment_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks",
+    )
+    del_comment_p.set_defaults(func=cmd_delete_comment)
 
     # info
     info_p = sub.add_parser("info", parents=[output_parent], help="Show document metadata")
