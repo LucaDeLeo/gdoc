@@ -1,0 +1,330 @@
+"""Tests for the markdown parser and Docs API request builder."""
+
+from gdoc.mdparse import parse_markdown, to_docs_requests
+
+
+class TestParsePlainText:
+    def test_empty_string(self):
+        result = parse_markdown("")
+        assert result.plain_text == ""
+        assert result.styles == []
+
+    def test_plain_text_no_formatting(self):
+        result = parse_markdown("hello world")
+        assert result.plain_text == "hello world\n"
+        assert result.styles == []
+
+    def test_multiline_plain_text(self):
+        result = parse_markdown("line one\nline two")
+        assert result.plain_text == "line one\nline two\n"
+        assert result.styles == []
+
+    def test_whitespace_only(self):
+        result = parse_markdown("   ")
+        assert result.plain_text == "   \n"
+        assert result.styles == []
+
+
+class TestParseBold:
+    def test_bold_asterisks(self):
+        result = parse_markdown("**bold**")
+        assert result.plain_text == "bold\n"
+        bold_styles = [s for s in result.styles if s.style.get("bold")]
+        assert len(bold_styles) == 1
+        assert bold_styles[0].start == 0
+        assert bold_styles[0].end == 4
+        assert bold_styles[0].type == "text_style"
+
+    def test_bold_underscores(self):
+        result = parse_markdown("__bold__")
+        assert result.plain_text == "bold\n"
+        bold_styles = [s for s in result.styles if s.style.get("bold")]
+        assert len(bold_styles) == 1
+
+    def test_bold_in_sentence(self):
+        result = parse_markdown("this is **bold** text")
+        assert result.plain_text == "this is bold text\n"
+        bold_styles = [s for s in result.styles if s.style.get("bold")]
+        assert len(bold_styles) == 1
+        assert bold_styles[0].start == 8
+        assert bold_styles[0].end == 12
+
+
+class TestParseItalic:
+    def test_italic_asterisk(self):
+        result = parse_markdown("*italic*")
+        assert result.plain_text == "italic\n"
+        italic_styles = [s for s in result.styles if s.style.get("italic")]
+        assert len(italic_styles) == 1
+        assert italic_styles[0].start == 0
+        assert italic_styles[0].end == 6
+
+    def test_italic_underscore(self):
+        result = parse_markdown("_italic_")
+        assert result.plain_text == "italic\n"
+        italic_styles = [s for s in result.styles if s.style.get("italic")]
+        assert len(italic_styles) == 1
+
+    def test_italic_in_sentence(self):
+        result = parse_markdown("this is *italic* text")
+        assert result.plain_text == "this is italic text\n"
+        italic_styles = [s for s in result.styles if s.style.get("italic")]
+        assert len(italic_styles) == 1
+        assert italic_styles[0].start == 8
+        assert italic_styles[0].end == 14
+
+
+class TestParseBoldItalic:
+    def test_bold_italic(self):
+        result = parse_markdown("***both***")
+        assert result.plain_text == "both\n"
+        bold = [s for s in result.styles if s.style.get("bold")]
+        italic = [s for s in result.styles if s.style.get("italic")]
+        assert len(bold) == 1
+        assert len(italic) == 1
+        assert bold[0].start == 0
+        assert bold[0].end == 4
+        assert italic[0].start == 0
+        assert italic[0].end == 4
+
+
+class TestParseInlineCode:
+    def test_inline_code(self):
+        result = parse_markdown("`code`")
+        assert result.plain_text == "code\n"
+        code_styles = [s for s in result.styles
+                       if "weightedFontFamily" in s.style]
+        assert len(code_styles) == 1
+        assert code_styles[0].style["weightedFontFamily"]["fontFamily"] == "Courier New"
+        assert code_styles[0].start == 0
+        assert code_styles[0].end == 4
+
+    def test_inline_code_in_sentence(self):
+        result = parse_markdown("use `print()` here")
+        assert result.plain_text == "use print() here\n"
+        code_styles = [s for s in result.styles
+                       if "weightedFontFamily" in s.style]
+        assert len(code_styles) == 1
+        assert code_styles[0].start == 4
+        assert code_styles[0].end == 11
+
+
+class TestParseLink:
+    def test_link(self):
+        result = parse_markdown("[click](https://example.com)")
+        assert result.plain_text == "click\n"
+        link_styles = [s for s in result.styles if "link" in s.style]
+        assert len(link_styles) == 1
+        assert link_styles[0].style["link"]["url"] == "https://example.com"
+        assert link_styles[0].start == 0
+        assert link_styles[0].end == 5
+
+    def test_link_in_sentence(self):
+        result = parse_markdown("visit [here](https://example.com) now")
+        assert result.plain_text == "visit here now\n"
+        link_styles = [s for s in result.styles if "link" in s.style]
+        assert len(link_styles) == 1
+        assert link_styles[0].start == 6
+        assert link_styles[0].end == 10
+
+
+class TestParseHeadings:
+    def test_heading_1(self):
+        result = parse_markdown("# Title")
+        assert result.plain_text == "Title\n"
+        heading_styles = [s for s in result.styles if s.type == "paragraph_style"]
+        assert len(heading_styles) == 1
+        assert heading_styles[0].style["namedStyleType"] == "HEADING_1"
+
+    def test_heading_2(self):
+        result = parse_markdown("## Subtitle")
+        assert result.plain_text == "Subtitle\n"
+        heading_styles = [s for s in result.styles if s.type == "paragraph_style"]
+        assert len(heading_styles) == 1
+        assert heading_styles[0].style["namedStyleType"] == "HEADING_2"
+
+    def test_heading_6(self):
+        result = parse_markdown("###### Deep")
+        assert result.plain_text == "Deep\n"
+        heading_styles = [s for s in result.styles if s.type == "paragraph_style"]
+        assert heading_styles[0].style["namedStyleType"] == "HEADING_6"
+
+    def test_heading_with_inline_formatting(self):
+        result = parse_markdown("# **Bold** title")
+        assert result.plain_text == "Bold title\n"
+        bold = [s for s in result.styles if s.style.get("bold")]
+        heading = [s for s in result.styles if s.type == "paragraph_style"]
+        assert len(bold) == 1
+        assert len(heading) == 1
+        assert bold[0].start == 0
+        assert bold[0].end == 4
+
+
+class TestParseBulletList:
+    def test_bullet_dash(self):
+        result = parse_markdown("- item one\n- item two")
+        assert result.plain_text == "item one\nitem two\n"
+        bullets = [s for s in result.styles if s.type == "bullets"]
+        assert len(bullets) == 2
+        assert all(b.style["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+                    for b in bullets)
+
+    def test_bullet_asterisk(self):
+        result = parse_markdown("* item one\n* item two")
+        assert result.plain_text == "item one\nitem two\n"
+        bullets = [s for s in result.styles if s.type == "bullets"]
+        assert len(bullets) == 2
+
+    def test_bullet_with_inline(self):
+        result = parse_markdown("- **bold** item")
+        assert result.plain_text == "bold item\n"
+        bold = [s for s in result.styles if s.style.get("bold")]
+        bullets = [s for s in result.styles if s.type == "bullets"]
+        assert len(bold) == 1
+        assert len(bullets) == 1
+
+
+class TestParseNumberedList:
+    def test_numbered_list(self):
+        result = parse_markdown("1. first\n2. second\n3. third")
+        assert result.plain_text == "first\nsecond\nthird\n"
+        numbered = [s for s in result.styles if s.type == "bullets"]
+        assert len(numbered) == 3
+        assert all(n.style["bulletPreset"] == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+                    for n in numbered)
+
+
+class TestParseMixed:
+    def test_heading_then_paragraph(self):
+        result = parse_markdown("# Title\nSome text here")
+        assert result.plain_text == "Title\nSome text here\n"
+        heading = [s for s in result.styles if s.type == "paragraph_style"]
+        assert len(heading) == 1
+
+    def test_mixed_inline(self):
+        result = parse_markdown("**bold** and *italic* and `code`")
+        assert result.plain_text == "bold and italic and code\n"
+        bold = [s for s in result.styles if s.style.get("bold")]
+        italic = [s for s in result.styles if s.style.get("italic")]
+        code = [s for s in result.styles if "weightedFontFamily" in s.style]
+        assert len(bold) == 1
+        assert len(italic) == 1
+        assert len(code) == 1
+
+    def test_heading_bullets_paragraph(self):
+        md = "# Header\n- item 1\n- item 2\nNormal text"
+        result = parse_markdown(md)
+        assert "Header" in result.plain_text
+        assert "item 1" in result.plain_text
+        assert "Normal text" in result.plain_text
+        headings = [s for s in result.styles if s.type == "paragraph_style"]
+        bullets = [s for s in result.styles if s.type == "bullets"]
+        assert len(headings) == 1
+        assert len(bullets) == 2
+
+
+class TestToDocsRequests:
+    def test_plain_text_insert(self):
+        parsed = parse_markdown("hello")
+        reqs = to_docs_requests(parsed, insert_index=10)
+        assert len(reqs) == 1
+        assert reqs[0]["insertText"]["location"]["index"] == 10
+        assert reqs[0]["insertText"]["text"] == "hello\n"
+
+    def test_bold_generates_update_text_style(self):
+        parsed = parse_markdown("**bold**")
+        reqs = to_docs_requests(parsed, insert_index=5)
+        # insertText + updateTextStyle
+        assert len(reqs) == 2
+        insert = reqs[0]
+        assert insert["insertText"]["text"] == "bold\n"
+        assert insert["insertText"]["location"]["index"] == 5
+
+        style_req = reqs[1]
+        assert "updateTextStyle" in style_req
+        uts = style_req["updateTextStyle"]
+        assert uts["range"]["startIndex"] == 5
+        assert uts["range"]["endIndex"] == 9
+        assert uts["textStyle"] == {"bold": True}
+        assert uts["fields"] == "bold"
+
+    def test_heading_generates_paragraph_style(self):
+        parsed = parse_markdown("# Title")
+        reqs = to_docs_requests(parsed, insert_index=1)
+        # insertText + updateParagraphStyle
+        para_reqs = [r for r in reqs if "updateParagraphStyle" in r]
+        assert len(para_reqs) == 1
+        ups = para_reqs[0]["updateParagraphStyle"]
+        assert ups["paragraphStyle"]["namedStyleType"] == "HEADING_1"
+        assert ups["range"]["startIndex"] == 1
+        assert ups["fields"] == "namedStyleType"
+
+    def test_bullet_generates_create_paragraph_bullets(self):
+        parsed = parse_markdown("- item")
+        reqs = to_docs_requests(parsed, insert_index=1)
+        bullet_reqs = [r for r in reqs if "createParagraphBullets" in r]
+        assert len(bullet_reqs) == 1
+        cpb = bullet_reqs[0]["createParagraphBullets"]
+        assert cpb["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
+        assert cpb["range"]["startIndex"] == 1
+
+    def test_numbered_generates_create_paragraph_bullets(self):
+        parsed = parse_markdown("1. item")
+        reqs = to_docs_requests(parsed, insert_index=1)
+        bullet_reqs = [r for r in reqs if "createParagraphBullets" in r]
+        assert len(bullet_reqs) == 1
+        cpb = bullet_reqs[0]["createParagraphBullets"]
+        assert cpb["bulletPreset"] == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+
+    def test_link_generates_update_text_style(self):
+        parsed = parse_markdown("[click](https://example.com)")
+        reqs = to_docs_requests(parsed, insert_index=0)
+        style_reqs = [r for r in reqs if "updateTextStyle" in r]
+        assert len(style_reqs) == 1
+        uts = style_reqs[0]["updateTextStyle"]
+        assert uts["textStyle"]["link"]["url"] == "https://example.com"
+        assert uts["fields"] == "link"
+
+    def test_code_generates_update_text_style(self):
+        parsed = parse_markdown("`code`")
+        reqs = to_docs_requests(parsed, insert_index=0)
+        style_reqs = [r for r in reqs if "updateTextStyle" in r]
+        assert len(style_reqs) == 1
+        uts = style_reqs[0]["updateTextStyle"]
+        assert uts["textStyle"]["weightedFontFamily"]["fontFamily"] == "Courier New"
+        assert uts["fields"] == "weightedFontFamily"
+
+    def test_index_offset_applied(self):
+        parsed = parse_markdown("**bold** text")
+        reqs = to_docs_requests(parsed, insert_index=100)
+        insert = reqs[0]
+        assert insert["insertText"]["location"]["index"] == 100
+        style = reqs[1]["updateTextStyle"]
+        assert style["range"]["startIndex"] == 100
+        assert style["range"]["endIndex"] == 104
+
+    def test_empty_parsed_returns_empty(self):
+        parsed = parse_markdown("")
+        reqs = to_docs_requests(parsed, insert_index=0)
+        assert reqs == []
+
+    def test_request_ordering(self):
+        """Insert first, text styles, paragraph styles, bullets."""
+        parsed = parse_markdown("# **Bold** heading\n- item")
+        reqs = to_docs_requests(parsed, insert_index=1)
+        types = []
+        for r in reqs:
+            if "insertText" in r:
+                types.append("insert")
+            elif "updateTextStyle" in r:
+                types.append("text_style")
+            elif "updateParagraphStyle" in r:
+                types.append("para_style")
+            elif "createParagraphBullets" in r:
+                types.append("bullets")
+        assert types[0] == "insert"
+        # Text styles before paragraph styles before bullets
+        text_idx = types.index("text_style")
+        para_idx = types.index("para_style")
+        bullet_idx = types.index("bullets")
+        assert text_idx < para_idx < bullet_idx

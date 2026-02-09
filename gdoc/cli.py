@@ -239,12 +239,50 @@ def cmd_find(args) -> int:
     return 0
 
 
+def _read_file(path: str) -> str:
+    """Read file content, stripping one trailing newline."""
+    import os
+
+    if not os.path.isfile(path):
+        raise GdocError(f"file not found: {path}", exit_code=3)
+    try:
+        with open(path) as f:
+            content = f.read()
+    except OSError as e:
+        raise GdocError(f"cannot read file: {e}", exit_code=3)
+    # Strip exactly one trailing newline (editors add one)
+    if content.endswith("\n"):
+        content = content[:-1]
+    return content
+
+
 def cmd_edit(args) -> int:
     """Handler for `gdoc edit`."""
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     replace_all = getattr(args, "all", False)
     case_sensitive = getattr(args, "case_sensitive", False)
+
+    # Resolve text from args or files (fail fast before API calls)
+    old_text = args.old_text
+    new_text = args.new_text
+    old_file = getattr(args, "old_file", None)
+    new_file = getattr(args, "new_file", None)
+
+    if old_file or new_file:
+        if not (old_file and new_file):
+            raise GdocError(
+                "--old-file and --new-file must be used together",
+                exit_code=3,
+            )
+        old_text = _read_file(old_file)
+        new_text = _read_file(new_file)
+    elif old_text is None or new_text is None:
+        raise GdocError(
+            "old_text and new_text required "
+            "(or use --old-file/--new-file)",
+            exit_code=3,
+        )
 
     # Pre-flight awareness check
     from gdoc.notify import pre_flight
@@ -255,46 +293,27 @@ def cmd_edit(args) -> int:
     if change_info and change_info.has_conflict:
         print("WARN: doc changed since last read", file=sys.stderr)
 
-    old_text = args.old_text
-    new_text = args.new_text
+    # Get document structure + revision ID
+    from gdoc.api.docs import find_text_in_document, get_document, replace_formatted
 
-    # Uniqueness pre-check (skip when --all, per Decision #3)
-    if not replace_all:
-        from gdoc.api.drive import export_doc
+    document = get_document(doc_id)
+    revision_id = document.get("revisionId", "")
 
-        plain_text = export_doc(doc_id, mime_type="text/plain")
+    # Find matches in document
+    matches = find_text_in_document(document, old_text, match_case=case_sensitive)
 
-        if case_sensitive:
-            count = plain_text.count(old_text)
-        else:
-            count = plain_text.lower().count(old_text.lower())
-
-        if count == 0:
-            raise GdocError("no match found", exit_code=3)
-        if count > 1:
-            raise GdocError(
-                f"multiple matches ({count} found). Use --all",
-                exit_code=3,
-            )
-
-    # Perform replacement via Docs API
-    from gdoc.api.docs import replace_all_text
-
-    occurrences = replace_all_text(
-        doc_id, old_text, new_text, match_case=case_sensitive,
-    )
-
-    # Post-call reconciliation
-    if occurrences == 0:
+    if not matches:
         raise GdocError("no match found", exit_code=3)
-
-    # Warn if pre-check count != API count (only relevant without --all)
-    if not replace_all and occurrences > 1:
-        print(
-            f"WARN: expected 1 match but API replaced {occurrences}; "
-            "text/plain export may differ from API matching",
-            file=sys.stderr,
+    if not replace_all and len(matches) > 1:
+        raise GdocError(
+            f"multiple matches ({len(matches)} found). Use --all",
+            exit_code=3,
         )
+
+    # Perform formatted replacement via Docs API batchUpdate
+    occurrences = replace_formatted(
+        doc_id, matches, new_text, revision_id,
+    )
 
     # Get post-edit version for state tracking (Decision #12)
     from gdoc.api.drive import get_file_version
@@ -420,6 +439,69 @@ def cmd_write(args) -> int:
     )
 
     return 0
+
+
+def cmd_diff(args) -> int:
+    """Handler for `gdoc diff`."""
+    import difflib
+    import os
+
+    doc_id = _resolve_doc_id(args.doc)
+    file_path = args.file
+    quiet = getattr(args, "quiet", False)
+    use_plain = getattr(args, "plain", False)
+
+    # Pre-flight
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    # Export doc
+    from gdoc.api.drive import export_doc
+
+    mime = "text/plain" if use_plain else "text/markdown"
+    remote = export_doc(doc_id, mime_type=mime)
+
+    # Read local file
+    if not os.path.isfile(file_path):
+        raise GdocError(f"file not found: {file_path}", exit_code=3)
+    try:
+        with open(file_path) as f:
+            local = f.read()
+    except OSError as e:
+        raise GdocError(f"cannot read file: {e}", exit_code=3)
+
+    # Diff
+    remote_lines = remote.splitlines(keepends=True)
+    local_lines = local.splitlines(keepends=True)
+    diff = list(difflib.unified_diff(
+        remote_lines, local_lines,
+        fromfile=f"gdoc:{doc_id[:12]}", tofile=file_path,
+    ))
+
+    # Output
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+
+    if mode == "json":
+        print(format_json(identical=len(diff) == 0, diff="".join(diff)))
+    elif diff:
+        print("".join(diff), end="")
+    else:
+        print("OK identical")
+
+    # Update state
+    from gdoc.state import update_state_after_command
+    from gdoc.api.drive import get_file_version
+
+    command_version = get_file_version(doc_id).get("version")
+    update_state_after_command(
+        doc_id, change_info, command="diff", quiet=quiet,
+        command_version=command_version,
+    )
+
+    return 1 if diff else 0
 
 
 def cmd_comments(args) -> int:
@@ -832,10 +914,18 @@ def build_parser() -> GdocArgumentParser:
     cat_p.set_defaults(func=cmd_cat)
 
     # edit
-    edit_p = sub.add_parser("edit", parents=[output_parent], help="Find and replace text")
+    edit_p = sub.add_parser(
+        "edit", parents=[output_parent], help="Find and replace text",
+        epilog="Note: edit operates on raw document text. "
+               "Use `gdoc cat --plain DOC` to see matchable text. "
+               "Replacement text supports markdown formatting "
+               "(bold, italic, headings, bullets, links).",
+    )
     edit_p.add_argument("doc", help="Document ID or URL")
-    edit_p.add_argument("old_text", help="Text to find")
-    edit_p.add_argument("new_text", help="Replacement text")
+    edit_p.add_argument("old_text", nargs="?", default=None, help="Text to find")
+    edit_p.add_argument("new_text", nargs="?", default=None, help="Replacement text")
+    edit_p.add_argument("--old-file", help="Read old text from file")
+    edit_p.add_argument("--new-file", help="Read new text from file")
     edit_p.add_argument(
         "--all", action="store_true", help="Replace all occurrences"
     )
@@ -846,6 +936,16 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     edit_p.set_defaults(func=cmd_edit)
+
+    # diff
+    diff_p = sub.add_parser("diff", parents=[output_parent], help="Compare doc with local file")
+    diff_p.add_argument("doc", help="Document ID or URL")
+    diff_p.add_argument("file", help="Local file to compare against")
+    diff_p.add_argument("--plain", action="store_true", help="Compare as plain text")
+    diff_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    diff_p.set_defaults(func=cmd_diff)
 
     # write
     write_p = sub.add_parser("write", parents=[output_parent], help="Overwrite doc from local file")
