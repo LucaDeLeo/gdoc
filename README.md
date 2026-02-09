@@ -50,8 +50,8 @@ gdoc cat --comments DOC_ID
 # Get document metadata
 gdoc info DOC_ID
 
-# Find and replace text (single match)
-gdoc edit DOC_ID "old text" "new text"
+# Find and replace text (supports markdown formatting)
+gdoc edit DOC_ID "old text" "**new bold text**"
 
 # Overwrite a document from a local file
 gdoc write DOC_ID draft.md
@@ -86,7 +86,7 @@ gdoc cat 1aBcDeFg...
 
 | Command | Description |
 |---------|-------------|
-| `edit DOC OLD NEW` | Find and replace text (single match by default, `--all` for all) |
+| `edit DOC OLD NEW` | Find and replace text with markdown formatting (`--all` for all) |
 | `write DOC FILE` | Overwrite document from a local markdown file |
 | `new TITLE` | Create a blank document (`--folder` to specify location) |
 | `cp DOC TITLE` | Duplicate a document |
