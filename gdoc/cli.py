@@ -3,6 +3,7 @@
 import argparse
 import sys
 
+from gdoc import __version__
 from gdoc.util import AuthError, GdocError
 
 
@@ -342,6 +343,62 @@ def cmd_edit(args) -> int:
     return 0
 
 
+def _check_write_conflict(doc_id: str, quiet: bool, force: bool):
+    """Run conflict detection for write-like commands.
+
+    Returns ChangeInfo or None. Raises GdocError(exit_code=3) on conflict.
+    """
+    if not quiet:
+        from gdoc.notify import pre_flight
+
+        change_info = pre_flight(doc_id, quiet=False)
+
+        if not force:
+            if change_info.last_read_version is None:
+                raise GdocError(
+                    "no read baseline. Run 'gdoc cat' first, "
+                    "or use --force to overwrite.",
+                    exit_code=3,
+                )
+            if change_info.has_conflict:
+                raise GdocError(
+                    "doc changed since last read. "
+                    "Run 'gdoc cat' first, "
+                    "or use --force to overwrite.",
+                    exit_code=3,
+                )
+        return change_info
+
+    if not force:
+        from gdoc.state import load_state
+
+        state = load_state(doc_id)
+
+        if state is None or state.last_read_version is None:
+            raise GdocError(
+                "no read baseline. Run 'gdoc cat' first, "
+                "or use --force to overwrite.",
+                exit_code=3,
+            )
+
+        from gdoc.api.drive import get_file_version
+
+        version_data = get_file_version(doc_id)
+        current_version = version_data.get("version")
+        if (
+            current_version is not None
+            and current_version != state.last_read_version
+        ):
+            raise GdocError(
+                "doc changed since last read. "
+                "Run 'gdoc cat' first, "
+                "or use --force to overwrite.",
+                exit_code=3,
+            )
+
+    return None
+
+
 def cmd_write(args) -> int:
     """Handler for `gdoc write`."""
     import os
@@ -360,61 +417,8 @@ def cmd_write(args) -> int:
     except OSError as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3)
 
-    # Conflict detection (complex, per Decisions #2, #5, #6)
-    change_info = None
-
-    if not quiet:
-        # Normal mode: full pre-flight (2 API calls + banner)
-        from gdoc.notify import pre_flight
-
-        change_info = pre_flight(doc_id, quiet=False)
-
-        if not force:
-            # Decision #5: absent last_read_version → block
-            if change_info.last_read_version is None:
-                raise GdocError(
-                    "no read baseline. Run 'gdoc cat' first, "
-                    "or use --force to overwrite.",
-                    exit_code=3,
-                )
-            # Check conflict: block if doc changed since last read
-            if change_info.has_conflict:
-                raise GdocError(
-                    "doc changed since last read. "
-                    "Run 'gdoc cat' first, "
-                    "or use --force to overwrite.",
-                    exit_code=3,
-                )
-    elif not force:
-        # Quiet + no force: lightweight version check (Decision #2)
-        from gdoc.state import load_state
-
-        state = load_state(doc_id)
-
-        # Decision #5: absent last_read_version → block
-        if state is None or state.last_read_version is None:
-            raise GdocError(
-                "no read baseline. Run 'gdoc cat' first, "
-                "or use --force to overwrite.",
-                exit_code=3,
-            )
-
-        # Lightweight version check (1 API call)
-        from gdoc.api.drive import get_file_version
-
-        version_data = get_file_version(doc_id)
-        current_version = version_data.get("version")
-        if (
-            current_version is not None
-            and current_version != state.last_read_version
-        ):
-            raise GdocError(
-                "doc changed since last read. "
-                "Run 'gdoc cat' first, "
-                "or use --force to overwrite.",
-                exit_code=3,
-            )
-    # else: quiet + force → skip everything (Decision #6)
+    # Conflict detection
+    change_info = _check_write_conflict(doc_id, quiet, force)
 
     # Upload content via Drive API
     from gdoc.api.drive import update_doc_content
@@ -437,6 +441,248 @@ def cmd_write(args) -> int:
         doc_id, change_info, command="write",
         quiet=quiet, command_version=command_version,
     )
+
+    return 0
+
+
+def cmd_pull(args) -> int:
+    """Handler for `gdoc pull`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    file_path = args.file
+
+    # Pre-flight awareness check
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    # Export doc as markdown
+    from gdoc.api.drive import export_doc, get_file_info
+
+    markdown = export_doc(doc_id, mime_type="text/markdown")
+    metadata = get_file_info(doc_id)
+    title = metadata.get("name", "")
+
+    # Add frontmatter and write to local file
+    from gdoc.frontmatter import add_frontmatter
+
+    content = add_frontmatter(markdown, {"gdoc": doc_id, "title": title})
+
+    try:
+        with open(file_path, "w") as f:
+            f.write(content)
+    except OSError as e:
+        raise GdocError(f"cannot write file: {e}", exit_code=3)
+
+    # Output
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(pulled=True, title=title, file=file_path))
+    elif mode == "verbose":
+        print(f'Pulled: "{title}"')
+        print(f"File: {file_path}")
+        print(f"Doc ID: {doc_id}")
+    else:
+        print(f'OK pulled "{title}" -> {file_path}')
+
+    # Update state (pull is a read command)
+    command_version = metadata.get("version")
+    if command_version is not None:
+        command_version = int(command_version)
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="pull",
+        quiet=quiet, command_version=command_version,
+    )
+
+    return 0
+
+
+def cmd_push(args) -> int:
+    """Handler for `gdoc push`."""
+    import os
+
+    file_path = args.file
+    quiet = getattr(args, "quiet", False)
+    force = getattr(args, "force", False)
+
+    # Read local file (fail fast)
+    if not os.path.isfile(file_path):
+        raise GdocError(f"file not found: {file_path}", exit_code=3)
+    try:
+        with open(file_path) as f:
+            content = f.read()
+    except OSError as e:
+        raise GdocError(f"cannot read file: {e}", exit_code=3)
+
+    # Parse frontmatter
+    from gdoc.frontmatter import parse_frontmatter
+
+    metadata, body = parse_frontmatter(content)
+    if "gdoc" not in metadata:
+        raise GdocError(
+            "no gdoc frontmatter found. Use 'gdoc pull' first.",
+            exit_code=3,
+        )
+
+    doc_id = _resolve_doc_id(metadata["gdoc"])
+
+    # Conflict detection (reuse shared helper)
+    change_info = _check_write_conflict(doc_id, quiet, force)
+
+    # Upload body (frontmatter stripped)
+    from gdoc.api.drive import update_doc_content
+
+    command_version = update_doc_content(doc_id, body)
+
+    # Output
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(pushed=True, file=file_path, version=command_version))
+    else:
+        print(f"OK pushed {file_path}")
+
+    # Update state
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="push",
+        quiet=quiet, command_version=command_version,
+    )
+
+    return 0
+
+
+def cmd_sync_hook(args) -> int:
+    """Handler for `gdoc _sync-hook` (called by PostToolUse hook)."""
+    import json
+    import os
+
+    try:
+        raw = sys.stdin.read()
+        if not raw:
+            return 0
+
+        data = json.loads(raw)
+        tool_input = data.get("tool_input", {})
+        file_path = tool_input.get("file_path", "")
+
+        if not file_path or not file_path.endswith(".md"):
+            return 0
+        if not os.path.isfile(file_path):
+            return 0
+
+        with open(file_path) as f:
+            content = f.read()
+
+        from gdoc.frontmatter import parse_frontmatter
+
+        metadata, body = parse_frontmatter(content)
+        if "gdoc" not in metadata:
+            return 0
+
+        doc_id = _resolve_doc_id(metadata["gdoc"])
+
+        from gdoc.api.drive import update_doc_content
+
+        command_version = update_doc_content(doc_id, body)
+
+        title = metadata.get("title", doc_id)
+        print(
+            f'SYNC: pushed to "{title}" (v{command_version})',
+            file=sys.stderr,
+        )
+
+        from gdoc.state import update_state_after_command
+
+        update_state_after_command(
+            doc_id, None, command="push",
+            quiet=True, command_version=command_version,
+        )
+
+    except Exception:
+        pass  # Never block the agent
+
+    return 0
+
+
+def cmd_pull_hook(args) -> int:
+    """Handler for `gdoc _pull-hook` (called by PreToolUse hook)."""
+    import json
+    import os
+
+    try:
+        raw = sys.stdin.read()
+        if not raw:
+            return 0
+
+        data = json.loads(raw)
+        tool_input = data.get("tool_input", {})
+        file_path = tool_input.get("file_path", "")
+
+        if not file_path or not file_path.endswith(".md"):
+            return 0
+        if not os.path.isfile(file_path):
+            return 0
+
+        with open(file_path) as f:
+            content = f.read()
+
+        from gdoc.frontmatter import parse_frontmatter
+
+        metadata, _ = parse_frontmatter(content)
+        if "gdoc" not in metadata:
+            return 0
+
+        doc_id = _resolve_doc_id(metadata["gdoc"])
+
+        from gdoc.api.drive import get_file_version
+
+        version_data = get_file_version(doc_id)
+        current_version = version_data.get("version")
+
+        from gdoc.state import load_state
+
+        state = load_state(doc_id)
+        if state is not None and state.last_version == current_version:
+            return 0  # No remote changes
+
+        # Pull fresh content
+        from gdoc.api.drive import export_doc, get_file_info
+
+        markdown = export_doc(doc_id, mime_type="text/markdown")
+        file_metadata = get_file_info(doc_id)
+        title = file_metadata.get("name", "")
+        version = file_metadata.get("version")
+        if version is not None:
+            version = int(version)
+
+        from gdoc.frontmatter import add_frontmatter
+
+        new_content = add_frontmatter(markdown, {"gdoc": doc_id, "title": title})
+
+        with open(file_path, "w") as f:
+            f.write(new_content)
+
+        print(
+            f'SYNC: pulled "{title}" (v{version})',
+            file=sys.stderr,
+        )
+
+        from gdoc.state import update_state_after_command
+
+        update_state_after_command(
+            doc_id, None, command="pull",
+            quiet=True, command_version=version,
+        )
+
+    except Exception:
+        pass  # Never block the agent
 
     return 0
 
@@ -840,11 +1086,21 @@ def cmd_share(args) -> int:
     return 0
 
 
+def cmd_update(args) -> int:
+    """Handler for `gdoc update`."""
+    from gdoc.update import run_update
+    return run_update()
+
+
 def build_parser() -> GdocArgumentParser:
     """Build the CLI argument parser with all subcommands."""
     parser = GdocArgumentParser(
         prog="gdoc",
         description="CLI for Google Docs & Drive",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"gdoc {__version__}",
     )
 
     # Global output mode flags via a parent parser so they work
@@ -867,6 +1123,10 @@ def build_parser() -> GdocArgumentParser:
     )
 
     sub = parser.add_subparsers(dest="command")
+
+    # update
+    update_p = sub.add_parser("update", help="Update gdoc to the latest version")
+    update_p.set_defaults(func=cmd_update)
 
     # auth
     auth_p = sub.add_parser("auth", parents=[output_parent], help="Authenticate with Google")
@@ -958,6 +1218,34 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     write_p.set_defaults(func=cmd_write)
+
+    # pull
+    pull_p = sub.add_parser("pull", parents=[output_parent], help="Download doc as local markdown")
+    pull_p.add_argument("doc", help="Document ID or URL")
+    pull_p.add_argument("file", help="Local file to write")
+    pull_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    pull_p.set_defaults(func=cmd_pull)
+
+    # push
+    push_p = sub.add_parser("push", parents=[output_parent], help="Upload local markdown to doc")
+    push_p.add_argument("file", help="Local file with gdoc frontmatter")
+    push_p.add_argument(
+        "--force", action="store_true", help="Force overwrite even if doc changed"
+    )
+    push_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    push_p.set_defaults(func=cmd_push)
+
+    # _sync-hook (hidden — no help text)
+    sync_p = sub.add_parser("_sync-hook")
+    sync_p.set_defaults(func=cmd_sync_hook)
+
+    # _pull-hook (hidden — no help text)
+    pull_hook_p = sub.add_parser("_pull-hook")
+    pull_hook_p.set_defaults(func=cmd_pull_hook)
 
     # comments
     comments_p = sub.add_parser("comments", parents=[output_parent], help="List comments on a doc")
@@ -1074,6 +1362,11 @@ def main() -> int:
 
     if getattr(args, "json", False) and getattr(args, "verbose", False):
         parser.error("argument --verbose: not allowed with argument --json")
+
+    # Check for updates (skip for the update command itself)
+    if args.command != "update":
+        from gdoc.update import check_for_update
+        check_for_update()
 
     try:
         return args.func(args)

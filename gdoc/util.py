@@ -19,7 +19,14 @@ class AuthError(GdocError):
         super().__init__(message, exit_code=2)
 
 
-CONFIG_DIR = Path.home() / ".gdoc"
+CONFIG_DIR = Path.home() / ".config" / "gdoc"
+_OLD_CONFIG_DIR = Path.home() / ".gdoc"
+
+# Migrate from ~/.gdoc to ~/.config/gdoc
+if _OLD_CONFIG_DIR.is_dir() and not CONFIG_DIR.exists():
+    CONFIG_DIR.parent.mkdir(parents=True, exist_ok=True)
+    _OLD_CONFIG_DIR.rename(CONFIG_DIR)
+
 TOKEN_PATH = CONFIG_DIR / "token.json"
 CREDS_PATH = CONFIG_DIR / "credentials.json"
 STATE_DIR = CONFIG_DIR / "state"

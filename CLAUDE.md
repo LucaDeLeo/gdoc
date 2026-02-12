@@ -37,7 +37,7 @@ uv sync --extra dev
    - `api/docs.py` — Docs v1: `replace_all_text` (for the `edit` command)
    - `api/comments.py` — Drive v3 comments: list (paginated), create comment, create reply
 
-3. **Awareness system** (`gdoc/state.py` + `gdoc/notify.py`): Tracks per-document state in `~/.gdoc/state/{doc_id}.json`. Before most commands, `pre_flight()` detects changes (edits, new comments, resolved/reopened) since last interaction and prints a banner to stderr. The `write` command uses version tracking to prevent conflicts (blocks unless `--force`).
+3. **Awareness system** (`gdoc/state.py` + `gdoc/notify.py`): Tracks per-document state in `~/.config/gdoc/state/{doc_id}.json`. Before most commands, `pre_flight()` detects changes (edits, new comments, resolved/reopened) since last interaction and prints a banner to stderr. The `write` command uses version tracking to prevent conflicts (blocks unless `--force`).
 
 4. **Formatting** (`gdoc/format.py`): Three output modes — `terse` (default), `verbose` (`--verbose`), `json` (`--json`). These flags are mutually exclusive. Errors always go to stderr as `ERR: <message>`, even in `--json` mode.
 
@@ -59,5 +59,5 @@ uv sync --extra dev
 - Doc arguments accept both full Google URLs and bare document IDs — `_resolve_doc_id()` handles extraction
 - `--quiet` skips pre-flight checks (no API calls for change detection)
 - `--force` on `write` bypasses conflict detection
-- All state files live under `~/.gdoc/` (token, credentials, per-doc state)
+- All state files live under `~/.config/gdoc/` (token, credentials, per-doc state)
 - Tests mock Google API calls at the `gdoc.api` layer using `pytest-mock`

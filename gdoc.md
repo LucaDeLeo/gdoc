@@ -12,7 +12,7 @@ A token-efficient CLI designed for AI agents to interact with Google Docs and Go
 ## Command Reference
 
 ```
-gdoc auth                                    # OAuth2 flow, stores creds in ~/.gdoc/
+gdoc auth                                    # OAuth2 flow, stores creds in ~/.config/gdoc/
 gdoc ls [FOLDER_ID] [--type docs|sheets|all] # List files (default: root)
 gdoc find "query"                            # Search by name/content
 gdoc cat DOC_ID                              # Export doc as markdown to stdout
@@ -82,7 +82,7 @@ awareness as a human staring at the Google Docs tab.
 ### State Tracking
 
 ```
-~/.gdoc/state/{DOC_ID}.json
+~/.config/gdoc/state/{DOC_ID}.json
 {
   "last_seen": "2025-01-20T14:30:00Z",     // last time we interacted
   "last_version": 847,                       // doc version number
@@ -235,7 +235,7 @@ gdoc/
 │   ├── drive.py         # Drive API v3: list, search, share, export, upload
 │   ├── docs.py          # Docs API v1: batchUpdate (replaceAllText)
 │   └── comments.py      # Drive API v3: comments + replies CRUD
-├── state.py             # Per-doc state tracking (~/.gdoc/state/)
+├── state.py             # Per-doc state tracking (~/.config/gdoc/state/)
 ├── notify.py            # Pre-flight change detection + banner formatting
 ├── annotate.py          # Line-numbered comment annotation for `cat --comments`
 ├── format.py            # Output formatters (table, json, plain)
@@ -288,8 +288,8 @@ The `write` command does a full overwrite. Strategy:
 ## Auth Strategy
 
 ```python
-# ~/.gdoc/credentials.json  — OAuth2 client secrets (user provides)
-# ~/.gdoc/token.json         — cached access/refresh token
+# ~/.config/gdoc/credentials.json  — OAuth2 client secrets (user provides)
+# ~/.config/gdoc/token.json         — cached access/refresh token
 
 SCOPES = [
     'https://www.googleapis.com/auth/drive',           # full drive access
@@ -298,9 +298,9 @@ SCOPES = [
 ```
 
 Flow:
-1. `gdoc auth` — prompts user to place `credentials.json` in `~/.gdoc/`
+1. `gdoc auth` — prompts user to place `credentials.json` in `~/.config/gdoc/`
 2. Opens browser for OAuth2 consent
-3. Stores refresh token in `~/.gdoc/token.json`
+3. Stores refresh token in `~/.config/gdoc/token.json`
 4. All subsequent commands auto-refresh silently
 
 ## URL-to-ID Resolution

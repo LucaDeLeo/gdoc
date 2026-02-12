@@ -80,7 +80,7 @@ def update_state_after_command(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     state.last_seen = now
 
-    is_read = command in ("cat", "info")
+    is_read = command in ("cat", "info", "pull")
 
     if quiet:
         # Decision #14: --quiet state update rules

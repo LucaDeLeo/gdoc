@@ -23,7 +23,7 @@ uv tool install .
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
 2. Enable the **Google Drive API** and **Google Docs API**
 3. Create **OAuth 2.0 credentials** (Desktop application type)
-4. Download the credentials JSON and place it at `~/.gdoc/credentials.json`
+4. Download the credentials JSON and place it at `~/.config/gdoc/credentials.json`
 5. Authenticate:
 
 ```bash
@@ -187,7 +187,7 @@ Errors always print `ERR: <message>` to stderr, even in `--json` mode.
 
 ## Configuration
 
-All files are stored under `~/.gdoc/`:
+All files are stored under `~/.config/gdoc/`:
 
 | File | Purpose |
 |------|---------|
