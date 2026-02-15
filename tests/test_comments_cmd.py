@@ -6,7 +6,10 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from gdoc.cli import cmd_comments, cmd_comment, cmd_reply, cmd_resolve, cmd_reopen, cmd_delete_comment
+from gdoc.cli import (
+    cmd_comments, cmd_comment, cmd_reply, cmd_resolve, cmd_reopen,
+    cmd_delete_comment, cmd_comment_info,
+)
 from gdoc.notify import ChangeInfo
 from gdoc.util import AuthError, GdocError
 
@@ -369,7 +372,7 @@ class TestCmdDeleteComment:
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.delete_comment", return_value=None)
     def test_delete_comment_ok_output(self, mock_delete, _svc, _ver, _pf, _update, capsys):
-        args = _make_args("delete-comment", comment_id="c1", quiet=True)
+        args = _make_args("delete-comment", comment_id="c1", quiet=True, force=True)
         rc = cmd_delete_comment(args)
         assert rc == 0
         assert "OK deleted comment #c1" in capsys.readouterr().out
@@ -380,7 +383,7 @@ class TestCmdDeleteComment:
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.delete_comment", return_value=None)
     def test_delete_comment_json_output(self, mock_delete, _svc, _ver, _pf, _update, capsys):
-        args = _make_args("delete-comment", comment_id="c1", json=True, quiet=True)
+        args = _make_args("delete-comment", comment_id="c1", json=True, quiet=True, force=True)
         rc = cmd_delete_comment(args)
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
@@ -392,7 +395,7 @@ class TestCmdDeleteComment:
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.delete_comment", return_value=None)
     def test_delete_comment_state_patch(self, mock_delete, _svc, _ver, _pf, mock_update):
-        args = _make_args("delete-comment", comment_id="c1", quiet=True)
+        args = _make_args("delete-comment", comment_id="c1", quiet=True, force=True)
         cmd_delete_comment(args)
         mock_update.assert_called_once()
         call_kwargs = mock_update.call_args
@@ -405,6 +408,244 @@ class TestCmdDeleteComment:
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.delete_comment", side_effect=GdocError("Document not found: abc123"))
     def test_delete_comment_api_error(self, mock_delete, _svc, _ver, _pf, _update):
-        args = _make_args("delete-comment", comment_id="c1", quiet=True)
+        args = _make_args("delete-comment", comment_id="c1", quiet=True, force=True)
         with pytest.raises(GdocError, match="Document not found"):
             cmd_delete_comment(args)
+
+    def test_delete_comment_force_skips_confirm(self):
+        """--force bypasses confirmation even in non-interactive mode."""
+        with patch("gdoc.util.confirm_destructive") as mock_confirm, \
+             patch("gdoc.api.comments.delete_comment", return_value=None), \
+             patch("gdoc.api.comments.get_drive_service"), \
+             patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION), \
+             patch("gdoc.notify.pre_flight", return_value=None), \
+             patch("gdoc.state.update_state_after_command"):
+            args = _make_args("delete-comment", comment_id="c1", quiet=True, force=True)
+            cmd_delete_comment(args)
+            mock_confirm.assert_called_once_with("delete comment #c1", force=True)
+
+    def test_delete_comment_non_tty_without_force(self):
+        """Non-interactive without --force raises GdocError."""
+        with patch("sys.stdin") as mock_stdin, \
+             patch("gdoc.notify.pre_flight", return_value=None), \
+             patch("gdoc.state.update_state_after_command"):
+            mock_stdin.isatty.return_value = False
+            args = _make_args("delete-comment", comment_id="c1", quiet=True, force=False)
+            with pytest.raises(GdocError, match="non-interactive"):
+                cmd_delete_comment(args)
+
+    def test_delete_comment_user_declines(self):
+        """User declining confirmation raises GdocError."""
+        with patch("sys.stdin") as mock_stdin, \
+             patch("builtins.input", return_value="n"), \
+             patch("gdoc.notify.pre_flight", return_value=None), \
+             patch("gdoc.state.update_state_after_command"):
+            mock_stdin.isatty.return_value = True
+            args = _make_args("delete-comment", comment_id="c1", quiet=True, force=False)
+            with pytest.raises(GdocError, match="Cancelled"):
+                cmd_delete_comment(args)
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.delete_comment", return_value=None)
+    def test_delete_comment_plain_output(self, mock_delete, _svc, _ver, _pf, _update, capsys):
+        args = _make_args("delete-comment", comment_id="c1", quiet=True, force=True, plain=True)
+        rc = cmd_delete_comment(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tc1" in out
+        assert "status\tdeleted" in out
+
+
+# --- cmd_resolve --message tests ---
+
+class TestCmdResolveMessage:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_reply", return_value={"id": "r2", "action": "resolve"})
+    def test_resolve_with_message(self, mock_reply, _svc, _ver, _pf, _update):
+        args = _make_args("resolve", comment_id="c1", quiet=True, message="Done")
+        cmd_resolve(args)
+        mock_reply.assert_called_once_with("abc123", "c1", content="Done", action="resolve")
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_reply", return_value={"id": "r2", "action": "resolve"})
+    def test_resolve_without_message(self, mock_reply, _svc, _ver, _pf, _update):
+        args = _make_args("resolve", comment_id="c1", quiet=True)
+        cmd_resolve(args)
+        mock_reply.assert_called_once_with("abc123", "c1", content="", action="resolve")
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_reply", return_value={"id": "r2", "action": "resolve"})
+    def test_resolve_plain_output(self, mock_reply, _svc, _ver, _pf, _update, capsys):
+        args = _make_args("resolve", comment_id="c1", quiet=True, plain=True)
+        rc = cmd_resolve(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tc1" in out
+        assert "status\tresolved" in out
+
+
+# --- cmd_comment_info tests ---
+
+_MOCK_COMMENT_DETAIL = {
+    "id": "c1",
+    "content": "Fix this typo",
+    "author": {"displayName": "Alice", "emailAddress": "alice@co.com"},
+    "resolved": False,
+    "createdTime": "2025-06-15T10:00:00Z",
+    "modifiedTime": "2025-06-15T12:00:00Z",
+    "quotedFileContent": {"value": "teh"},
+    "replies": [
+        {
+            "id": "r1",
+            "author": {"displayName": "Bob", "emailAddress": "bob@co.com"},
+            "content": "Done",
+            "action": "",
+            "createdTime": "2025-06-15T11:00:00Z",
+        },
+    ],
+}
+
+
+class TestCmdCommentInfo:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.get_comment", return_value=_MOCK_COMMENT_DETAIL)
+    def test_comment_info_terse(self, mock_get, _svc, _pf, _update, capsys):
+        args = _make_args("comment-info", comment_id="c1", quiet=True)
+        rc = cmd_comment_info(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "#c1 [open] alice@co.com 2025-06-15" in out
+        assert '"Fix this typo"' in out
+        assert "1 reply" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.get_comment", return_value=_MOCK_COMMENT_DETAIL)
+    def test_comment_info_verbose(self, mock_get, _svc, _pf, _update, capsys):
+        args = _make_args("comment-info", comment_id="c1", quiet=True, verbose=True)
+        rc = cmd_comment_info(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "#c1 [open] alice@co.com 2025-06-15T10:00:00Z" in out
+        assert '"Fix this typo"' in out
+        assert 'on "teh"' in out
+        assert "Modified: 2025-06-15T12:00:00Z" in out
+        assert 'bob@co.com 2025-06-15T11:00:00Z: "Done"' in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.get_comment", return_value=_MOCK_COMMENT_DETAIL)
+    def test_comment_info_json(self, mock_get, _svc, _pf, _update, capsys):
+        args = _make_args("comment-info", comment_id="c1", quiet=True, json=True)
+        rc = cmd_comment_info(args)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert data["comment"]["id"] == "c1"
+        assert data["comment"]["content"] == "Fix this typo"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.get_comment", return_value=_MOCK_COMMENT_DETAIL)
+    def test_comment_info_plain(self, mock_get, _svc, _pf, _update, capsys):
+        args = _make_args("comment-info", comment_id="c1", quiet=True, plain=True)
+        rc = cmd_comment_info(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tc1" in out
+        assert "status\topen" in out
+        assert "author\talice@co.com" in out
+        assert "content\tFix this typo" in out
+        assert "quote\tteh" in out
+        assert "replies\t1" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.get_comment", side_effect=GdocError("Document not found: abc123"))
+    def test_comment_info_not_found(self, mock_get, _svc, _pf, _update):
+        args = _make_args("comment-info", comment_id="c1", quiet=True)
+        with pytest.raises(GdocError, match="Document not found"):
+            cmd_comment_info(args)
+
+
+# --- plain output tests for other comment commands ---
+
+class TestCommentCommandsPlainOutput:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
+    def test_comments_plain(self, mock_list, _svc, _pf, _update, capsys):
+        mock_list.return_value = [
+            _make_comment(cid="c1", content="Fix typo", email="alice@co.com"),
+        ]
+        args = _make_args("comments", quiet=True, plain=True)
+        cmd_comments(args)
+        out = capsys.readouterr().out
+        assert "c1\topen\talice@co.com\tFix typo" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
+    def test_comments_plain_empty(self, mock_list, _svc, _pf, _update, capsys):
+        mock_list.return_value = []
+        args = _make_args("comments", quiet=True, plain=True)
+        rc = cmd_comments(args)
+        assert rc == 0
+        assert capsys.readouterr().out == ""
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_comment", return_value={"id": "c_new"})
+    def test_comment_plain(self, mock_create, _svc, _ver, _pf, _update, capsys):
+        args = _make_args("comment", text="hello", quiet=True, plain=True)
+        rc = cmd_comment(args)
+        assert rc == 0
+        assert capsys.readouterr().out.strip() == "id\tc_new"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_reply", return_value={"id": "r1"})
+    def test_reply_plain(self, mock_reply, _svc, _ver, _pf, _update, capsys):
+        args = _make_args("reply", comment_id="c1", text="thanks", quiet=True, plain=True)
+        rc = cmd_reply(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "commentId\tc1" in out
+        assert "replyId\tr1" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_reply", return_value={"id": "r3", "action": "reopen"})
+    def test_reopen_plain(self, mock_reply, _svc, _ver, _pf, _update, capsys):
+        args = _make_args("reopen", comment_id="c1", quiet=True, plain=True)
+        rc = cmd_reopen(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tc1" in out
+        assert "status\treopened" in out

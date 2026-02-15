@@ -30,6 +30,7 @@ def _make_args(**kwargs):
         "title": False,
         "json": False,
         "verbose": False,
+        "plain": False,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -142,3 +143,26 @@ class TestFindTitleOnly:
         data = json.loads(capsys.readouterr().out)
         assert data["ok"] is True
         assert data["files"] == []
+
+
+@patch("gdoc.api.get_drive_service")
+@patch("gdoc.api.drive.search_files")
+class TestFindPlain:
+    def test_find_plain_output(self, mock_search, mock_svc, capsys):
+        mock_search.return_value = MOCK_FILES
+        args = _make_args(plain=True)
+        rc = cmd_find(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = out.strip().split("\n")
+        parts = lines[0].split("\t")
+        assert len(parts) == 3
+        # plain mode: id, name, mimeType (no date)
+        assert parts[2] == "application/vnd.google-apps.document"
+
+    def test_find_plain_empty(self, mock_search, mock_svc, capsys):
+        mock_search.return_value = []
+        args = _make_args(plain=True)
+        rc = cmd_find(args)
+        assert rc == 0
+        assert capsys.readouterr().out == ""

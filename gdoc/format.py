@@ -9,6 +9,8 @@ def get_output_mode(args) -> str:
         return "json"
     if getattr(args, "verbose", False):
         return "verbose"
+    if getattr(args, "plain", False):
+        return "plain"
     return "terse"
 
 

@@ -23,6 +23,10 @@ class TestGetOutputMode:
         args = SimpleNamespace()
         assert get_output_mode(args) == "terse"
 
+    def test_plain_mode(self):
+        args = SimpleNamespace(json=False, verbose=False, plain=True)
+        assert get_output_mode(args) == "plain"
+
 
 class TestFormatSuccess:
     def test_terse_returns_plain(self):

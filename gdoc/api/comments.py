@@ -86,6 +86,29 @@ def list_comments(
         _translate_http_error(e, file_id)
 
 
+def get_comment(file_id: str, comment_id: str) -> dict:
+    """Fetch a single comment by ID with full detail."""
+    try:
+        service = get_drive_service()
+        return (
+            service.comments()
+            .get(
+                fileId=file_id,
+                commentId=comment_id,
+                fields=(
+                    "id,author(displayName,emailAddress),content,"
+                    "createdTime,modifiedTime,resolved,"
+                    "quotedFileContent(value),"
+                    "replies(id,author(displayName,emailAddress),"
+                    "content,action,createdTime)"
+                ),
+            )
+            .execute()
+        )
+    except HttpError as e:
+        _translate_http_error(e, file_id)
+
+
 def delete_comment(file_id: str, comment_id: str) -> None:
     """Delete a comment from a file."""
     try:

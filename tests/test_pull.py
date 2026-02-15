@@ -244,3 +244,22 @@ class TestPullErrors:
         args = _make_args(file="/nonexistent/dir/out.md")
         with pytest.raises(GdocError, match="cannot write file"):
             cmd_pull(args)
+
+
+class TestPullPlain:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_info", return_value={
+        "name": "My Doc", "version": "5",
+    })
+    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    def test_pull_plain_output(
+        self, _svc, _pf, _export, _info, _update, capsys, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        args = _make_args(file=str(f), plain=True)
+        rc = cmd_pull(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert f"path\t{f}" in out

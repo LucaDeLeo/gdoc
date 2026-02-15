@@ -96,10 +96,12 @@ gdoc cat 1aBcDeFg...
 | Command | Description |
 |---------|-------------|
 | `comments DOC` | List all open comments (`--all` to include resolved) |
-| `comment DOC TEXT` | Add a comment |
+| `comment DOC TEXT` | Add a comment (`--quote` to anchor to text) |
+| `comment-info DOC ID` | Get a single comment with full detail |
 | `reply DOC COMMENT_ID TEXT` | Reply to a comment |
-| `resolve DOC COMMENT_ID` | Resolve a comment |
+| `resolve DOC COMMENT_ID` | Resolve a comment (`--message` to include a note) |
 | `reopen DOC COMMENT_ID` | Reopen a resolved comment |
+| `delete-comment DOC ID` | Delete a comment (`--force` to skip confirmation) |
 
 ### Other
 
@@ -110,15 +112,18 @@ gdoc cat 1aBcDeFg...
 
 ## Output modes
 
-Every command supports three output modes:
+Every command supports four output modes:
 
 ```bash
 gdoc info DOC              # terse (default) — compact, human-readable
 gdoc info --verbose DOC    # verbose — all fields, full timestamps
 gdoc info --json DOC       # json — machine-readable, wrapped in {"ok": true, ...}
+gdoc info --plain DOC      # plain — stable TSV, no decoration, suitable for piping
 ```
 
-The `--json` and `--verbose` flags are mutually exclusive and can go before or after the subcommand.
+The `--json`, `--verbose`, and `--plain` flags are mutually exclusive and can go before or after the subcommand.
+
+Plain mode produces tab-separated output with no headers or decoration. Action commands emit `key\tvalue` pairs; list commands emit one row per item with tab-separated fields.
 
 ## Awareness system
 
@@ -173,6 +178,19 @@ Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight check
 ```
 
 Comments whose anchor text has been deleted, is too short, or is ambiguous are grouped in an `[UNANCHORED]` section at the end.
+
+## Command allowlist
+
+Restrict which subcommands are available using `--allow-commands` or the `GDOC_ALLOW_COMMANDS` environment variable. Useful for sandboxing AI agents to read-only operations:
+
+```bash
+# Only allow read commands
+gdoc --allow-commands cat,ls,find,info,comments cat DOC
+
+# Via environment variable
+export GDOC_ALLOW_COMMANDS=cat,ls,find,info,comments
+gdoc edit DOC "old" "new"  # ERR: command not allowed: edit
+```
 
 ## Exit codes
 

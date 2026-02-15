@@ -29,6 +29,7 @@ def _make_args(**overrides):
         "doc": "abc123",
         "json": False,
         "verbose": False,
+        "plain": False,
         "quiet": False,
     }
     defaults.update(overrides)
@@ -272,6 +273,23 @@ class TestInfoErrors:
         args = _make_args()
         with pytest.raises(GdocError, match="API error"):
             cmd_info(args)
+
+
+class TestInfoPlain:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="Hello world content")
+    @patch("gdoc.api.drive.get_file_info", return_value=MOCK_METADATA)
+    def test_info_plain_output(self, mock_info, mock_export, _mock_svc, _mock_pf, _mock_update, capsys):
+        args = _make_args(plain=True)
+        rc = cmd_info(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "title\tTest Document" in out
+        assert "owner\tAlice" in out
+        assert "modified\t2025-01-15T10:30:00.000Z" in out
+        assert "words\t3" in out
 
 
 class TestInfoAwareness:

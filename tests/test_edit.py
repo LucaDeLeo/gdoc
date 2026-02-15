@@ -22,6 +22,7 @@ def _make_args(**overrides):
         "case_sensitive": False,
         "json": False,
         "verbose": False,
+        "plain": False,
         "quiet": False,
     }
     defaults.update(overrides)
@@ -515,3 +516,35 @@ class TestEditFormatted:
         args = _make_args()
         cmd_edit(args)
         assert mock_replace.call_args[0][3] == "custom_rev"
+
+
+class TestEditPlain:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
+    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_edit_plain_output(self, _pf, _doc, _find, _replace, _ver, _update, capsys):
+        args = _make_args(plain=True)
+        rc = cmd_edit(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tabc123\n" in out
+        assert "status\tupdated\n" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=3)
+    @patch("gdoc.api.docs.find_text_in_document", return_value=_multi_match(3))
+    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_edit_all_plain_output(
+        self, _pf, _doc, _find, _replace, _ver, _update, capsys,
+    ):
+        args = _make_args(all=True, plain=True)
+        rc = cmd_edit(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tabc123\n" in out
+        assert "status\tupdated\n" in out

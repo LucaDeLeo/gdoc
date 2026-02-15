@@ -596,3 +596,40 @@ class TestCreatePermissionAPI:
 
         with pytest.raises(AuthError, match="Authentication expired"):
             create_permission("doc1", "alice@co.com", "reader")
+
+
+# --- Plain output tests ---
+
+class TestPlainOutput:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.create_doc", return_value=API_RESULT_NEW)
+    def test_new_plain_output(self, mock_create, _update, capsys):
+        args = _make_args("new", title="Test Doc", plain=True)
+        rc = cmd_new(args)
+        assert rc == 0
+        assert capsys.readouterr().out.strip() == "id\tnew_doc_123"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.copy_doc", return_value=API_RESULT_COPY)
+    def test_cp_plain_output(self, mock_copy, _pf, _update, capsys):
+        args = _make_args(
+            "cp", doc="src_doc", title="Copy Title", quiet=True, plain=True,
+        )
+        rc = cmd_cp(args)
+        assert rc == 0
+        assert capsys.readouterr().out.strip() == "id\tcopy_doc_456"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.create_permission", return_value={"id": "perm1"})
+    def test_share_plain_output(self, mock_perm, _pf, _update, capsys):
+        args = _make_args(
+            "share", doc="abc123", email="alice@co.com",
+            role="writer", quiet=True, plain=True,
+        )
+        rc = cmd_share(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "email\talice@co.com" in out
+        assert "role\twriter" in out

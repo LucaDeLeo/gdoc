@@ -40,6 +40,23 @@ _PATTERNS = [
 _BARE_ID = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
+def confirm_destructive(message: str, force: bool = False) -> None:
+    """Prompt for confirmation on destructive ops. Raises GdocError on decline."""
+    if force:
+        return
+    import sys
+
+    if not sys.stdin.isatty():
+        raise GdocError(
+            f"Refusing to {message} without --force (non-interactive)",
+            exit_code=3,
+        )
+    print(f"{message} [y/N]: ", end="", file=sys.stderr, flush=True)
+    answer = input().strip().lower()
+    if answer not in ("y", "yes"):
+        raise GdocError("Cancelled", exit_code=3)
+
+
 def extract_doc_id(input_str: str) -> str:
     """Extract document ID from a URL or bare ID string.
 

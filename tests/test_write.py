@@ -580,3 +580,20 @@ class TestWriteErrors:
         args = _make_args(file=str(f))
         with pytest.raises(AuthError, match="Authentication expired"):
             cmd_write(args)
+
+
+class TestWritePlain:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.notify.pre_flight")
+    def test_write_plain_output(self, mock_pf, _update_doc, _update, capsys, tmp_path):
+        f = tmp_path / "doc.md"
+        f.write_text("content")
+        change_info = ChangeInfo(current_version=10, last_read_version=10)
+        mock_pf.return_value = change_info
+        args = _make_args(file=str(f), force=True, quiet=True, plain=True)
+        rc = cmd_write(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tabc123" in out
+        assert "status\tupdated" in out

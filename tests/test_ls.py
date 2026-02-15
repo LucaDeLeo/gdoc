@@ -30,6 +30,7 @@ def _make_args(**kwargs):
         "type": "all",
         "json": False,
         "verbose": False,
+        "plain": False,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -157,3 +158,28 @@ class TestLsJson:
         data = json.loads(out)
         assert data["ok"] is True
         assert data["files"] == []
+
+
+@patch("gdoc.api.get_drive_service")
+@patch("gdoc.api.drive.list_files")
+class TestLsPlain:
+    def test_ls_plain_output(self, mock_list, mock_svc, capsys):
+        mock_list.return_value = MOCK_FILES
+        args = _make_args(plain=True)
+        rc = cmd_ls(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = out.strip().split("\n")
+        assert len(lines) == 2
+        parts = lines[0].split("\t")
+        assert len(parts) == 3
+        assert parts[0] == "doc1"
+        assert parts[1] == "Meeting Notes"
+        assert parts[2] == "application/vnd.google-apps.document"
+
+    def test_ls_plain_empty(self, mock_list, mock_svc, capsys):
+        mock_list.return_value = []
+        args = _make_args(plain=True)
+        rc = cmd_ls(args)
+        assert rc == 0
+        assert capsys.readouterr().out == ""

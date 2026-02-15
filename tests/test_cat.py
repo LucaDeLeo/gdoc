@@ -209,6 +209,13 @@ class TestCatErrors:
             cmd_cat(args)
 
 
+class TestCatPlainCommentsConflict:
+    def test_cat_comments_and_plain_conflict(self):
+        args = _make_args(comments=True, plain=True, quiet=True)
+        with pytest.raises(GdocError, match="mutually exclusive"):
+            cmd_cat(args)
+
+
 class TestCatAwareness:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight")

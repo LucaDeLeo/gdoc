@@ -258,3 +258,23 @@ class TestPushErrors:
         with pytest.raises(GdocError) as exc:
             cmd_push(args)
         assert exc.value.exit_code == 3
+
+
+class TestPushPlain:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.notify.pre_flight")
+    def test_push_plain_output(
+        self, mock_pf, mock_update_doc, _drv, _update, capsys, tmp_path,
+    ):
+        f = tmp_path / "test.md"
+        f.write_text(FRONTMATTER + "# Hello\n")
+        change_info = ChangeInfo(current_version=10, last_read_version=10)
+        mock_pf.return_value = change_info
+        args = _make_args(file=str(f), plain=True)
+        rc = cmd_push(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tabc123" in out
+        assert "status\tupdated" in out

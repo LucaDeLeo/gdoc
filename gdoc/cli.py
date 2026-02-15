@@ -1,6 +1,7 @@
 """CLI parser, subcommand dispatch, and exception handler."""
 
 import argparse
+import os
 import sys
 
 from gdoc import __version__
@@ -31,6 +32,9 @@ def cmd_cat(args) -> int:
     doc_id = _resolve_doc_id(args.doc)
 
     quiet = getattr(args, "quiet", False)
+
+    if getattr(args, "comments", False) and getattr(args, "plain", False):
+        raise GdocError("--comments and --plain are mutually exclusive", exit_code=3)
 
     if getattr(args, "comments", False):
         # Annotated view: line-numbered content + inline comment annotations
@@ -137,6 +141,11 @@ def cmd_info(args) -> int:
                 words=words_display,
             )
         )
+    elif mode == "plain":
+        print(f"title\t{title}")
+        print(f"owner\t{owner}")
+        print(f"modified\t{modified}")
+        print(f"words\t{words_display}")
     elif mode == "verbose":
         print(f"Title: {title}")
         print(f"Owner: {owner}")
@@ -183,6 +192,9 @@ def _format_file_list(files: list[dict], mode: str) -> str:
         if mode == "verbose":
             mime = f.get("mimeType", "")
             lines.append(f"{fid}\t{name}\t{modified}\t{mime}")
+        elif mode == "plain":
+            mime = f.get("mimeType", "")
+            lines.append(f"{fid}\t{name}\t{mime}")
         else:
             lines.append(f"{fid}\t{name}\t{modified[:10]}")
     return "\n".join(lines)
@@ -216,7 +228,7 @@ def cmd_ls(args) -> int:
     output = _format_file_list(files, mode)
     if output:
         print(output)
-    elif mode != "json":
+    elif mode not in ("json", "plain"):
         print("No files.")
 
     return 0
@@ -234,7 +246,7 @@ def cmd_find(args) -> int:
     output = _format_file_list(files, mode)
     if output:
         print(output)
-    elif mode != "json":
+    elif mode not in ("json", "plain"):
         print("No files.")
 
     return 0
@@ -329,6 +341,9 @@ def cmd_edit(args) -> int:
     label = "occurrence" if occurrences == 1 else "occurrences"
     if mode == "json":
         print(format_json(replaced=occurrences))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print(f"status\tupdated")
     else:
         print(f"OK replaced {occurrences} {label}")
 
@@ -431,6 +446,9 @@ def cmd_write(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(written=True, version=command_version))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print(f"status\tupdated")
     else:
         print("OK written")
 
@@ -480,6 +498,8 @@ def cmd_pull(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(pulled=True, title=title, file=file_path))
+    elif mode == "plain":
+        print(f"path\t{file_path}")
     elif mode == "verbose":
         print(f'Pulled: "{title}"')
         print(f"File: {file_path}")
@@ -544,6 +564,9 @@ def cmd_push(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(pushed=True, file=file_path, version=command_version))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print(f"status\tupdated")
     else:
         print(f"OK pushed {file_path}")
 
@@ -769,6 +792,15 @@ def cmd_comments(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(comments=comments))
+    elif mode == "plain":
+        for c in comments:
+            cid = c.get("id", "")
+            resolved = c.get("resolved", False)
+            status = "resolved" if resolved else "open"
+            author = c.get("author", {})
+            author_str = author.get("emailAddress") or author.get("displayName", "unknown")
+            content = c.get("content", "")
+            print(f"{cid}\t{status}\t{author_str}\t{content}")
     elif not comments:
         print("No comments.")
     else:
@@ -821,6 +853,8 @@ def cmd_comment(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(id=new_id, status="created"))
+    elif mode == "plain":
+        print(f"id\t{new_id}")
     else:
         print(f"OK comment #{new_id}")
 
@@ -854,6 +888,9 @@ def cmd_reply(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(commentId=comment_id, replyId=reply_id, status="created"))
+    elif mode == "plain":
+        print(f"commentId\t{comment_id}")
+        print(f"replyId\t{reply_id}")
     else:
         print(f"OK reply on #{comment_id}")
 
@@ -872,12 +909,13 @@ def cmd_resolve(args) -> int:
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     comment_id = args.comment_id
+    message = getattr(args, "message", "") or ""
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
 
     from gdoc.api.comments import create_reply
-    create_reply(doc_id, comment_id, action="resolve")
+    create_reply(doc_id, comment_id, content=message, action="resolve")
 
     from gdoc.api.drive import get_file_version
     command_version = get_file_version(doc_id).get("version")
@@ -886,6 +924,9 @@ def cmd_resolve(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(id=comment_id, status="resolved"))
+    elif mode == "plain":
+        print(f"id\t{comment_id}")
+        print(f"status\tresolved")
     else:
         print(f"OK resolved comment #{comment_id}")
 
@@ -918,6 +959,9 @@ def cmd_reopen(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(id=comment_id, status="reopened"))
+    elif mode == "plain":
+        print(f"id\t{comment_id}")
+        print(f"status\treopened")
     else:
         print(f"OK reopened comment #{comment_id}")
 
@@ -936,6 +980,10 @@ def cmd_delete_comment(args) -> int:
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     comment_id = args.comment_id
+    force = getattr(args, "force", False)
+
+    from gdoc.util import confirm_destructive
+    confirm_destructive(f"delete comment #{comment_id}", force=force)
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
@@ -950,6 +998,9 @@ def cmd_delete_comment(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(id=comment_id, status="deleted"))
+    elif mode == "plain":
+        print(f"id\t{comment_id}")
+        print(f"status\tdeleted")
     else:
         print(f"OK deleted comment #{comment_id}")
 
@@ -959,6 +1010,72 @@ def cmd_delete_comment(args) -> int:
         command_version=command_version,
         comment_state_patch={"remove_comment_id": comment_id},
     )
+
+    return 0
+
+
+def cmd_comment_info(args) -> int:
+    """Handler for `gdoc comment-info`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    comment_id = args.comment_id
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.comments import get_comment
+    comment = get_comment(doc_id, comment_id)
+
+    from gdoc.format import get_output_mode, format_json
+    mode = get_output_mode(args)
+
+    resolved = comment.get("resolved", False)
+    status = "resolved" if resolved else "open"
+    author = comment.get("author", {})
+    author_str = author.get("emailAddress") or author.get("displayName", "unknown")
+    content = comment.get("content", "")
+    created = comment.get("createdTime", "")
+    modified = comment.get("modifiedTime", "")
+    quoted = comment.get("quotedFileContent", {}).get("value", "")
+    replies = comment.get("replies", [])
+
+    if mode == "json":
+        print(format_json(comment=comment))
+    elif mode == "plain":
+        print(f"id\t{comment_id}")
+        print(f"status\t{status}")
+        print(f"author\t{author_str}")
+        print(f"created\t{created}")
+        print(f"content\t{content}")
+        if quoted:
+            print(f"quote\t{quoted}")
+        print(f"replies\t{len(replies)}")
+    elif mode == "verbose":
+        print(f"#{comment_id} [{status}] {author_str} {created}")
+        print(f'  "{content}"')
+        if quoted:
+            print(f'  on "{quoted}"')
+        print(f"  Modified: {modified}")
+        for r in replies:
+            r_author = r.get("author", {})
+            r_author_str = r_author.get("emailAddress") or r_author.get("displayName", "unknown")
+            r_content = r.get("content", "")
+            r_action = r.get("action", "")
+            r_created = r.get("createdTime", "")
+            if r_content:
+                print(f'  -> {r_author_str} {r_created}: "{r_content}"')
+            elif r_action:
+                print(f"  -> {r_author_str} {r_created}: [{r_action}]")
+    else:
+        # terse
+        print(f"#{comment_id} [{status}] {author_str} {created[:10] if created else ''}")
+        print(f'  "{content}"')
+        if replies:
+            label = "reply" if len(replies) == 1 else "replies"
+            print(f"  {len(replies)} {label}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(doc_id, change_info, command="comment-info", quiet=quiet)
 
     return 0
 
@@ -990,6 +1107,8 @@ def cmd_new(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(id=new_id, title=result.get("name", title), url=url))
+    elif mode == "plain":
+        print(f"id\t{new_id}")
     elif mode == "verbose":
         print(f"Created: {result.get('name', title)}")
         print(f"ID: {new_id}")
@@ -1031,6 +1150,8 @@ def cmd_cp(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(id=new_id, title=result.get("name", title), url=url))
+    elif mode == "plain":
+        print(f"id\t{new_id}")
     elif mode == "verbose":
         print(f"Copied: {result.get('name', title)}")
         print(f"ID: {new_id}")
@@ -1075,6 +1196,9 @@ def cmd_share(args) -> int:
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(email=email, role=role, status="shared"))
+    elif mode == "plain":
+        print(f"email\t{email}")
+        print(f"role\t{role}")
     else:
         print(f"OK shared with {email} as {role}")
 
@@ -1114,12 +1238,25 @@ def build_parser() -> GdocArgumentParser:
         "--verbose", action="store_true", default=argparse.SUPPRESS,
         help="Detailed output",
     )
+    output_group.add_argument(
+        "--plain", action="store_true", default=argparse.SUPPRESS,
+        help="Stable TSV output",
+    )
 
     # Also add to the top-level parser for `gdoc --json <cmd>` form
     top_output_group = parser.add_mutually_exclusive_group()
     top_output_group.add_argument("--json", action="store_true", help="JSON output")
     top_output_group.add_argument(
         "--verbose", action="store_true", help="Detailed output"
+    )
+    top_output_group.add_argument(
+        "--plain", action="store_true", help="Stable TSV output"
+    )
+
+    parser.add_argument(
+        "--allow-commands",
+        default=os.environ.get("GDOC_ALLOW_COMMANDS", ""),
+        help="Comma-separated list of allowed subcommands",
     )
 
     sub = parser.add_subparsers(dest="command")
@@ -1157,12 +1294,8 @@ def build_parser() -> GdocArgumentParser:
     # cat
     cat_p = sub.add_parser("cat", parents=[output_parent], help="Export doc as markdown")
     cat_p.add_argument("doc", help="Document ID or URL")
-    cat_output = cat_p.add_mutually_exclusive_group()
-    cat_output.add_argument(
+    cat_p.add_argument(
         "--comments", action="store_true", help="Include comment annotations"
-    )
-    cat_output.add_argument(
-        "--plain", action="store_true", help="Export as plain text"
     )
     cat_p.add_argument(
         "--all", action="store_true",
@@ -1201,7 +1334,6 @@ def build_parser() -> GdocArgumentParser:
     diff_p = sub.add_parser("diff", parents=[output_parent], help="Compare doc with local file")
     diff_p.add_argument("doc", help="Document ID or URL")
     diff_p.add_argument("file", help="Local file to compare against")
-    diff_p.add_argument("--plain", action="store_true", help="Compare as plain text")
     diff_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
@@ -1285,6 +1417,9 @@ def build_parser() -> GdocArgumentParser:
     resolve_p.add_argument("doc", help="Document ID or URL")
     resolve_p.add_argument("comment_id", help="Comment ID to resolve")
     resolve_p.add_argument(
+        "--message", "-m", default="", help="Message to include when resolving"
+    )
+    resolve_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     resolve_p.set_defaults(func=cmd_resolve)
@@ -1306,9 +1441,24 @@ def build_parser() -> GdocArgumentParser:
     del_comment_p.add_argument("doc", help="Document ID or URL")
     del_comment_p.add_argument("comment_id", help="Comment ID to delete")
     del_comment_p.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt",
+    )
+    del_comment_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks",
     )
     del_comment_p.set_defaults(func=cmd_delete_comment)
+
+    # comment-info
+    ci_p = sub.add_parser(
+        "comment-info", parents=[output_parent],
+        help="Get a single comment by ID",
+    )
+    ci_p.add_argument("doc", help="Document ID or URL")
+    ci_p.add_argument("comment_id", help="Comment ID")
+    ci_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    ci_p.set_defaults(func=cmd_comment_info)
 
     # info
     info_p = sub.add_parser("info", parents=[output_parent], help="Show document metadata")
@@ -1360,11 +1510,25 @@ def main() -> int:
         parser.print_help(sys.stderr)
         return 3
 
-    if getattr(args, "json", False) and getattr(args, "verbose", False):
-        parser.error("argument --verbose: not allowed with argument --json")
+    # Belt-and-suspenders check for mutually exclusive output modes
+    output_flags = sum([
+        getattr(args, "json", False),
+        getattr(args, "verbose", False),
+        getattr(args, "plain", False),
+    ])
+    if output_flags > 1:
+        parser.error("--json, --verbose, and --plain are mutually exclusive")
 
-    # Check for updates (skip for the update command itself)
-    if args.command != "update":
+    # Command allowlist enforcement
+    allowed = getattr(args, "allow_commands", "")
+    if allowed:
+        allow_set = {c.strip().lower() for c in allowed.split(",") if c.strip()}
+        if args.command.lower() not in allow_set:
+            print(f"ERR: command not allowed: {args.command}", file=sys.stderr)
+            return 3
+
+    # Check for updates (skip for the update command itself and internal hooks)
+    if args.command not in ("update", "_sync-hook", "_pull-hook"):
         from gdoc.update import check_for_update
         check_for_update()
 

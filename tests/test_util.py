@@ -1,8 +1,10 @@
 """Tests for gdoc.util: URL extraction and error classes."""
 
+from unittest.mock import patch
+
 import pytest
 
-from gdoc.util import AuthError, GdocError, extract_doc_id
+from gdoc.util import AuthError, GdocError, confirm_destructive, extract_doc_id
 
 
 class TestExtractDocId:
@@ -78,3 +80,29 @@ class TestErrorClasses:
 
     def test_gdoc_error_is_exception(self):
         assert issubclass(GdocError, Exception)
+
+
+class TestConfirmDestructive:
+    def test_force_bypasses_prompt(self):
+        confirm_destructive("delete something", force=True)
+
+    def test_non_tty_without_force_raises(self):
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = False
+            with pytest.raises(GdocError, match="non-interactive") as exc:
+                confirm_destructive("delete something", force=False)
+            assert exc.value.exit_code == 3
+
+    def test_user_accepts(self):
+        with patch("sys.stdin") as mock_stdin, \
+             patch("builtins.input", return_value="y"):
+            mock_stdin.isatty.return_value = True
+            confirm_destructive("delete something", force=False)
+
+    def test_user_declines(self):
+        with patch("sys.stdin") as mock_stdin, \
+             patch("builtins.input", return_value="n"):
+            mock_stdin.isatty.return_value = True
+            with pytest.raises(GdocError, match="Cancelled") as exc:
+                confirm_destructive("delete something", force=False)
+            assert exc.value.exit_code == 3
