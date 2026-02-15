@@ -330,6 +330,116 @@ def _insert_table(
         _translate_http_error(e, doc_id)
 
 
+def list_inline_objects(doc_id: str) -> list[dict]:
+    """List all inline and positioned objects in a document.
+
+    Walks body.content for inlineObjectElement and positionedObjectId
+    references, joins with document.inlineObjects and positionedObjects
+    maps, and classifies each object.
+
+    Returns list of dicts with id, type, title, description, dimensions,
+    content_uri, source_uri, start_index, and chart metadata.
+    """
+    try:
+        doc = get_document(doc_id)
+    except GdocError:
+        raise
+
+    inline_map = doc.get("inlineObjects", {})
+    positioned_map = doc.get("positionedObjects", {})
+
+    # Walk body.content to find references and their startIndex
+    refs: list[tuple[str, int, str]] = []  # (object_id, start_index, source)
+    body = doc.get("body", {})
+    for element in body.get("content", []):
+        paragraph = element.get("paragraph")
+        if paragraph is None:
+            continue
+        for pe in paragraph.get("elements", []):
+            ioe = pe.get("inlineObjectElement")
+            if ioe:
+                obj_id = ioe.get("inlineObjectId", "")
+                start = pe.get("startIndex", 0)
+                refs.append((obj_id, start, "inline"))
+        # Check for positioned object references
+        positioned_ids = paragraph.get("positionedObjectIds", [])
+        para_start = element.get("startIndex", 0)
+        for pid in positioned_ids:
+            refs.append((pid, para_start, "positioned"))
+
+    results = []
+    seen = set()
+
+    for obj_id, start_index, source in refs:
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+
+        if source == "inline":
+            obj_data = inline_map.get(obj_id, {})
+        else:
+            obj_data = positioned_map.get(obj_id, {})
+
+        props = obj_data.get("inlineObjectProperties", {}) or obj_data.get(
+            "positionedObjectProperties", {}
+        )
+        embedded = props.get("embeddedObject", {})
+
+        # Classify type
+        obj_type = "image"
+        spreadsheet_id = None
+        chart_id = None
+        if "embeddedDrawingProperties" in embedded:
+            obj_type = "drawing"
+        elif "linkedContentReference" in embedded:
+            lcr = embedded["linkedContentReference"]
+            if "sheetsChartReference" in lcr:
+                obj_type = "chart"
+                scr = lcr["sheetsChartReference"]
+                spreadsheet_id = scr.get("spreadsheetId")
+                chart_id = scr.get("chartId")
+
+        # Extract dimensions
+        size = embedded.get("size", {})
+        width = size.get("width", {}).get("magnitude", 0)
+        height = size.get("height", {}).get("magnitude", 0)
+
+        # Content URI (None for drawings)
+        content_uri = None
+        if obj_type != "drawing":
+            image_props = embedded.get("imageProperties", {})
+            content_uri = image_props.get("contentUri")
+
+        entry = {
+            "id": obj_id,
+            "type": obj_type,
+            "title": embedded.get("title", ""),
+            "description": embedded.get("description", ""),
+            "width_pt": width,
+            "height_pt": height,
+            "content_uri": content_uri,
+            "source_uri": embedded.get("imageProperties", {}).get("sourceUri"),
+            "start_index": start_index,
+        }
+        if obj_type == "chart":
+            entry["spreadsheet_id"] = spreadsheet_id
+            entry["chart_id"] = chart_id
+
+        results.append(entry)
+
+    return results
+
+
+def download_image(content_uri: str, dest_path: str) -> None:
+    """Download an image from a pre-signed content URI to a local file."""
+    import urllib.request
+
+    with urllib.request.urlopen(content_uri) as resp:
+        data = resp.read()
+    with open(dest_path, "wb") as f:
+        f.write(data)
+
+
 def replace_formatted(
     doc_id: str,
     matches: list[dict],

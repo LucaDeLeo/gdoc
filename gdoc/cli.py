@@ -1205,6 +1205,83 @@ def cmd_comment_info(args) -> int:
     return 0
 
 
+def cmd_images(args) -> int:
+    """Handler for `gdoc images`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    image_id = getattr(args, "image_id", None)
+    download_dir = getattr(args, "download", None)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.docs import list_inline_objects
+
+    images = list_inline_objects(doc_id)
+
+    if image_id:
+        images = [img for img in images if img["id"] == image_id]
+        if not images:
+            raise GdocError(f"image not found: {image_id}", exit_code=3)
+
+    if download_dir:
+        os.makedirs(download_dir, exist_ok=True)
+
+        from gdoc.api.docs import download_image
+
+        for img in images:
+            if img["type"] == "drawing":
+                print(
+                    f"WARN: {img['id']} is a drawing (cannot export)",
+                    file=sys.stderr,
+                )
+                continue
+            if not img.get("content_uri"):
+                print(
+                    f"WARN: {img['id']} has no content URI",
+                    file=sys.stderr,
+                )
+                continue
+            ext = "png"
+            dest = os.path.join(download_dir, f"{img['id']}.{ext}")
+            download_image(img["content_uri"], dest)
+            print(dest)
+    else:
+        from gdoc.format import format_json, get_output_mode
+
+        mode = get_output_mode(args)
+        if mode == "json":
+            print(format_json(images=images))
+        elif mode == "plain":
+            for img in images:
+                print(
+                    f"{img['id']}\t{img['type']}\t{img['title']}"
+                    f"\t{img['width_pt']}\t{img['height_pt']}"
+                )
+        elif not images:
+            print("No images.")
+        else:
+            for img in images:
+                title = f'"{img["title"]}"' if img["title"] else "(no title)"
+                dims = f"{img['width_pt']}x{img['height_pt']}pt"
+                if img["type"] == "drawing":
+                    dims = "(not exportable)"
+                if mode == "verbose":
+                    desc = img["description"] or ""
+                    print(f"{img['id']}  {img['type']}  {title}  {dims}  {desc}")
+                else:
+                    print(f"{img['id']}  {img['type']}  {title}  {dims}")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="images", quiet=quiet,
+    )
+
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     from gdoc.auth import authenticate
@@ -1740,6 +1817,21 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     ci_p.set_defaults(func=cmd_comment_info)
+
+    # images
+    images_p = sub.add_parser(
+        "images", parents=[output_parent],
+        help="List images, charts, and drawings in a doc",
+    )
+    images_p.add_argument("doc", help="Document ID or URL")
+    images_p.add_argument("image_id", nargs="?", help="Specific image object ID")
+    images_p.add_argument(
+        "--download", metavar="DIR", help="Download images to directory",
+    )
+    images_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks",
+    )
+    images_p.set_defaults(func=cmd_images)
 
     # info
     info_p = sub.add_parser("info", parents=[output_parent], help="Show document metadata")

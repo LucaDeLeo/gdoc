@@ -76,6 +76,12 @@ gdoc new "Report" --file report.md
 
 # Duplicate a document
 gdoc cp DOC_ID "Copy of Report"
+
+# List images, charts, and drawings
+gdoc images DOC_ID
+
+# Download images to a local directory
+gdoc images --download /tmp/imgs DOC_ID
 ```
 
 All commands accept a full Google Docs URL or a bare document ID:
@@ -98,6 +104,7 @@ gdoc cat 1aBcDeFg...
 | `tabs DOC` | List all tabs in a document |
 | `info DOC` | Show title, owner, modified date, word count |
 | `ls [FOLDER]` | List files in Drive root or a folder (`--type docs\|sheets\|all`) |
+| `images DOC` | List images, charts, and drawings (`--download DIR` to save locally) |
 | `find QUERY` | Search files by name or content |
 
 ### Writing
@@ -255,6 +262,29 @@ Images in the markdown are handled automatically:
 - **Remote images** (`https://...`) are inserted directly via URL
 - **Local images** are uploaded to Drive temporarily, inserted, then cleaned up
 - Supported formats: PNG, JPG, JPEG, GIF, WebP
+
+## Image inspection
+
+List and download images, charts, and drawings embedded in a document:
+
+```bash
+# List all images with metadata
+gdoc images DOC
+# kix.abc  image  "Company Logo"  200x100pt
+# kix.def  chart  "Q1 Revenue"    400x300pt
+# kix.ghi  drawing  (not exportable)  150x150pt
+
+# Download images to a local directory
+gdoc images --download /tmp/imgs DOC
+# /tmp/imgs/kix.abc.png
+# /tmp/imgs/kix.def.png
+# WARN: kix.ghi is a drawing (cannot export)
+
+# Download a specific image by object ID
+gdoc images --download /tmp/imgs DOC kix.abc
+```
+
+Drawings cannot be exported (the Google API exposes no content for them). Charts are rendered as images via their content URI. Downloaded files can be viewed directly by multimodal AI agents.
 
 ## Command allowlist
 
