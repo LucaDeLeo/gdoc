@@ -2,7 +2,7 @@
 
 Features inspired by [gogcli](https://github.com/steipete/gogcli), assessed against gdoc's architecture and AI-agent-first design.
 
-**Status**: 6 of 9 features implemented (v0.3.0). Remaining 3 are larger efforts.
+**Status**: All 9 features implemented.
 
 | # | Feature | Status |
 |---|---------|--------|
@@ -12,37 +12,25 @@ Features inspired by [gogcli](https://github.com/steipete/gogcli), assessed agai
 | 11 | Confirmation for destructive ops | **Done** |
 | 12 | Command allowlist | **Done** |
 | 2 | Tabs support | **Done** |
-| 1 | Docs API `cat` | Planned |
-| 4 | Native table insertion | Planned |
-| 5 | Image import on `new --file` | Planned |
+| 1 | `--max-bytes` truncation on `cat` | **Done** |
+| 4 | Native table insertion | **Done** |
+| 5 | Image import on `new --file` | **Done** |
 
 ---
 
-## 1. Docs API `cat` for finer-grained control
+## 1. `--max-bytes` truncation on `cat` -- DONE
 
-**What**: Add a `--body` flag to `cat` that reads document content via the Docs API (`documents().get()`) instead of Drive export. Extract plain text by walking `body.content` elements.
+**What**: Client-side UTF-8-safe truncation after export, via `--max-bytes N` flag on `cat`.
 
-**Why**: Drive export returns markdown/plaintext but has no truncation control. The Docs API lets us add `--max-bytes` truncation (gogcli does this), tab-aware reading, and structured access to tables/headings/lists.
+**Implemented**:
 
-**Current gdoc**: `cat` calls `export_doc(doc_id, mime_type="text/markdown")` via Drive API. No truncation, no tab awareness.
+- `_truncate_bytes(text, max_bytes)` helper: encodes to UTF-8, slices bytes, decodes with `errors="ignore"` for multi-byte safety
+- `--max-bytes N` argument on `cat` (default 0 = unlimited)
+- Applied across all 3 `cmd_cat` branches: tabs, comments, normal export
+- Truncation applies to content, not the JSON envelope in `--json` mode
+- 12 new tests in `tests/test_cat.py` (unit + integration)
 
-**gogcli approach**: `DocsCatCmd` calls `svc.Documents.Get(id)` then walks `doc.Body.Content` elements, extracting text from paragraphs (including nested table cells and ToC). Has `--max-bytes` with a `appendLimited()` helper that stops once the byte budget is hit.
-
-**Implementation plan**:
-
-1. **New API function** in `gdoc/api/docs.py`:
-   - `get_document_text(doc_id, max_bytes=0) -> str` — calls `documents().get()`, walks body elements, extracts plain text with optional truncation.
-   - Walk `paragraph.elements[].textRun.content` for text, handle `table` elements by tab-joining cells, handle `tableOfContents`.
-   - We already have `get_document()` that returns the full document — build on it.
-
-2. **New flag** on `cat`:
-   - `--max-bytes N` — truncate output at N bytes (0 = unlimited, default 0).
-   - When `--max-bytes` is set, use the Docs API path automatically (Drive export can't truncate server-side).
-   - The existing `--plain` flag already uses Drive export with `text/plain`. With `--max-bytes`, we use Docs API plain text extraction instead.
-
-3. **Tests**: Mock `documents().get()` response with body content, verify text extraction and truncation.
-
-**Files to modify**: `gdoc/api/docs.py`, `gdoc/cli.py` (cat parser + handler), new test file `tests/test_cat_body.py`.
+**Files modified**: `gdoc/cli.py`, `tests/test_cat.py`.
 
 ---
 
@@ -63,67 +51,37 @@ Features inspired by [gogcli](https://github.com/steipete/gogcli), assessed agai
 
 ---
 
-## 4. Markdown-to-Docs native table insertion
+## 4. Markdown-to-Docs native table insertion -- DONE
 
-**What**: Enhance our `edit` command's markdown formatting to support native Google Docs table insertion via the Docs API.
+**What**: Native Google Docs table insertion via markdown tables in `edit` replacement text.
 
-**Current gdoc**: `gdoc/mdparse.py` parses markdown and generates `batchUpdate` requests for headings, bold, italic, code, links, and bullet lists. Tables are **not supported** — if the replacement text contains a markdown table, it's inserted as plain text.
+**Implemented**:
 
-**gogcli approach**: `docs_formatter.go` has a `TableData` struct. During markdown parsing, tables are collected separately. After the main `batchUpdate` inserts text + formatting, a second pass uses `TableInserter` to create native Google Docs tables via `insertTable` + cell-by-cell `insertText` requests.
+- `TableData` dataclass and table parsing in `gdoc/mdparse.py` — detects `| header |` + `|---|` separator pattern, consumes all data rows, normalizes column count
+- `_find_table_cell_indices()` and `_insert_table()` in `gdoc/api/docs.py` — 3-step: insertTable, read-back for cell indices, insertText into cells (reverse order)
+- `replace_formatted()` handles tables after main batchUpdate
+- Tables in replacement text blocked with `--all` (multi-match), raises `GdocError(exit_code=3)`
+- 8 new table parsing tests in `tests/test_mdparse.py`, 8 new table insertion tests in `tests/test_table_insert.py`
 
-**Implementation plan**:
-
-1. **Extend `gdoc/mdparse.py`**:
-   - Add `MDTable` element type with a `cells: list[list[str]]` field.
-   - Parser recognizes markdown table syntax (`| col1 | col2 |` with separator row `|---|---|`).
-   - `to_docs_requests()` emits a placeholder newline for each table and returns `tables: list[TableData]` alongside the existing requests.
-
-2. **New table insertion logic** in `gdoc/api/docs.py`:
-   - `insert_native_table(doc_id, index, cells) -> int` — inserts a table via `insertTable` request, then populates cells with `insertText` requests.
-   - Each cell needs its own `batchUpdate` call after the table structure exists (or read-back the document to find cell positions).
-
-3. **Integration in `replace_formatted()`**:
-   - After the main `batchUpdate`, loop over `tables` and call `insert_native_table()` for each, adjusting indices for document growth.
-
-4. **Tests**: Mock Docs API batchUpdate, verify table parsing + request generation.
-
-**Files to modify**: `gdoc/mdparse.py`, `gdoc/api/docs.py`, `gdoc/cli.py` (no CLI changes needed), tests.
+**Files modified**: `gdoc/mdparse.py`, `gdoc/api/docs.py`, `gdoc/cli.py`, new `tests/test_table_insert.py`.
 
 ---
 
-## 5. Image import on `new --file`
+## 5. Image import on `new --file` -- DONE
 
-**What**: Add `--file` flag to `gdoc new` that creates a doc from a local markdown file, including embedded images.
+**What**: `gdoc new "Title" --file ./doc.md` creates a doc from a local markdown file with image support.
 
-**Current gdoc**: `new` creates a blank document via `create_doc()`. No file import.
+**Implemented**:
 
-**gogcli approach**: Two-pass:
-1. Parse markdown, extract `![alt](path)` references, replace with `<<IMG_N>>` placeholders, upload cleaned markdown via Drive (auto-converts to Docs).
-2. Read back the created doc to find placeholder positions, upload local images to Drive as temp files (set public read), insert inline images at placeholder positions via `batchUpdate`, then clean up temp files.
+- New `gdoc/mdimport.py`: `extract_images()` extracts `![alt](path)`, replaces with `<<IMG_N>>` placeholders, validates local paths (no traversal, supported formats: png/jpg/jpeg/gif/webp)
+- `ImageRef` dataclass with full metadata (is_remote, resolved_path, mime_type)
+- `create_doc_from_markdown()`, `upload_temp_image()`, `delete_file()` in `gdoc/api/drive.py`
+- `_cmd_new_from_file()` and `_insert_images()` in `gdoc/cli.py`
+- Remote images: direct `insertInlineImage` with URL
+- Local images: upload to Drive as temp, make public, insert, cleanup in `finally` block
+- 11 tests in `tests/test_mdimport.py`, 9 tests in `tests/test_new_file.py`
 
-**Implementation plan**:
-
-1. **New `--file` flag on `new`**:
-   - `gdoc new "Title" --file ./doc.md` — creates doc from markdown file.
-   - Without `--file`, behaves as today (blank doc).
-
-2. **Image extraction** in new `gdoc/mdimport.py`:
-   - `extract_images(content, base_dir) -> (cleaned_content, list[ImageRef])` — regex-extracts `![alt](path)`, replaces with `<<IMG_N>>` placeholders, returns cleaned markdown + image metadata.
-   - `ImageRef` has `index`, `alt`, `original_ref`, `is_remote`.
-
-3. **Create flow**:
-   - Upload cleaned markdown via `create_doc()` with `media_body` (Drive handles markdown→Docs conversion).
-   - Modify `gdoc/api/drive.py`: add `create_doc_from_content(title, content, mime_type, folder_id)` that uses `files().create().media()`.
-   - Read back document via Docs API to find placeholder positions.
-   - For local images: upload to Drive as temp file, set public permission, get URL.
-   - Insert inline images via `batchUpdate` with `insertInlineImage` requests.
-   - Clean up temp Drive files.
-
-4. **Security**: Validate image paths resolve within the markdown file's directory (no path traversal). Only allow png/jpg/gif.
-
-5. **Tests**: Mock Drive + Docs API calls, verify placeholder extraction, image insertion requests.
-
-**Files to modify**: `gdoc/api/drive.py`, `gdoc/api/docs.py`, `gdoc/cli.py`, new `gdoc/mdimport.py`, tests.
+**Files modified**: `gdoc/cli.py`, `gdoc/api/drive.py`, new `gdoc/mdimport.py`, new `tests/test_mdimport.py`, new `tests/test_new_file.py`.
 
 ---
 
@@ -257,8 +215,8 @@ Completed (v0.3.0):
 
 6. ~~**#2 Tabs support**~~ -- Done
 
-Remaining (larger efforts):
+Completed (v0.4.0):
 
-7. **#1 Docs API cat** — 2 files, ~80 lines
-8. **#4 Native table insertion** — 2 files, ~100 lines
-9. **#5 Image import** — 4 files, ~200 lines (most complex)
+7. ~~**#1 `--max-bytes` truncation**~~ -- Done
+8. ~~**#4 Native table insertion**~~ -- Done
+9. ~~**#5 Image import (`new --file`)**~~ -- Done

@@ -44,6 +44,9 @@ gdoc find "quarterly report"
 # Read a document as markdown
 gdoc cat DOC_ID
 
+# Read with byte limit (UTF-8-safe truncation)
+gdoc cat --max-bytes 5000 DOC_ID
+
 # Read a specific tab
 gdoc cat --tab "Notes" DOC_ID
 
@@ -68,6 +71,9 @@ gdoc write DOC_ID draft.md
 # Create a new blank document
 gdoc new "Meeting Notes"
 
+# Create a document from a local markdown file (with image support)
+gdoc new "Report" --file report.md
+
 # Duplicate a document
 gdoc cp DOC_ID "Copy of Report"
 ```
@@ -85,7 +91,7 @@ gdoc cat 1aBcDeFg...
 
 | Command | Description |
 |---------|-------------|
-| `cat DOC` | Export document as markdown (or `--plain` for plain text) |
+| `cat DOC` | Export document as markdown (or `--plain` for plain text, `--max-bytes N` to truncate) |
 | `cat --tab NAME DOC` | Read a specific tab by title or ID |
 | `cat --all-tabs DOC` | Read all tabs with headers |
 | `cat --comments DOC` | Line-numbered content with inline comment annotations |
@@ -98,9 +104,9 @@ gdoc cat 1aBcDeFg...
 
 | Command | Description |
 |---------|-------------|
-| `edit DOC OLD NEW` | Find and replace text with markdown formatting (`--all` for all) |
+| `edit DOC OLD NEW` | Find and replace text with markdown formatting, including tables (`--all` for all) |
 | `write DOC FILE` | Overwrite document from a local markdown file |
-| `new TITLE` | Create a blank document (`--folder` to specify location) |
+| `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
 | `cp DOC TITLE` | Duplicate a document |
 
 ### Comments
@@ -213,6 +219,42 @@ gdoc cat --all-tabs DOC
 ```
 
 `--tab` and `--all-tabs` are mutually exclusive with `--comments`. They work with `--json` and `--plain`.
+
+## Byte truncation
+
+Use `--max-bytes` on `cat` to limit output size. Truncation is UTF-8-safe (never splits a multi-byte character):
+
+```bash
+gdoc cat --max-bytes 5000 DOC   # first ~5KB of content
+```
+
+Works with all `cat` modes: default, `--tab`, `--all-tabs`, `--comments`. In `--json` mode, truncation applies to the content field, not the JSON envelope.
+
+## Native table insertion
+
+`edit` supports markdown tables in replacement text. Tables are inserted as native Google Docs tables:
+
+```bash
+gdoc edit DOC "placeholder" "| Name | Score |
+|------|-------|
+| Alice | 95 |
+| Bob | 87 |"
+```
+
+Tables require a single match — use without `--all` when the replacement contains a table.
+
+## Import from file
+
+Create a document from a local markdown file with `new --file`:
+
+```bash
+gdoc new "Report" --file report.md
+```
+
+Images in the markdown are handled automatically:
+- **Remote images** (`https://...`) are inserted directly via URL
+- **Local images** are uploaded to Drive temporarily, inserted, then cleaned up
+- Supported formats: PNG, JPG, JPEG, GIF, WebP
 
 ## Command allowlist
 

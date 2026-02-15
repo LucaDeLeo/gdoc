@@ -17,6 +17,18 @@ class GdocArgumentParser(argparse.ArgumentParser):
         sys.exit(3)
 
 
+def _truncate_bytes(text: str, max_bytes: int) -> str:
+    """Truncate text to at most max_bytes UTF-8 bytes.
+
+    Handles multi-byte characters safely by decoding with errors='ignore'.
+    Returns the original text if max_bytes is 0 (unlimited).
+    """
+    if max_bytes <= 0:
+        return text
+    encoded = text.encode("utf-8")[:max_bytes]
+    return encoded.decode("utf-8", errors="ignore")
+
+
 def _resolve_doc_id(raw: str) -> str:
     """Extract doc ID, wrapping ValueError as GdocError(exit_code=3)."""
     from gdoc.util import extract_doc_id
@@ -44,6 +56,8 @@ def cmd_cat(args) -> int:
             exit_code=3,
         )
 
+    max_bytes = getattr(args, "max_bytes", 0)
+
     if tab or all_tabs:
         from gdoc.notify import pre_flight
         change_info = pre_flight(doc_id, quiet=quiet)
@@ -67,6 +81,7 @@ def cmd_cat(args) -> int:
             if match is None:
                 raise GdocError(f"tab not found: {tab}", exit_code=3)
             content = get_tab_text(match)
+            content = _truncate_bytes(content, max_bytes)
 
             from gdoc.format import format_json, get_output_mode
             mode = get_output_mode(args)
@@ -81,6 +96,7 @@ def cmd_cat(args) -> int:
                 parts.append(f"=== Tab: {t['title']} ===\n")
                 parts.append(get_tab_text(t))
             content = "".join(parts)
+            content = _truncate_bytes(content, max_bytes)
 
             from gdoc.format import format_json, get_output_mode
             mode = get_output_mode(args)
@@ -111,6 +127,7 @@ def cmd_cat(args) -> int:
 
         from gdoc.annotate import annotate_markdown
         annotated = annotate_markdown(markdown, comments, show_resolved=include_resolved)
+        annotated = _truncate_bytes(annotated, max_bytes)
 
         from gdoc.format import get_output_mode, format_json
         mode = get_output_mode(args)
@@ -133,6 +150,7 @@ def cmd_cat(args) -> int:
     from gdoc.api.drive import export_doc
 
     content = export_doc(doc_id, mime_type=mime_type)
+    content = _truncate_bytes(content, max_bytes)
 
     from gdoc.format import get_output_mode, format_json
 
@@ -418,6 +436,15 @@ def cmd_edit(args) -> int:
     if not replace_all and len(matches) > 1:
         raise GdocError(
             f"multiple matches ({len(matches)} found). Use --all",
+            exit_code=3,
+        )
+
+    # Check if replacement contains tables — not supported with --all
+    from gdoc.mdparse import parse_markdown as _parse_md
+    _parsed = _parse_md(new_text)
+    if _parsed.tables and len(matches) > 1:
+        raise GdocError(
+            "replacement with tables not supported with --all",
             exit_code=3,
         )
 
@@ -1186,8 +1213,145 @@ def cmd_auth(args) -> int:
     return 0
 
 
+def _cmd_new_from_file(args) -> int:
+    """Create a doc from a local markdown file, with image support."""
+    import os
+
+    title = args.title
+    file_path = args.file_path
+    folder_id = None
+    if getattr(args, "folder", None):
+        folder_id = _resolve_doc_id(args.folder)
+
+    if not os.path.isfile(file_path):
+        raise GdocError(f"file not found: {file_path}", exit_code=3)
+    try:
+        with open(file_path) as f:
+            content = f.read()
+    except OSError as e:
+        raise GdocError(f"cannot read file: {e}", exit_code=3)
+
+    base_dir = os.path.dirname(os.path.abspath(file_path))
+
+    # Extract images from markdown
+    from gdoc.mdimport import extract_images
+
+    try:
+        cleaned, images = extract_images(content, base_dir)
+    except ValueError as e:
+        raise GdocError(str(e), exit_code=3)
+
+    # Create doc from markdown content
+    from gdoc.api.drive import create_doc_from_markdown
+
+    result = create_doc_from_markdown(
+        title, cleaned, folder_id=folder_id,
+    )
+    new_id = result["id"]
+    version = result.get("version")
+    url = result.get("webViewLink", "")
+
+    # Insert images if any
+    if images:
+        _insert_images(new_id, images)
+
+    # Output
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            id=new_id,
+            title=result.get("name", title),
+            url=url,
+        ))
+    elif mode == "plain":
+        print(f"id\t{new_id}")
+    elif mode == "verbose":
+        print(f"Created: {result.get('name', title)}")
+        print(f"ID: {new_id}")
+        print(f"URL: {url}")
+        print(f"Images: {len(images)}")
+    else:
+        print(new_id)
+
+    # Seed state
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        new_id, None, command="new",
+        quiet=False, command_version=version,
+    )
+    return 0
+
+
+def _insert_images(doc_id: str, images) -> None:
+    """Insert images into a doc by finding placeholders."""
+    from gdoc.api.docs import find_text_in_document, get_document
+    from gdoc.api.drive import delete_file, upload_temp_image
+
+    temp_file_ids: list[str] = []
+    try:
+        for img in reversed(images):
+            document = get_document(doc_id)
+            matches = find_text_in_document(
+                document, img.placeholder, match_case=True,
+            )
+            if not matches:
+                continue
+
+            match = matches[0]
+
+            # Resolve image URI
+            if img.is_remote:
+                uri = img.path
+            else:
+                result = upload_temp_image(
+                    img.resolved_path, img.mime_type,
+                )
+                temp_file_ids.append(result["id"])
+                uri = result["webContentLink"]
+
+            # Delete placeholder + insert image
+            from gdoc.api.docs import get_docs_service
+
+            service = get_docs_service()
+            requests = [
+                {
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": match["startIndex"],
+                            "endIndex": match["endIndex"],
+                        }
+                    }
+                },
+                {
+                    "insertInlineImage": {
+                        "location": {
+                            "index": match["startIndex"],
+                        },
+                        "uri": uri,
+                    }
+                },
+            ]
+            service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": requests},
+            ).execute()
+    finally:
+        # Cleanup temp files
+        for fid in temp_file_ids:
+            try:
+                delete_file(fid)
+            except Exception:
+                pass
+
+
 def cmd_new(args) -> int:
     """Handler for `gdoc new`."""
+    if getattr(args, "file_path", None):
+        return _cmd_new_from_file(args)
+
     title = args.title
     folder_id = None
     if getattr(args, "folder", None):
@@ -1407,6 +1571,10 @@ def build_parser() -> GdocArgumentParser:
         "--all-tabs", action="store_true", help="Read all tabs"
     )
     cat_p.add_argument(
+        "--max-bytes", type=int, default=0,
+        help="Truncate output at N bytes (0 = unlimited)",
+    )
+    cat_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     cat_p.set_defaults(func=cmd_cat)
@@ -1600,6 +1768,10 @@ def build_parser() -> GdocArgumentParser:
     new_p = sub.add_parser("new", parents=[output_parent], help="Create a blank document")
     new_p.add_argument("title", help="Document title")
     new_p.add_argument("--folder", help="Folder ID to place doc in")
+    new_p.add_argument(
+        "--file", dest="file_path",
+        help="Create doc from a local markdown file",
+    )
     new_p.set_defaults(func=cmd_new)
 
     # cp

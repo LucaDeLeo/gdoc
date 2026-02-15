@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gdoc.cli import cmd_cat
+from gdoc.cli import _truncate_bytes, cmd_cat
 from gdoc.notify import ChangeInfo
 from gdoc.util import GdocError
 
@@ -21,6 +21,7 @@ def _make_args(**overrides):
         "all": False,
         "tab": None,
         "all_tabs": False,
+        "max_bytes": 0,
         "json": False,
         "verbose": False,
         "quiet": False,
@@ -295,3 +296,86 @@ class TestCatAwareness:
         with pytest.raises(GdocError):
             cmd_cat(args)
         mock_update.assert_not_called()
+
+
+class TestTruncateBytes:
+    def test_ascii_truncation(self):
+        assert _truncate_bytes("hello world", 5) == "hello"
+
+    def test_zero_means_unlimited(self):
+        text = "hello world"
+        assert _truncate_bytes(text, 0) == text
+
+    def test_negative_means_unlimited(self):
+        text = "hello world"
+        assert _truncate_bytes(text, -1) == text
+
+    def test_larger_than_content(self):
+        text = "short"
+        assert _truncate_bytes(text, 1000) == text
+
+    def test_exact_boundary(self):
+        text = "abc"
+        assert _truncate_bytes(text, 3) == "abc"
+
+    def test_utf8_multibyte_safety(self):
+        # Euro sign is 3 bytes in UTF-8
+        text = "\u20ac\u20ac"  # 6 bytes total
+        # Cutting at 4 bytes: first euro (3 bytes) fits, second is partial
+        result = _truncate_bytes(text, 4)
+        assert result == "\u20ac"
+
+    def test_utf8_two_byte_char(self):
+        # 'e' with accent (U+00E9) is 2 bytes
+        text = "\u00e9\u00e9\u00e9"  # 6 bytes
+        result = _truncate_bytes(text, 3)
+        assert result == "\u00e9"  # only 1 fits in 3 bytes (2 bytes + partial)
+
+    def test_empty_string(self):
+        assert _truncate_bytes("", 10) == ""
+
+
+class TestCatMaxBytes:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="Hello World, this is long content")
+    def test_max_bytes_truncates(self, _export, _svc, _pf, _update, capsys):
+        args = _make_args(max_bytes=5)
+        rc = cmd_cat(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert out == "Hello"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="Hello")
+    def test_max_bytes_zero_unlimited(self, _export, _svc, _pf, _update, capsys):
+        args = _make_args(max_bytes=0)
+        rc = cmd_cat(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert out == "Hello"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="Hi")
+    def test_max_bytes_larger_than_content(self, _export, _svc, _pf, _update, capsys):
+        args = _make_args(max_bytes=1000)
+        rc = cmd_cat(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert out == "Hi"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="Hello World")
+    def test_max_bytes_json_truncates_content(self, _export, _svc, _pf, _update, capsys):
+        args = _make_args(max_bytes=5, json=True)
+        rc = cmd_cat(args)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["content"] == "Hello"

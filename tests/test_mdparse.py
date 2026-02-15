@@ -223,6 +223,75 @@ class TestParseMixed:
         assert len(bullets) == 2
 
 
+class TestParseTable:
+    def test_simple_table(self):
+        md = "| A | B |\n|---|---|\n| 1 | 2 |"
+        result = parse_markdown(md)
+        assert len(result.tables) == 1
+        t = result.tables[0]
+        assert t.num_rows == 2
+        assert t.num_cols == 2
+        assert t.rows == [["A", "B"], ["1", "2"]]
+        # Placeholder newline in plain text
+        assert result.plain_text == "\n"
+
+    def test_table_with_surrounding_text(self):
+        md = "Before\n| A | B |\n|---|---|\n| 1 | 2 |\nAfter"
+        result = parse_markdown(md)
+        assert len(result.tables) == 1
+        assert "Before" in result.plain_text
+        assert "After" in result.plain_text
+        t = result.tables[0]
+        assert t.rows == [["A", "B"], ["1", "2"]]
+
+    def test_no_separator_not_a_table(self):
+        md = "| A | B |\n| 1 | 2 |"
+        result = parse_markdown(md)
+        assert len(result.tables) == 0
+        # Treated as normal lines
+        assert "A" in result.plain_text
+
+    def test_uneven_columns_padded(self):
+        md = "| A | B | C |\n|---|---|---|\n| 1 |"
+        result = parse_markdown(md)
+        assert len(result.tables) == 1
+        t = result.tables[0]
+        assert t.num_cols == 3
+        assert t.rows[1] == ["1", "", ""]
+
+    def test_extra_columns_trimmed(self):
+        md = "| A | B |\n|---|---|\n| 1 | 2 | 3 | 4 |"
+        result = parse_markdown(md)
+        t = result.tables[0]
+        assert t.num_cols == 2
+        assert t.rows[1] == ["1", "2"]
+
+    def test_multiple_tables(self):
+        md = (
+            "| A |\n|---|\n| 1 |\n"
+            "Text\n"
+            "| X | Y |\n|---|---|\n| 3 | 4 |"
+        )
+        result = parse_markdown(md)
+        assert len(result.tables) == 2
+        assert result.tables[0].num_cols == 1
+        assert result.tables[1].num_cols == 2
+
+    def test_table_offset_tracked(self):
+        md = "Hello\n| A |\n|---|\n| 1 |"
+        result = parse_markdown(md)
+        t = result.tables[0]
+        # "Hello\n" = 6 chars, table placeholder at offset 6
+        assert t.plain_text_offset == 6
+
+    def test_multi_row_data(self):
+        md = "| H1 | H2 |\n|---|---|\n| a | b |\n| c | d |\n| e | f |"
+        result = parse_markdown(md)
+        t = result.tables[0]
+        assert t.num_rows == 4  # header + 3 data rows
+        assert t.rows[3] == ["e", "f"]
+
+
 class TestToDocsRequests:
     def test_plain_text_insert(self):
         parsed = parse_markdown("hello")

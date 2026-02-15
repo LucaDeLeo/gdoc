@@ -190,6 +190,104 @@ def get_file_version(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
+def create_doc_from_markdown(
+    title: str,
+    content: str,
+    folder_id: str | None = None,
+) -> dict:
+    """Create a Google Doc by uploading markdown content.
+
+    Drive auto-converts the markdown to Google Docs format.
+
+    Args:
+        title: Document title.
+        content: Markdown content string.
+        folder_id: Optional folder ID to place the doc in.
+
+    Returns:
+        Dict with keys: id, name, version (int), webViewLink.
+    """
+    import io
+
+    from googleapiclient.http import MediaIoBaseUpload
+
+    body: dict = {
+        "name": title,
+        "mimeType": "application/vnd.google-apps.document",
+    }
+    if folder_id:
+        body["parents"] = [folder_id]
+
+    media = MediaIoBaseUpload(
+        io.BytesIO(content.encode("utf-8")),
+        mimetype="text/markdown",
+        resumable=False,
+    )
+
+    try:
+        service = get_drive_service()
+        result = (
+            service.files()
+            .create(
+                body=body,
+                media_body=media,
+                fields="id, name, version, webViewLink",
+            )
+            .execute()
+        )
+        if "version" in result:
+            result["version"] = int(result["version"])
+        return result
+    except HttpError as e:
+        _translate_http_error(e, folder_id or "")
+
+
+def upload_temp_image(file_path: str, mime_type: str) -> dict:
+    """Upload a local image to Drive as a temporary file.
+
+    Sets public read permission so the image URL can be used in
+    insertInlineImage requests.
+
+    Args:
+        file_path: Path to the local image file.
+        mime_type: MIME type of the image.
+
+    Returns:
+        Dict with keys: id, webContentLink.
+    """
+    from googleapiclient.http import MediaFileUpload
+
+    try:
+        service = get_drive_service()
+        media = MediaFileUpload(file_path, mimetype=mime_type)
+        result = (
+            service.files()
+            .create(
+                body={"name": f"gdoc-temp-{id(file_path)}"},
+                media_body=media,
+                fields="id, webContentLink",
+            )
+            .execute()
+        )
+        # Make publicly readable for inline image insertion
+        service.permissions().create(
+            fileId=result["id"],
+            body={"type": "anyone", "role": "reader"},
+        ).execute()
+        return result
+    except HttpError as e:
+        _translate_http_error(e, file_path)
+
+
+def delete_file(file_id: str) -> None:
+    """Delete a file from Drive."""
+    try:
+        service = get_drive_service()
+        service.files().delete(fileId=file_id).execute()
+    except HttpError as e:
+        _translate_http_error(e, file_id)
+
+
 def create_doc(title: str, folder_id: str | None = None) -> dict:
     """Create a new blank Google Doc.
 

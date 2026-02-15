@@ -17,11 +17,22 @@ class StyleRange:
 
 
 @dataclass
+class TableData:
+    """A parsed markdown table with cell content and position info."""
+
+    rows: list[list[str]]
+    num_rows: int
+    num_cols: int
+    plain_text_offset: int  # byte offset in plain_text where placeholder sits
+
+
+@dataclass
 class ParsedMarkdown:
     """Result of parsing markdown: plain text + style annotations."""
 
     plain_text: str
     styles: list[StyleRange] = field(default_factory=list)
+    tables: list[TableData] = field(default_factory=list)
 
 
 # Inline patterns — order matters (bold+italic before bold/italic)
@@ -40,6 +51,10 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 # List item patterns
 _BULLET_RE = re.compile(r"^[-*]\s+(.+)$")
 _NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)$")
+
+# Table patterns
+_TABLE_ROW_RE = re.compile(r"^\|(.+)\|$")
+_TABLE_SEP_RE = re.compile(r"^\|[\s:]*-{3,}[\s:]*(\|[\s:]*-{3,}[\s:]*)*\|$")
 
 
 def _parse_inline(text: str) -> tuple[str, list[StyleRange]]:
@@ -154,11 +169,52 @@ def parse_markdown(text: str) -> ParsedMarkdown:
     lines = text.split("\n")
     plain_parts: list[str] = []
     all_styles: list[StyleRange] = []
+    all_tables: list[TableData] = []
     offset = 0
 
     i = 0
     while i < len(lines):
         line = lines[i]
+
+        # Table: detect header row + separator row + data rows
+        if (
+            _TABLE_ROW_RE.match(line)
+            and i + 1 < len(lines)
+            and _TABLE_SEP_RE.match(lines[i + 1])
+        ):
+            # Consume all table rows
+            table_rows: list[list[str]] = []
+            # Header row
+            header_cells = [
+                c.strip() for c in line.strip("|").split("|")
+            ]
+            table_rows.append(header_cells)
+            num_cols = len(header_cells)
+            i += 2  # skip header + separator
+            # Data rows
+            while i < len(lines) and _TABLE_ROW_RE.match(lines[i]):
+                cells = [
+                    c.strip()
+                    for c in lines[i].strip("|").split("|")
+                ]
+                # Pad or trim to match column count
+                if len(cells) < num_cols:
+                    cells.extend([""] * (num_cols - len(cells)))
+                elif len(cells) > num_cols:
+                    cells = cells[:num_cols]
+                table_rows.append(cells)
+                i += 1
+
+            # Record table with a placeholder newline
+            all_tables.append(TableData(
+                rows=table_rows,
+                num_rows=len(table_rows),
+                num_cols=num_cols,
+                plain_text_offset=offset,
+            ))
+            plain_parts.append("\n")
+            offset += 1
+            continue
 
         # Heading
         heading_m = _HEADING_RE.match(line)
@@ -271,7 +327,11 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         i += 1
 
     plain_text = "".join(plain_parts)
-    return ParsedMarkdown(plain_text=plain_text, styles=all_styles)
+    return ParsedMarkdown(
+        plain_text=plain_text,
+        styles=all_styles,
+        tables=all_tables,
+    )
 
 
 def to_docs_requests(

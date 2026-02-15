@@ -218,6 +218,118 @@ def find_text_in_document(
     return matches
 
 
+def _find_table_cell_indices(
+    document: dict, table_start_index: int,
+) -> list[list[int]]:
+    """Find the startIndex of each cell's first paragraph in a table.
+
+    Walks body.content to find the table element at or near the given
+    index, then extracts cell paragraph start indices. Searches for the
+    nearest table at or after the index (insertTable may place the table
+    one position after the specified location).
+
+    Returns a 2D list: cell_indices[row][col] = startIndex.
+    """
+    body = document.get("body", {})
+    for element in body.get("content", []):
+        if "table" not in element:
+            continue
+        el_start = element.get("startIndex", 0)
+        # Table may be at index or up to 2 positions after
+        if el_start < table_start_index or el_start > table_start_index + 2:
+            continue
+
+        table = element["table"]
+        cell_indices: list[list[int]] = []
+        for row in table.get("tableRows", []):
+            row_indices: list[int] = []
+            for cell in row.get("tableCells", []):
+                cell_content = cell.get("content", [])
+                if cell_content:
+                    first_para = cell_content[0]
+                    para = first_para.get("paragraph", {})
+                    elements = para.get("elements", [])
+                    if elements:
+                        row_indices.append(
+                            elements[0].get("startIndex", 0)
+                        )
+                    else:
+                        row_indices.append(
+                            first_para.get("startIndex", 0)
+                        )
+                else:
+                    row_indices.append(cell.get("startIndex", 0))
+            cell_indices.append(row_indices)
+        return cell_indices
+
+    return []
+
+
+def _insert_table(
+    doc_id: str,
+    index: int,
+    table,
+) -> None:
+    """Insert a native Google Docs table and populate cells.
+
+    Three-step process:
+    1. insertTable batchUpdate
+    2. documents().get() read-back to find cell indices
+    3. insertText into cells (reverse order to avoid shifts)
+    """
+    try:
+        service = get_docs_service()
+
+        # Step 1: Insert the table structure
+        insert_req = {
+            "insertTable": {
+                "rows": table.num_rows,
+                "columns": table.num_cols,
+                "location": {"index": index},
+            }
+        }
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [insert_req]},
+        ).execute()
+
+        # Step 2: Read back document to find cell positions
+        document = service.documents().get(
+            documentId=doc_id
+        ).execute()
+        cell_indices = _find_table_cell_indices(document, index)
+
+        if not cell_indices:
+            return
+
+        # Step 3: Insert text into cells (reverse order)
+        text_requests: list[dict] = []
+        for r_idx in range(len(cell_indices) - 1, -1, -1):
+            row = cell_indices[r_idx]
+            for c_idx in range(len(row) - 1, -1, -1):
+                cell_text = ""
+                if r_idx < len(table.rows):
+                    row_data = table.rows[r_idx]
+                    if c_idx < len(row_data):
+                        cell_text = row_data[c_idx]
+                if cell_text:
+                    text_requests.append({
+                        "insertText": {
+                            "location": {"index": row[c_idx]},
+                            "text": cell_text,
+                        }
+                    })
+
+        if text_requests:
+            service.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": text_requests},
+            ).execute()
+
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
 def replace_formatted(
     doc_id: str,
     matches: list[dict],
@@ -241,8 +353,12 @@ def replace_formatted(
     """
     from gdoc.mdparse import parse_markdown, to_docs_requests
 
+    parsed = parse_markdown(new_markdown)
+
     # Sort matches by startIndex descending (last-to-first)
-    sorted_matches = sorted(matches, key=lambda m: m["startIndex"], reverse=True)
+    sorted_matches = sorted(
+        matches, key=lambda m: m["startIndex"], reverse=True,
+    )
 
     all_requests: list[dict] = []
 
@@ -257,8 +373,7 @@ def replace_formatted(
             }
         })
 
-        # Parse and insert formatted replacement
-        parsed = parse_markdown(new_markdown)
+        # Insert formatted replacement
         insert_requests = to_docs_requests(parsed, match["startIndex"])
         all_requests.extend(insert_requests)
 
@@ -274,6 +389,16 @@ def replace_formatted(
         service.documents().batchUpdate(
             documentId=doc_id, body=body,
         ).execute()
+
+        # Insert tables if any (after main batchUpdate)
+        if parsed.tables:
+            for table in reversed(parsed.tables):
+                # Adjust index: placeholder is at match start +
+                # table's offset within the plain text
+                for match in sorted_matches:
+                    idx = match["startIndex"] + table.plain_text_offset
+                    _insert_table(doc_id, idx, table)
+
         return len(sorted_matches)
     except HttpError as e:
         _translate_http_error(e, doc_id)
