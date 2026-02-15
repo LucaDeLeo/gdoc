@@ -32,9 +32,66 @@ def cmd_cat(args) -> int:
     doc_id = _resolve_doc_id(args.doc)
 
     quiet = getattr(args, "quiet", False)
+    tab = getattr(args, "tab", None)
+    all_tabs = getattr(args, "all_tabs", False)
 
     if getattr(args, "comments", False) and getattr(args, "plain", False):
         raise GdocError("--comments and --plain are mutually exclusive", exit_code=3)
+
+    if (tab or all_tabs) and getattr(args, "comments", False):
+        raise GdocError(
+            "--tab/--all-tabs and --comments are mutually exclusive",
+            exit_code=3,
+        )
+
+    if tab or all_tabs:
+        from gdoc.notify import pre_flight
+        change_info = pre_flight(doc_id, quiet=quiet)
+
+        from gdoc.api.docs import get_document_tabs, get_tab_text
+
+        tabs = get_document_tabs(doc_id)
+
+        if tab:
+            # Match by title (case-insensitive) first, then by ID
+            match = None
+            for t in tabs:
+                if t["title"].lower() == tab.lower():
+                    match = t
+                    break
+            if match is None:
+                for t in tabs:
+                    if t["id"] == tab:
+                        match = t
+                        break
+            if match is None:
+                raise GdocError(f"tab not found: {tab}", exit_code=3)
+            content = get_tab_text(match)
+
+            from gdoc.format import format_json, get_output_mode
+            mode = get_output_mode(args)
+            if mode == "json":
+                print(format_json(tab=match["title"], content=content))
+            else:
+                print(content, end="")
+        else:
+            # --all-tabs
+            parts = []
+            for t in tabs:
+                parts.append(f"=== Tab: {t['title']} ===\n")
+                parts.append(get_tab_text(t))
+            content = "".join(parts)
+
+            from gdoc.format import format_json, get_output_mode
+            mode = get_output_mode(args)
+            if mode == "json":
+                print(format_json(content=content))
+            else:
+                print(content, end="")
+
+        from gdoc.state import update_state_after_command
+        update_state_after_command(doc_id, change_info, command="cat", quiet=quiet)
+        return 0
 
     if getattr(args, "comments", False):
         # Annotated view: line-numbered content + inline comment annotations
@@ -88,6 +145,47 @@ def cmd_cat(args) -> int:
     # Update state after success
     from gdoc.state import update_state_after_command
     update_state_after_command(doc_id, change_info, command="cat", quiet=quiet)
+
+    return 0
+
+
+def cmd_tabs(args) -> int:
+    """Handler for `gdoc tabs`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.docs import get_document_tabs
+
+    tabs = get_document_tabs(doc_id)
+
+    from gdoc.format import get_output_mode, format_json
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        json_tabs = [
+            {"id": t["id"], "title": t["title"], "index": t["index"],
+             "nesting_level": t["nesting_level"]}
+            for t in tabs
+        ]
+        print(format_json(tabs=json_tabs))
+    elif mode == "plain":
+        for t in tabs:
+            print(f"{t['id']}\t{t['title']}")
+    elif mode == "verbose":
+        for t in tabs:
+            print(f"{t['id']}\t{t['title']}\tindex={t['index']}\tlevel={t['nesting_level']}")
+    elif not tabs:
+        print("No tabs.")
+    else:
+        for t in tabs:
+            indent = "  " * t["nesting_level"]
+            print(f"{indent}{t['id']}\t{t['title']}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(doc_id, change_info, command="tabs", quiet=quiet)
 
     return 0
 
@@ -1301,10 +1399,25 @@ def build_parser() -> GdocArgumentParser:
         "--all", action="store_true",
         help="Include resolved comments (with --comments)",
     )
+    cat_tab_group = cat_p.add_mutually_exclusive_group()
+    cat_tab_group.add_argument(
+        "--tab", help="Read a specific tab by title or ID"
+    )
+    cat_tab_group.add_argument(
+        "--all-tabs", action="store_true", help="Read all tabs"
+    )
     cat_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     cat_p.set_defaults(func=cmd_cat)
+
+    # tabs
+    tabs_p = sub.add_parser("tabs", parents=[output_parent], help="List tabs in a doc")
+    tabs_p.add_argument("doc", help="Document ID or URL")
+    tabs_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    tabs_p.set_defaults(func=cmd_tabs)
 
     # edit
     edit_p = sub.add_parser(

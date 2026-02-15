@@ -77,6 +77,76 @@ def replace_all_text(
         _translate_http_error(e, doc_id)
 
 
+def _extract_paragraphs_text(content: list[dict]) -> str:
+    """Extract concatenated text from body content paragraph elements."""
+    parts = []
+    for element in content:
+        paragraph = element.get("paragraph")
+        if paragraph is None:
+            continue
+        for pe in paragraph.get("elements", []):
+            text_run = pe.get("textRun")
+            if text_run is None:
+                continue
+            parts.append(text_run.get("content", ""))
+    return "".join(parts)
+
+
+def flatten_tabs(tabs: list[dict], _level: int = 0) -> list[dict]:
+    """Recursively flatten a tabs tree into a flat list with nesting level."""
+    result = []
+    for tab in tabs:
+        props = tab.get("tabProperties", {})
+        doc_tab = tab.get("documentTab", {})
+        result.append({
+            "id": props.get("tabId", ""),
+            "title": props.get("title", ""),
+            "index": props.get("index", 0),
+            "nesting_level": _level,
+            "body": doc_tab.get("body", {}),
+        })
+        for child in tab.get("childTabs", []):
+            result.extend(flatten_tabs([child], _level=_level + 1))
+    return result
+
+
+def get_document_tabs(doc_id: str) -> list[dict]:
+    """Fetch document with all tab content and return flattened tab list."""
+    try:
+        service = get_docs_service()
+        doc = (
+            service.documents()
+            .get(documentId=doc_id, includeTabsContent=True)
+            .execute()
+        )
+        return flatten_tabs(doc.get("tabs", []))
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def get_tab_text(tab: dict) -> str:
+    """Extract plain text from a tab's body content.
+
+    Handles paragraphs and tables (tab-joined cells per row).
+    """
+    body = tab.get("body", {})
+    content = body.get("content", [])
+    parts = []
+    for element in content:
+        if "paragraph" in element:
+            parts.append(_extract_paragraphs_text([element]))
+        elif "table" in element:
+            table = element["table"]
+            for row in table.get("tableRows", []):
+                cells = []
+                for cell in row.get("tableCells", []):
+                    cell_content = cell.get("content", [])
+                    cell_text = _extract_paragraphs_text(cell_content).strip()
+                    cells.append(cell_text)
+                parts.append("\t".join(cells) + "\n")
+    return "".join(parts)
+
+
 def get_document(doc_id: str) -> dict:
     """Fetch the full document structure via documents().get().
 

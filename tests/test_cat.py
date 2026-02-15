@@ -19,6 +19,8 @@ def _make_args(**overrides):
         "plain": False,
         "comments": False,
         "all": False,
+        "tab": None,
+        "all_tabs": False,
         "json": False,
         "verbose": False,
         "quiet": False,

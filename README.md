@@ -44,6 +44,15 @@ gdoc find "quarterly report"
 # Read a document as markdown
 gdoc cat DOC_ID
 
+# Read a specific tab
+gdoc cat --tab "Notes" DOC_ID
+
+# Read all tabs
+gdoc cat --all-tabs DOC_ID
+
+# List tabs in a document
+gdoc tabs DOC_ID
+
 # Read with inline comment annotations
 gdoc cat --comments DOC_ID
 
@@ -77,7 +86,10 @@ gdoc cat 1aBcDeFg...
 | Command | Description |
 |---------|-------------|
 | `cat DOC` | Export document as markdown (or `--plain` for plain text) |
+| `cat --tab NAME DOC` | Read a specific tab by title or ID |
+| `cat --all-tabs DOC` | Read all tabs with headers |
 | `cat --comments DOC` | Line-numbered content with inline comment annotations |
+| `tabs DOC` | List all tabs in a document |
 | `info DOC` | Show title, owner, modified date, word count |
 | `ls [FOLDER]` | List files in Drive root or a folder (`--type docs\|sheets\|all`) |
 | `find QUERY` | Search files by name or content |
@@ -178,6 +190,29 @@ Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight check
 ```
 
 Comments whose anchor text has been deleted, is too short, or is ambiguous are grouped in an `[UNANCHORED]` section at the end.
+
+## Tabs
+
+Google Docs supports multiple tabs per document. The default `cat` command uses Drive export which only returns the first tab. Use `--tab` or `--all-tabs` to read tab content via the Docs API:
+
+```bash
+# List tabs in a document
+gdoc tabs DOC
+# t.0	Tab 1
+# t.abc	Notes
+
+# Read a specific tab by title (case-insensitive) or ID
+gdoc cat --tab "Notes" DOC
+
+# Read all tabs with headers
+gdoc cat --all-tabs DOC
+# === Tab: Tab 1 ===
+# ...content...
+# === Tab: Notes ===
+# ...content...
+```
+
+`--tab` and `--all-tabs` are mutually exclusive with `--comments`. They work with `--json` and `--plain`.
 
 ## Command allowlist
 
