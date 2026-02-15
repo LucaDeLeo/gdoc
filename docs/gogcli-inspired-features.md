@@ -2,7 +2,7 @@
 
 Features inspired by [gogcli](https://github.com/steipete/gogcli), assessed against gdoc's architecture and AI-agent-first design.
 
-**Status**: 5 of 9 features implemented (v0.2.0). Remaining 4 are larger efforts.
+**Status**: 6 of 9 features implemented (v0.3.0). Remaining 3 are larger efforts.
 
 | # | Feature | Status |
 |---|---------|--------|
@@ -11,8 +11,8 @@ Features inspired by [gogcli](https://github.com/steipete/gogcli), assessed agai
 | 9 | `--plain` output mode (TSV) | **Done** |
 | 11 | Confirmation for destructive ops | **Done** |
 | 12 | Command allowlist | **Done** |
+| 2 | Tabs support | **Done** |
 | 1 | Docs API `cat` | Planned |
-| 2 | Tabs support | Planned |
 | 4 | Native table insertion | Planned |
 | 5 | Image import on `new --file` | Planned |
 
@@ -46,36 +46,20 @@ Features inspired by [gogcli](https://github.com/steipete/gogcli), assessed agai
 
 ---
 
-## 2. Tabs support
+## 2. Tabs support -- DONE
 
 **What**: Support multi-tab Google Docs via `--tab` and `--all-tabs` flags on `cat`, plus a `tabs` subcommand to list tabs.
 
-**Why**: Google Docs now supports multiple tabs per document. Without tab awareness, `cat` only returns the default tab's content, silently ignoring others.
+**Implemented in v0.3.0**:
 
-**Current gdoc**: No tab awareness. `cat` exports via Drive (returns default tab only). `get_document()` in `api/docs.py` doesn't pass `includeTabsContent`.
+- `gdoc tabs DOC` — lists all tabs (terse/plain/verbose/json), nested tabs indented
+- `gdoc cat --tab NAME_OR_ID DOC` — reads a specific tab by title (case-insensitive) or ID
+- `gdoc cat --all-tabs DOC` — reads all tabs with `=== Tab: Title ===` headers
+- API: `flatten_tabs()`, `get_document_tabs()`, `get_tab_text()`, `_extract_paragraphs_text()` in `gdoc/api/docs.py`
+- `--tab`/`--all-tabs` mutually exclusive with each other (argparse) and with `--comments` (handler)
+- 45 new tests across `test_tabs_api.py`, `test_tabs_cmd.py`, `test_cat_tabs.py`
 
-**gogcli approach**: Uses `IncludeTabsContent(true)` on the Docs API. `flattenTabs()` recursively collects all tabs (including nested child tabs). `findTab()` looks up by ID or case-insensitive title. `--tab "Notes"` reads one tab, `--all-tabs` reads all with headers.
-
-**Implementation plan**:
-
-1. **New API functions** in `gdoc/api/docs.py`:
-   - `get_document_tabs(doc_id) -> list[dict]` — calls `documents().get(includeTabsContent=True)`, returns flat list of tab dicts with `{id, title, index, body}`.
-   - `get_tab_text(tab, max_bytes=0) -> str` — extract text from a single tab's body.
-   - Helper: `flatten_tabs(tabs)` — recursive flattener for nested child tabs.
-
-2. **New `tabs` subcommand**:
-   - `gdoc tabs DOC` — list all tabs (id, title, index).
-   - Terse: `tab_id\ttitle`, verbose adds index + nesting level, JSON returns full list.
-
-3. **New flags on `cat`**:
-   - `--tab NAME_OR_ID` — read only this tab (case-insensitive title match, falls back to ID match).
-   - `--all-tabs` — read all tabs, separated by `=== Tab: Title ===` headers.
-   - `--tab` and `--all-tabs` mutually exclusive.
-   - These flags force the Docs API path (Drive export doesn't support tabs).
-
-4. **Tests**: Mock multi-tab document response, verify tab listing, single tab read, all-tabs output.
-
-**Files to modify**: `gdoc/api/docs.py`, `gdoc/cli.py` (new subcommand + cat flags), new tests.
+**Files modified**: `gdoc/api/docs.py`, `gdoc/cli.py`, `tests/test_cat.py`, 3 new test files.
 
 ---
 
@@ -269,9 +253,12 @@ Completed (v0.2.0):
 4. ~~**#11 Destructive confirmation**~~ -- Done
 5. ~~**#12 Command allowlist**~~ -- Done
 
+Completed (v0.3.0):
+
+6. ~~**#2 Tabs support**~~ -- Done
+
 Remaining (larger efforts):
 
-6. **#1 Docs API cat** — 2 files, ~80 lines
-7. **#2 Tabs support** — 2 files, ~120 lines (builds on #1)
+7. **#1 Docs API cat** — 2 files, ~80 lines
 8. **#4 Native table insertion** — 2 files, ~100 lines
 9. **#5 Image import** — 4 files, ~200 lines (most complex)
