@@ -271,6 +271,11 @@ def parse_markdown(text: str) -> ParsedMarkdown:
 
             all_styles.append(StyleRange(
                 start=para_start, end=offset,
+                style={"namedStyleType": "NORMAL_TEXT"},
+                type="paragraph_style",
+            ))
+            all_styles.append(StyleRange(
+                start=para_start, end=offset,
                 style={"bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"},
                 type="bullets",
             ))
@@ -300,6 +305,11 @@ def parse_markdown(text: str) -> ParsedMarkdown:
 
             all_styles.append(StyleRange(
                 start=para_start, end=offset,
+                style={"namedStyleType": "NORMAL_TEXT"},
+                type="paragraph_style",
+            ))
+            all_styles.append(StyleRange(
+                start=para_start, end=offset,
                 style={"bulletPreset": "NUMBERED_DECIMAL_ALPHA_ROMAN"},
                 type="bullets",
             ))
@@ -323,6 +333,14 @@ def parse_markdown(text: str) -> ParsedMarkdown:
 
         plain_parts.append("\n")
         offset += 1
+
+        # Explicit NORMAL_TEXT so inserted paragraphs don't inherit
+        # the style of the paragraph at the insertion point.
+        all_styles.append(StyleRange(
+            start=para_start, end=offset,
+            style={"namedStyleType": "NORMAL_TEXT"},
+            type="paragraph_style",
+        ))
 
         i += 1
 
@@ -375,18 +393,7 @@ def to_docs_requests(
         }
     })
 
-    # 2. Reset all inserted paragraphs to NORMAL_TEXT so they don't
-    #    inherit the style of the paragraph at the insertion point.
-    end_index = insert_index + len(parsed.plain_text)
-    requests.append({
-        "updateParagraphStyle": {
-            "range": _range(insert_index, end_index),
-            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-            "fields": "namedStyleType",
-        }
-    })
-
-    # 3. Apply text styles (bold, italic, code, link)
+    # 2. Apply text styles (bold, italic, code, link)
     for sr in parsed.styles:
         if sr.type == "text_style":
             # Build the fields mask from the style keys
@@ -402,7 +409,7 @@ def to_docs_requests(
                 }
             })
 
-    # 4. Apply paragraph styles (headings)
+    # 3. Apply paragraph styles (headings, NORMAL_TEXT)
     for sr in parsed.styles:
         if sr.type == "paragraph_style":
             requests.append({
@@ -416,7 +423,7 @@ def to_docs_requests(
                 }
             })
 
-    # 4. Apply bullet styles
+    # 4. Apply bullet styles (after paragraph styles)
     for sr in parsed.styles:
         if sr.type == "bullets":
             requests.append({
