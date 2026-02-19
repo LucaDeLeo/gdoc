@@ -425,11 +425,26 @@ def cmd_edit(args) -> int:
     # Get document structure + revision ID
     from gdoc.api.docs import find_text_in_document, get_document, replace_formatted
 
-    document = get_document(doc_id)
-    revision_id = document.get("revisionId", "")
+    tab_name = getattr(args, "tab", None)
+    tab_id = None
 
-    # Find matches in document
-    matches = find_text_in_document(document, old_text, match_case=case_sensitive)
+    if tab_name:
+        from gdoc.api.docs import flatten_tabs, resolve_tab, get_docs_service
+        service = get_docs_service()
+        doc = service.documents().get(
+            documentId=doc_id, includeTabsContent=True
+        ).execute()
+        revision_id = doc.get("revisionId", "")
+        tabs = flatten_tabs(doc.get("tabs", []))
+        tab_match = resolve_tab(tabs, tab_name)
+        tab_id = tab_match["id"]
+        matches = find_text_in_document(
+            None, old_text, match_case=case_sensitive, body=tab_match["body"],
+        )
+    else:
+        document = get_document(doc_id)
+        revision_id = document.get("revisionId", "")
+        matches = find_text_in_document(document, old_text, match_case=case_sensitive)
 
     if not matches:
         raise GdocError("no match found", exit_code=3)
@@ -450,7 +465,7 @@ def cmd_edit(args) -> int:
 
     # Perform formatted replacement via Docs API batchUpdate
     occurrences = replace_formatted(
-        doc_id, matches, new_text, revision_id,
+        doc_id, matches, new_text, revision_id, tab_id=tab_id,
     )
 
     # Get post-edit version for state tracking (Decision #12)
@@ -1685,6 +1700,9 @@ def build_parser() -> GdocArgumentParser:
     )
     edit_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    edit_p.add_argument(
+        "--tab", help="Target a specific tab by title or ID"
     )
     edit_p.set_defaults(func=cmd_edit)
 

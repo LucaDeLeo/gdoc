@@ -335,13 +335,16 @@ def parse_markdown(text: str) -> ParsedMarkdown:
 
 
 def to_docs_requests(
-    parsed: ParsedMarkdown, insert_index: int,
+    parsed: ParsedMarkdown,
+    insert_index: int,
+    tab_id: str | None = None,
 ) -> list[dict]:
     """Convert ParsedMarkdown into Docs API batchUpdate request dicts.
 
     Args:
         parsed: The parsed markdown result.
         insert_index: The document index at which to insert text.
+        tab_id: Optional tab ID for targeting a specific tab.
 
     Returns:
         List of request dicts for batchUpdate.
@@ -351,39 +354,63 @@ def to_docs_requests(
 
     requests: list[dict] = []
 
+    # Helper to build location/range dicts with optional tabId
+    def _location(index: int) -> dict:
+        loc = {"index": index}
+        if tab_id:
+            loc["tabId"] = tab_id
+        return loc
+
+    def _range(start: int, end: int) -> dict:
+        r = {"startIndex": start, "endIndex": end}
+        if tab_id:
+            r["tabId"] = tab_id
+        return r
+
     # 1. Insert the plain text
     requests.append({
         "insertText": {
-            "location": {"index": insert_index},
+            "location": _location(insert_index),
             "text": parsed.plain_text,
         }
     })
 
-    # 2. Apply text styles (bold, italic, code, link)
+    # 2. Reset all inserted paragraphs to NORMAL_TEXT so they don't
+    #    inherit the style of the paragraph at the insertion point.
+    end_index = insert_index + len(parsed.plain_text)
+    requests.append({
+        "updateParagraphStyle": {
+            "range": _range(insert_index, end_index),
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+            "fields": "namedStyleType",
+        }
+    })
+
+    # 3. Apply text styles (bold, italic, code, link)
     for sr in parsed.styles:
         if sr.type == "text_style":
             # Build the fields mask from the style keys
             fields = _text_style_fields(sr.style)
             requests.append({
                 "updateTextStyle": {
-                    "range": {
-                        "startIndex": sr.start + insert_index,
-                        "endIndex": sr.end + insert_index,
-                    },
+                    "range": _range(
+                        sr.start + insert_index,
+                        sr.end + insert_index,
+                    ),
                     "textStyle": sr.style,
                     "fields": fields,
                 }
             })
 
-    # 3. Apply paragraph styles (headings)
+    # 4. Apply paragraph styles (headings)
     for sr in parsed.styles:
         if sr.type == "paragraph_style":
             requests.append({
                 "updateParagraphStyle": {
-                    "range": {
-                        "startIndex": sr.start + insert_index,
-                        "endIndex": sr.end + insert_index,
-                    },
+                    "range": _range(
+                        sr.start + insert_index,
+                        sr.end + insert_index,
+                    ),
                     "paragraphStyle": sr.style,
                     "fields": "namedStyleType",
                 }
@@ -394,10 +421,10 @@ def to_docs_requests(
         if sr.type == "bullets":
             requests.append({
                 "createParagraphBullets": {
-                    "range": {
-                        "startIndex": sr.start + insert_index,
-                        "endIndex": sr.end + insert_index,
-                    },
+                    "range": _range(
+                        sr.start + insert_index,
+                        sr.end + insert_index,
+                    ),
                     "bulletPreset": sr.style["bulletPreset"],
                 }
             })

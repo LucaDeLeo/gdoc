@@ -147,6 +147,28 @@ def get_tab_text(tab: dict) -> str:
     return "".join(parts)
 
 
+def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
+    """Resolve a tab by title (case-insensitive) or ID.
+
+    Args:
+        tabs: Flattened list of tab dicts from flatten_tabs().
+        tab_name: Tab title or ID to match.
+
+    Returns:
+        The matched tab dict.
+
+    Raises:
+        GdocError: If no matching tab is found.
+    """
+    for t in tabs:
+        if t["title"].lower() == tab_name.lower():
+            return t
+    for t in tabs:
+        if t["id"] == tab_name:
+            return t
+    raise GdocError(f"tab not found: {tab_name}", exit_code=3)
+
+
 def get_document(doc_id: str) -> dict:
     """Fetch the full document structure via documents().get().
 
@@ -160,14 +182,21 @@ def get_document(doc_id: str) -> dict:
 
 
 def find_text_in_document(
-    document: dict,
+    document: dict | None,
     text: str,
     match_case: bool = False,
+    body: dict | None = None,
 ) -> list[dict]:
     """Find all occurrences of text within the document body.
 
     Walks body.content → paragraph.elements → textRun.content to
     build a concatenated string with position mapping, then searches.
+
+    Args:
+        document: The full document dict (used if body is None).
+        text: Text to search for.
+        match_case: If True, case-sensitive matching.
+        body: Optional body dict to search in (e.g. from a specific tab).
 
     Returns list of {"startIndex": int, "endIndex": int} in document
     coordinates.
@@ -175,7 +204,8 @@ def find_text_in_document(
     # Build a mapping: (doc_index, char) for each character in the document
     chars: list[tuple[int, str]] = []
 
-    body = document.get("body", {})
+    if body is None:
+        body = document.get("body", {})
     for element in body.get("content", []):
         paragraph = element.get("paragraph")
         if paragraph is None:
@@ -219,7 +249,9 @@ def find_text_in_document(
 
 
 def _find_table_cell_indices(
-    document: dict, table_start_index: int,
+    document: dict | None,
+    table_start_index: int,
+    body: dict | None = None,
 ) -> list[list[int]]:
     """Find the startIndex of each cell's first paragraph in a table.
 
@@ -230,7 +262,8 @@ def _find_table_cell_indices(
 
     Returns a 2D list: cell_indices[row][col] = startIndex.
     """
-    body = document.get("body", {})
+    if body is None:
+        body = document.get("body", {})
     for element in body.get("content", []):
         if "table" not in element:
             continue
@@ -269,6 +302,7 @@ def _insert_table(
     doc_id: str,
     index: int,
     table,
+    tab_id: str | None = None,
 ) -> None:
     """Insert a native Google Docs table and populate cells.
 
@@ -281,11 +315,14 @@ def _insert_table(
         service = get_docs_service()
 
         # Step 1: Insert the table structure
+        location = {"index": index}
+        if tab_id:
+            location["tabId"] = tab_id
         insert_req = {
             "insertTable": {
                 "rows": table.num_rows,
                 "columns": table.num_cols,
-                "location": {"index": index},
+                "location": location,
             }
         }
         service.documents().batchUpdate(
@@ -294,10 +331,20 @@ def _insert_table(
         ).execute()
 
         # Step 2: Read back document to find cell positions
-        document = service.documents().get(
-            documentId=doc_id
-        ).execute()
-        cell_indices = _find_table_cell_indices(document, index)
+        if tab_id:
+            doc = service.documents().get(
+                documentId=doc_id, includeTabsContent=True,
+            ).execute()
+            tabs = flatten_tabs(doc.get("tabs", []))
+            tab_match = resolve_tab(tabs, tab_id)
+            cell_indices = _find_table_cell_indices(
+                None, index, body=tab_match["body"],
+            )
+        else:
+            document = service.documents().get(
+                documentId=doc_id
+            ).execute()
+            cell_indices = _find_table_cell_indices(document, index)
 
         if not cell_indices:
             return
@@ -313,9 +360,12 @@ def _insert_table(
                     if c_idx < len(row_data):
                         cell_text = row_data[c_idx]
                 if cell_text:
+                    cell_location = {"index": row[c_idx]}
+                    if tab_id:
+                        cell_location["tabId"] = tab_id
                     text_requests.append({
                         "insertText": {
-                            "location": {"index": row[c_idx]},
+                            "location": cell_location,
                             "text": cell_text,
                         }
                     })
@@ -445,6 +495,7 @@ def replace_formatted(
     matches: list[dict],
     new_markdown: str,
     revision_id: str,
+    tab_id: str | None = None,
 ) -> int:
     """Replace matched text ranges with formatted content.
 
@@ -457,6 +508,7 @@ def replace_formatted(
         matches: List of {"startIndex": int, "endIndex": int}.
         new_markdown: Replacement text (may contain markdown).
         revision_id: The document revision ID for concurrency control.
+        tab_id: Optional tab ID for targeting a specific tab.
 
     Returns:
         Number of replacements made.
@@ -474,17 +526,22 @@ def replace_formatted(
 
     for match in sorted_matches:
         # Delete the matched range
+        delete_range = {
+            "startIndex": match["startIndex"],
+            "endIndex": match["endIndex"],
+        }
+        if tab_id:
+            delete_range["tabId"] = tab_id
         all_requests.append({
             "deleteContentRange": {
-                "range": {
-                    "startIndex": match["startIndex"],
-                    "endIndex": match["endIndex"],
-                }
+                "range": delete_range,
             }
         })
 
         # Insert formatted replacement
-        insert_requests = to_docs_requests(parsed, match["startIndex"])
+        insert_requests = to_docs_requests(
+            parsed, match["startIndex"], tab_id=tab_id,
+        )
         all_requests.extend(insert_requests)
 
     if not all_requests:
@@ -507,7 +564,7 @@ def replace_formatted(
                 # table's offset within the plain text
                 for match in sorted_matches:
                     idx = match["startIndex"] + table.plain_text_offset
-                    _insert_table(doc_id, idx, table)
+                    _insert_table(doc_id, idx, table, tab_id=tab_id)
 
         return len(sorted_matches)
     except HttpError as e:
