@@ -206,6 +206,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 i += 1
 
             # Record table with a placeholder newline
+            para_start = offset
             all_tables.append(TableData(
                 rows=table_rows,
                 num_rows=len(table_rows),
@@ -214,6 +215,12 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             ))
             plain_parts.append("\n")
             offset += 1
+
+            all_styles.append(StyleRange(
+                start=para_start, end=offset,
+                style={"namedStyleType": "NORMAL_TEXT"},
+                type="paragraph_style",
+            ))
             continue
 
         # Heading

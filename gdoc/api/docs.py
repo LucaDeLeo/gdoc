@@ -370,6 +370,32 @@ def _insert_table(
                         }
                     })
 
+        # Bold the header row (row 0). Indices must account for
+        # shifts from earlier columns' insertions (processed right-to-
+        # left, so col 0's insert shifts col 1+).
+        if cell_indices and table.rows:
+            row = cell_indices[0]
+            shift = 0
+            for c_idx in range(len(row)):
+                cell_text = ""
+                if c_idx < len(table.rows[0]):
+                    cell_text = table.rows[0][c_idx]
+                if cell_text:
+                    bold_range = {
+                        "startIndex": row[c_idx] + shift,
+                        "endIndex": row[c_idx] + shift + len(cell_text),
+                    }
+                    if tab_id:
+                        bold_range["tabId"] = tab_id
+                    text_requests.append({
+                        "updateTextStyle": {
+                            "range": bold_range,
+                            "textStyle": {"bold": True},
+                            "fields": "bold",
+                        }
+                    })
+                shift += len(cell_text)
+
         if text_requests:
             service.documents().batchUpdate(
                 documentId=doc_id,
@@ -490,6 +516,91 @@ def download_image(content_uri: str, dest_path: str) -> None:
         f.write(data)
 
 
+def _cleanup_heading_remnant(
+    service, doc_id: str, position: int, tab_id: str | None = None,
+) -> None:
+    """Clean up empty heading paragraph left after text replacement.
+
+    When the deleted text was the entire content of a heading paragraph,
+    an empty "\\n" with the heading style remains. This transfers that
+    style to the preceding paragraph (if it's NORMAL_TEXT) and deletes
+    the empty one.
+    """
+    if tab_id:
+        doc = service.documents().get(
+            documentId=doc_id, includeTabsContent=True,
+        ).execute()
+        tabs = flatten_tabs(doc.get("tabs", []))
+        tab_match = resolve_tab(tabs, tab_id)
+        body = tab_match["body"]
+    else:
+        doc = service.documents().get(documentId=doc_id).execute()
+        body = doc.get("body", {})
+
+    # Find the element at the cleanup position
+    target_elem = None
+    prev_elem = None
+    for elem in body.get("content", []):
+        si = elem.get("startIndex", 0)
+        if si == position and "paragraph" in elem:
+            target_elem = elem
+            break
+        if "paragraph" in elem:
+            prev_elem = elem
+
+    if target_elem is None:
+        return
+
+    p = target_elem["paragraph"]
+    style = p.get("paragraphStyle", {}).get("namedStyleType", "NORMAL_TEXT")
+
+    # Only act on empty paragraphs with a non-NORMAL_TEXT style
+    content = ""
+    for e in p.get("elements", []):
+        if "textRun" in e:
+            content += e["textRun"]["content"]
+    if content != "\n" or style == "NORMAL_TEXT":
+        return
+
+    requests: list[dict] = []
+
+    # Transfer the heading style to the preceding paragraph if it's
+    # NORMAL_TEXT (i.e. the last paragraph of the inserted text).
+    if prev_elem is not None:
+        prev_style = prev_elem["paragraph"].get(
+            "paragraphStyle", {},
+        ).get("namedStyleType", "NORMAL_TEXT")
+        if prev_style == "NORMAL_TEXT":
+            prev_range: dict = {
+                "startIndex": prev_elem.get("startIndex", 0),
+                "endIndex": prev_elem.get("endIndex", 0),
+            }
+            if tab_id:
+                prev_range["tabId"] = tab_id
+            requests.append({
+                "updateParagraphStyle": {
+                    "range": prev_range,
+                    "paragraphStyle": {"namedStyleType": style},
+                    "fields": "namedStyleType",
+                }
+            })
+
+    # Delete the empty heading paragraph
+    delete_range: dict = {
+        "startIndex": position,
+        "endIndex": position + 1,
+    }
+    if tab_id:
+        delete_range["tabId"] = tab_id
+    requests.append({
+        "deleteContentRange": {"range": delete_range}
+    })
+
+    service.documents().batchUpdate(
+        documentId=doc_id, body={"requests": requests},
+    ).execute()
+
+
 def replace_formatted(
     doc_id: str,
     matches: list[dict],
@@ -557,7 +668,19 @@ def replace_formatted(
             documentId=doc_id, body=body,
         ).execute()
 
-        # Insert tables if any (after main batchUpdate)
+        # Clean up leftover heading paragraphs (before table insertion
+        # so indices haven't shifted from table expansion).
+        # When the deleted text was the entire content of a heading
+        # paragraph, deleting just the text leaves an empty "\n" with
+        # the heading style. Transfer that style to the preceding
+        # paragraph and delete the empty one.
+        for match in sorted_matches:
+            cleanup_pos = match["startIndex"] + len(parsed.plain_text)
+            _cleanup_heading_remnant(
+                service, doc_id, cleanup_pos, tab_id,
+            )
+
+        # Insert tables if any (after main batchUpdate + cleanup)
         if parsed.tables:
             for table in reversed(parsed.tables):
                 # Adjust index: placeholder is at match start +
