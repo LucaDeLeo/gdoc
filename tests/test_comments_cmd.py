@@ -300,6 +300,68 @@ class TestCmdComments:
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.list_comments")
+    def test_comments_terse_shows_quoted_text(
+        self, mock_list, _svc, _pf, _update, capsys,
+    ):
+        c = _make_comment(cid="c1", content="Fix typo", email="alice@co.com")
+        c["quotedFileContent"] = {"value": "teh quick brown fox"}
+        mock_list.return_value = [c]
+        args = _make_args("comments", quiet=True)
+        cmd_comments(args)
+        out = capsys.readouterr().out
+        assert 'on "teh quick brown fox"' in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
+    def test_comments_terse_no_quoted_line_when_absent(
+        self, mock_list, _svc, _pf, _update, capsys,
+    ):
+        mock_list.return_value = [
+            _make_comment(cid="c1", content="General feedback"),
+        ]
+        args = _make_args("comments", quiet=True)
+        cmd_comments(args)
+        out = capsys.readouterr().out
+        assert "on " not in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
+    def test_comments_plain_shows_quoted_text(
+        self, mock_list, _svc, _pf, _update, capsys,
+    ):
+        c = _make_comment(cid="c1", content="Fix typo", email="alice@co.com")
+        c["quotedFileContent"] = {"value": "some anchor text"}
+        mock_list.return_value = [c]
+        args = _make_args("comments", quiet=True, plain=True)
+        cmd_comments(args)
+        out = capsys.readouterr().out
+        assert "c1\topen\talice@co.com\tFix typo\tsome anchor text" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
+    def test_comments_plain_strips_tabs_from_quoted(
+        self, mock_list, _svc, _pf, _update, capsys,
+    ):
+        c = _make_comment(cid="c1", content="Fix typo", email="alice@co.com")
+        c["quotedFileContent"] = {"value": "has\ttab\tinside"}
+        mock_list.return_value = [c]
+        args = _make_args("comments", quiet=True, plain=True)
+        cmd_comments(args)
+        out = capsys.readouterr().out
+        cols = out.strip().split("\t")
+        assert len(cols) == 5
+        assert cols[4] == "has tab inside"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments")
     def test_comments_action_only_replies_hidden(self, mock_list, _svc, _pf, _update, capsys):
         mock_list.return_value = [
             _make_comment(
