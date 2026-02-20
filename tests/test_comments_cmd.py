@@ -237,7 +237,7 @@ class TestCmdComments:
         mock_list.return_value = []
         args = _make_args("comments", quiet=True)
         cmd_comments(args)
-        mock_list.assert_called_once_with("abc123", include_resolved=False)
+        mock_list.assert_called_once_with("abc123", include_resolved=False, include_anchor=True)
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -249,7 +249,7 @@ class TestCmdComments:
         mock_list.return_value = []
         args = _make_args("comments", quiet=True, **{"all": True})
         cmd_comments(args)
-        mock_list.assert_called_once_with("abc123", include_resolved=True)
+        mock_list.assert_called_once_with("abc123", include_resolved=True, include_anchor=True)
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -600,7 +600,7 @@ class TestCommentCommandsPlainOutput:
         args = _make_args("comments", quiet=True, plain=True)
         cmd_comments(args)
         out = capsys.readouterr().out
-        assert "c1\topen\talice@co.com\tFix typo" in out
+        assert "c1\topen\talice@co.com\tFix typo\t" in out
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)

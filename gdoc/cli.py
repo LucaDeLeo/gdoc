@@ -965,7 +965,7 @@ def cmd_comments(args) -> int:
     # Full fetch for display (separate from pre-flight, per CONTEXT.md Decision #8)
     from gdoc.api.comments import list_comments
     include_resolved = getattr(args, "all", False)
-    comments = list_comments(doc_id, include_resolved=include_resolved)
+    comments = list_comments(doc_id, include_resolved=include_resolved, include_anchor=True)
 
     from gdoc.format import get_output_mode, format_json
 
@@ -980,7 +980,8 @@ def cmd_comments(args) -> int:
             author = c.get("author", {})
             author_str = author.get("emailAddress") or author.get("displayName", "unknown")
             content = c.get("content", "")
-            print(f"{cid}\t{status}\t{author_str}\t{content}")
+            quoted = c.get("quotedFileContent", {}).get("value", "")
+            print(f"{cid}\t{status}\t{author_str}\t{content}\t{quoted}")
     elif not comments:
         print("No comments.")
     else:
@@ -998,6 +999,9 @@ def cmd_comments(args) -> int:
             print(f"#{cid} [{status}] {author_str} {date_str}")
             content = c.get("content", "")
             print(f'  "{content}"')
+            quoted = c.get("quotedFileContent", {}).get("value", "")
+            if quoted:
+                print(f'  on "{quoted}"')
             for r in c.get("replies", []):
                 reply_content = r.get("content", "")
                 if not reply_content:
