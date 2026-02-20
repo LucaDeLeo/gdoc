@@ -1,4 +1,4 @@
-"""Tests for the `gdoc tabs` subcommand."""
+"""Tests for the `gdoc tabs` and `gdoc add-tab` subcommands."""
 
 import json
 from types import SimpleNamespace
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gdoc.cli import cmd_tabs
+from gdoc.cli import cmd_add_tab, cmd_tabs
 from gdoc.notify import ChangeInfo
 from gdoc.util import GdocError
 
@@ -173,3 +173,102 @@ class TestTabsAwareness:
         mock_update.assert_called_once_with(
             "abc123", change_info, command="tabs", quiet=False,
         )
+
+
+# ── add-tab command ──────────────────────────────────────────────
+
+
+def _make_add_tab_args(**overrides):
+    defaults = {
+        "command": "add-tab",
+        "doc": "abc123",
+        "title": "New Tab",
+        "json": False,
+        "verbose": False,
+        "plain": False,
+        "quiet": False,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+_ADD_TAB_RESULT = {"tabId": "t99", "title": "New Tab", "index": 2}
+
+
+class TestAddTab:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.add_tab", return_value=_ADD_TAB_RESULT)
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_add_tab_terse(self, _svc, mock_add, _pf, _ver, _update, capsys):
+        rc = cmd_add_tab(_make_add_tab_args())
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "t99\tNew Tab" in out
+        mock_add.assert_called_once_with("abc123", "New Tab")
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.add_tab", return_value=_ADD_TAB_RESULT)
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_add_tab_json(self, _svc, _add, _pf, _ver, _update, capsys):
+        rc = cmd_add_tab(_make_add_tab_args(json=True))
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert data["id"] == "t99"
+        assert data["title"] == "New Tab"
+        assert data["index"] == 2
+        assert data["doc_id"] == "abc123"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.add_tab", return_value=_ADD_TAB_RESULT)
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_add_tab_verbose(self, _svc, _add, _pf, _ver, _update, capsys):
+        rc = cmd_add_tab(_make_add_tab_args(verbose=True))
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Added tab: New Tab" in out
+        assert "ID: t99" in out
+        assert "Index: 2" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.add_tab", return_value=_ADD_TAB_RESULT)
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_add_tab_plain(self, _svc, _add, _pf, _ver, _update, capsys):
+        rc = cmd_add_tab(_make_add_tab_args(plain=True))
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tt99" in out
+        assert "title\tNew Tab" in out
+        assert "index\t2" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight")
+    @patch("gdoc.api.docs.add_tab", return_value=_ADD_TAB_RESULT)
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_add_tab_preflight(self, _svc, _add, mock_pf, _ver, mock_update):
+        change_info = ChangeInfo(current_version=7)
+        mock_pf.return_value = change_info
+        rc = cmd_add_tab(_make_add_tab_args())
+        assert rc == 0
+        mock_pf.assert_called_once_with("abc123", quiet=False)
+        mock_update.assert_called_once_with(
+            "abc123", change_info, command="add-tab", quiet=False,
+            command_version=10,
+        )
+
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.add_tab")
+    def test_add_tab_api_error(self, mock_add, _pf, _svc):
+        mock_add.side_effect = GdocError("Document not found: abc123")
+        with pytest.raises(GdocError, match="Document not found"):
+            cmd_add_tab(_make_add_tab_args())

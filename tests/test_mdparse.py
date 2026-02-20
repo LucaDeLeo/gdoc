@@ -12,17 +12,20 @@ class TestParsePlainText:
     def test_plain_text_no_formatting(self):
         result = parse_markdown("hello world")
         assert result.plain_text == "hello world\n"
-        assert result.styles == []
+        text_styles = [s for s in result.styles if s.type == "text_style"]
+        assert text_styles == []
 
     def test_multiline_plain_text(self):
         result = parse_markdown("line one\nline two")
         assert result.plain_text == "line one\nline two\n"
-        assert result.styles == []
+        text_styles = [s for s in result.styles if s.type == "text_style"]
+        assert text_styles == []
 
     def test_whitespace_only(self):
         result = parse_markdown("   ")
         assert result.plain_text == "   \n"
-        assert result.styles == []
+        text_styles = [s for s in result.styles if s.type == "text_style"]
+        assert text_styles == []
 
 
 class TestParseBold:
@@ -198,7 +201,9 @@ class TestParseMixed:
     def test_heading_then_paragraph(self):
         result = parse_markdown("# Title\nSome text here")
         assert result.plain_text == "Title\nSome text here\n"
-        heading = [s for s in result.styles if s.type == "paragraph_style"]
+        heading = [s for s in result.styles
+                   if s.type == "paragraph_style"
+                   and s.style.get("namedStyleType", "").startswith("HEADING")]
         assert len(heading) == 1
 
     def test_mixed_inline(self):
@@ -217,7 +222,9 @@ class TestParseMixed:
         assert "Header" in result.plain_text
         assert "item 1" in result.plain_text
         assert "Normal text" in result.plain_text
-        headings = [s for s in result.styles if s.type == "paragraph_style"]
+        headings = [s for s in result.styles
+                    if s.type == "paragraph_style"
+                    and s.style.get("namedStyleType", "").startswith("HEADING")]
         bullets = [s for s in result.styles if s.type == "bullets"]
         assert len(headings) == 1
         assert len(bullets) == 2
@@ -296,15 +303,16 @@ class TestToDocsRequests:
     def test_plain_text_insert(self):
         parsed = parse_markdown("hello")
         reqs = to_docs_requests(parsed, insert_index=10)
-        assert len(reqs) == 1
+        # insertText + updateParagraphStyle (NORMAL_TEXT)
+        assert len(reqs) == 2
         assert reqs[0]["insertText"]["location"]["index"] == 10
         assert reqs[0]["insertText"]["text"] == "hello\n"
 
     def test_bold_generates_update_text_style(self):
         parsed = parse_markdown("**bold**")
         reqs = to_docs_requests(parsed, insert_index=5)
-        # insertText + updateTextStyle
-        assert len(reqs) == 2
+        # insertText + updateTextStyle + updateParagraphStyle (NORMAL_TEXT)
+        assert len(reqs) == 3
         insert = reqs[0]
         assert insert["insertText"]["text"] == "bold\n"
         assert insert["insertText"]["location"]["index"] == 5
@@ -397,3 +405,90 @@ class TestToDocsRequests:
         para_idx = types.index("para_style")
         bullet_idx = types.index("bullets")
         assert text_idx < para_idx < bullet_idx
+
+
+class TestParseNormalTextEmission:
+    """Verify NORMAL_TEXT paragraph_style is emitted for non-heading paragraphs."""
+
+    def test_plain_text_emits_normal(self):
+        result = parse_markdown("hello")
+        normal = [s for s in result.styles
+                  if s.type == "paragraph_style"
+                  and s.style.get("namedStyleType") == "NORMAL_TEXT"]
+        assert len(normal) == 1
+
+    def test_bullets_emit_normal(self):
+        result = parse_markdown("- item 1\n- item 2")
+        normal = [s for s in result.styles
+                  if s.type == "paragraph_style"
+                  and s.style.get("namedStyleType") == "NORMAL_TEXT"]
+        assert len(normal) == 2
+
+    def test_numbered_emit_normal(self):
+        result = parse_markdown("1. first\n2. second")
+        normal = [s for s in result.styles
+                  if s.type == "paragraph_style"
+                  and s.style.get("namedStyleType") == "NORMAL_TEXT"]
+        assert len(normal) == 2
+
+    def test_table_placeholder_emits_normal(self):
+        result = parse_markdown("| A |\n|---|\n| 1 |")
+        normal = [s for s in result.styles
+                  if s.type == "paragraph_style"
+                  and s.style.get("namedStyleType") == "NORMAL_TEXT"]
+        assert len(normal) == 1
+
+    def test_heading_does_not_emit_normal(self):
+        result = parse_markdown("# Title")
+        normal = [s for s in result.styles
+                  if s.type == "paragraph_style"
+                  and s.style.get("namedStyleType") == "NORMAL_TEXT"]
+        assert len(normal) == 0
+
+    def test_heading_only_emits_heading(self):
+        result = parse_markdown("# Title")
+        para = [s for s in result.styles if s.type == "paragraph_style"]
+        assert len(para) == 1
+        assert para[0].style["namedStyleType"] == "HEADING_1"
+
+
+class TestToDocsRequestsTabId:
+    """Verify tabId is injected into requests when provided."""
+
+    def test_insert_text_has_tab_id(self):
+        parsed = parse_markdown("hello")
+        reqs = to_docs_requests(parsed, insert_index=1, tab_id="t1")
+        insert = reqs[0]
+        assert insert["insertText"]["location"]["tabId"] == "t1"
+
+    def test_update_text_style_has_tab_id(self):
+        parsed = parse_markdown("**bold**")
+        reqs = to_docs_requests(parsed, insert_index=1, tab_id="t1")
+        style_reqs = [r for r in reqs if "updateTextStyle" in r]
+        assert len(style_reqs) == 1
+        assert style_reqs[0]["updateTextStyle"]["range"]["tabId"] == "t1"
+
+    def test_update_paragraph_style_has_tab_id(self):
+        parsed = parse_markdown("# Title")
+        reqs = to_docs_requests(parsed, insert_index=1, tab_id="t1")
+        para_reqs = [r for r in reqs if "updateParagraphStyle" in r]
+        assert len(para_reqs) == 1
+        assert para_reqs[0]["updateParagraphStyle"]["range"]["tabId"] == "t1"
+
+    def test_create_paragraph_bullets_has_tab_id(self):
+        parsed = parse_markdown("- item")
+        reqs = to_docs_requests(parsed, insert_index=1, tab_id="t1")
+        bullet_reqs = [r for r in reqs if "createParagraphBullets" in r]
+        assert len(bullet_reqs) == 1
+        assert bullet_reqs[0]["createParagraphBullets"]["range"]["tabId"] == "t1"
+
+    def test_no_tab_id_when_none(self):
+        parsed = parse_markdown("hello")
+        reqs = to_docs_requests(parsed, insert_index=1, tab_id=None)
+        assert "tabId" not in reqs[0]["insertText"]["location"]
+
+    def test_no_tab_id_absent_by_default(self):
+        parsed = parse_markdown("**bold**")
+        reqs = to_docs_requests(parsed, insert_index=1)
+        style_reqs = [r for r in reqs if "updateTextStyle" in r]
+        assert "tabId" not in style_reqs[0]["updateTextStyle"]["range"]

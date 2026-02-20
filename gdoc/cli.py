@@ -208,6 +208,49 @@ def cmd_tabs(args) -> int:
     return 0
 
 
+def cmd_add_tab(args) -> int:
+    """Handler for `gdoc add-tab`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    title = args.title
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.docs import add_tab
+    result = add_tab(doc_id, title)
+    tab_id = result["tabId"]
+
+    from gdoc.api.drive import get_file_version
+    command_version = get_file_version(doc_id).get("version")
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            id=tab_id, title=result["title"],
+            index=result["index"], doc_id=doc_id,
+        ))
+    elif mode == "verbose":
+        print(f"Added tab: {result['title']}")
+        print(f"ID: {tab_id}")
+        print(f"Index: {result['index']}")
+    elif mode == "plain":
+        print(f"id\t{tab_id}")
+        print(f"title\t{result['title']}")
+        print(f"index\t{result['index']}")
+    else:
+        print(f"{tab_id}\t{result['title']}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="add-tab", quiet=quiet,
+        command_version=command_version,
+    )
+
+    return 0
+
+
 def cmd_info(args) -> int:
     """Handler for `gdoc info`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -429,11 +472,8 @@ def cmd_edit(args) -> int:
     tab_id = None
 
     if tab_name:
-        from gdoc.api.docs import flatten_tabs, resolve_tab, get_docs_service
-        service = get_docs_service()
-        doc = service.documents().get(
-            documentId=doc_id, includeTabsContent=True
-        ).execute()
+        from gdoc.api.docs import flatten_tabs, get_document_with_tabs, resolve_tab
+        doc = get_document_with_tabs(doc_id)
         revision_id = doc.get("revisionId", "")
         tabs = flatten_tabs(doc.get("tabs", []))
         tab_match = resolve_tab(tabs, tab_name)
@@ -1678,6 +1718,18 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     tabs_p.set_defaults(func=cmd_tabs)
+
+    # add-tab
+    add_tab_p = sub.add_parser(
+        "add-tab", parents=[output_parent],
+        help="Add a new tab to a document",
+    )
+    add_tab_p.add_argument("doc", help="Document ID or URL")
+    add_tab_p.add_argument("title", help="Title for the new tab")
+    add_tab_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks",
+    )
+    add_tab_p.set_defaults(func=cmd_add_tab)
 
     # edit
     edit_p = sub.add_parser(

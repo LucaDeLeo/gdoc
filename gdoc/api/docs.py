@@ -205,6 +205,8 @@ def find_text_in_document(
     chars: list[tuple[int, str]] = []
 
     if body is None:
+        if document is None:
+            return []
         body = document.get("body", {})
     for element in body.get("content", []):
         paragraph = element.get("paragraph")
@@ -263,6 +265,8 @@ def _find_table_cell_indices(
     Returns a 2D list: cell_indices[row][col] = startIndex.
     """
     if body is None:
+        if document is None:
+            return []
         body = document.get("body", {})
     for element in body.get("content", []):
         if "table" not in element:
@@ -516,28 +520,62 @@ def download_image(content_uri: str, dest_path: str) -> None:
         f.write(data)
 
 
-def _cleanup_heading_remnant(
-    service, doc_id: str, position: int, tab_id: str | None = None,
-) -> None:
-    """Clean up empty heading paragraph left after text replacement.
+def get_document_with_tabs(doc_id: str) -> dict:
+    """Fetch document with includeTabsContent=True.
 
-    When the deleted text was the entire content of a heading paragraph,
-    an empty "\\n" with the heading style remains. This transfers that
-    style to the preceding paragraph (if it's NORMAL_TEXT) and deletes
-    the empty one.
+    Returns the full document dict (including revisionId and tabs).
+    HttpError is translated via _translate_http_error.
     """
-    if tab_id:
-        doc = service.documents().get(
-            documentId=doc_id, includeTabsContent=True,
-        ).execute()
-        tabs = flatten_tabs(doc.get("tabs", []))
-        tab_match = resolve_tab(tabs, tab_id)
-        body = tab_match["body"]
-    else:
-        doc = service.documents().get(documentId=doc_id).execute()
-        body = doc.get("body", {})
+    try:
+        service = get_docs_service()
+        return (
+            service.documents()
+            .get(documentId=doc_id, includeTabsContent=True)
+            .execute()
+        )
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
 
-    # Find the element at the cleanup position
+
+def add_tab(doc_id: str, title: str) -> dict:
+    """Add a new tab to a document.
+
+    Returns dict with 'tabId', 'title', 'index'.
+    """
+    service = get_docs_service()
+    try:
+        resp = service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [{"addDocumentTab": {
+                "tabProperties": {"title": title},
+            }}]},
+        ).execute()
+        try:
+            props = resp["replies"][0]["addDocumentTab"]["tabProperties"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise GdocError(
+                f"Unexpected API response for addDocumentTab: {exc}",
+            )
+        return {
+            "tabId": props["tabId"],
+            "title": props.get("title", title),
+            "index": props.get("index", 0),
+        }
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def _build_cleanup_requests(
+    body: dict, position: int, tab_id: str | None = None,
+) -> list[dict]:
+    """Build batchUpdate requests to clean up an empty heading paragraph.
+
+    Pure function — inspects body content and returns request dicts
+    without making API calls. When the deleted text was the entire
+    content of a heading paragraph, an empty "\\n" with the heading
+    style remains. This returns requests that transfer that style to
+    the preceding paragraph (if NORMAL_TEXT) and delete the empty one.
+    """
     target_elem = None
     prev_elem = None
     for elem in body.get("content", []):
@@ -549,7 +587,7 @@ def _cleanup_heading_remnant(
             prev_elem = elem
 
     if target_elem is None:
-        return
+        return []
 
     p = target_elem["paragraph"]
     style = p.get("paragraphStyle", {}).get("namedStyleType", "NORMAL_TEXT")
@@ -560,7 +598,7 @@ def _cleanup_heading_remnant(
         if "textRun" in e:
             content += e["textRun"]["content"]
     if content != "\n" or style == "NORMAL_TEXT":
-        return
+        return []
 
     requests: list[dict] = []
 
@@ -596,9 +634,7 @@ def _cleanup_heading_remnant(
         "deleteContentRange": {"range": delete_range}
     })
 
-    service.documents().batchUpdate(
-        documentId=doc_id, body={"requests": requests},
-    ).execute()
+    return requests
 
 
 def replace_formatted(
@@ -670,23 +706,50 @@ def replace_formatted(
 
         # Clean up leftover heading paragraphs (before table insertion
         # so indices haven't shifted from table expansion).
-        # When the deleted text was the entire content of a heading
-        # paragraph, deleting just the text leaves an empty "\n" with
-        # the heading style. Transfer that style to the preceding
-        # paragraph and delete the empty one.
-        for match in sorted_matches:
-            cleanup_pos = match["startIndex"] + len(parsed.plain_text)
-            _cleanup_heading_remnant(
-                service, doc_id, cleanup_pos, tab_id,
+        # Fetch document once, compute all cleanup requests, then
+        # execute in a single batchUpdate.
+        if tab_id:
+            doc = get_document_with_tabs(doc_id)
+            tabs = flatten_tabs(doc.get("tabs", []))
+            tab_match = resolve_tab(tabs, tab_id)
+            fetch_body = tab_match["body"]
+        else:
+            doc = service.documents().get(documentId=doc_id).execute()
+            fetch_body = doc.get("body", {})
+
+        all_cleanup: list[dict] = []
+        n = len(sorted_matches)
+        match_len = (
+            sorted_matches[0]["endIndex"] - sorted_matches[0]["startIndex"]
+            if sorted_matches else 0
+        )
+        delta = len(parsed.plain_text) - match_len
+        # Matches are sorted descending by startIndex; iterate in
+        # that same order so higher positions are cleaned first.
+        # Within one batchUpdate, deletions at higher indices
+        # don't affect lower indices, so no cross-cleanup shift.
+        for j, match in enumerate(sorted_matches):
+            # (n-1-j) matches below this one each shifted content
+            # by `delta` chars during the main replacement.
+            adjusted_pos = (
+                match["startIndex"]
+                + len(parsed.plain_text)
+                + (n - 1 - j) * delta
             )
+            reqs = _build_cleanup_requests(fetch_body, adjusted_pos, tab_id)
+            all_cleanup.extend(reqs)
+
+        if all_cleanup:
+            service.documents().batchUpdate(
+                documentId=doc_id, body={"requests": all_cleanup},
+            ).execute()
 
         # Insert tables if any (after main batchUpdate + cleanup)
         if parsed.tables:
             for table in reversed(parsed.tables):
-                # Adjust index: placeholder is at match start +
-                # table's offset within the plain text
-                for match in sorted_matches:
-                    idx = match["startIndex"] + table.plain_text_offset
+                for j, match in enumerate(sorted_matches):
+                    shift = (n - 1 - j) * delta
+                    idx = match["startIndex"] + table.plain_text_offset + shift
                     _insert_table(doc_id, idx, table, tab_id=tab_id)
 
         return len(sorted_matches)

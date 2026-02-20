@@ -9,6 +9,7 @@ from gdoc.api.docs import (
     flatten_tabs,
     get_document_tabs,
     get_tab_text,
+    resolve_tab,
 )
 from gdoc.util import AuthError, GdocError
 
@@ -258,3 +259,47 @@ class TestGetTabText:
             {"paragraph": {"elements": [{"inlineObjectElement": {}}]}}
         ]}}
         assert get_tab_text(tab) == ""
+
+
+class TestResolveTab:
+    def _tabs(self):
+        return [
+            {"id": "t1", "title": "Tab One", "index": 0,
+             "nesting_level": 0, "body": {}},
+            {"id": "t2", "title": "Tab Two", "index": 1,
+             "nesting_level": 0, "body": {}},
+        ]
+
+    def test_match_by_title(self):
+        result = resolve_tab(self._tabs(), "Tab One")
+        assert result["id"] == "t1"
+
+    def test_match_by_title_case_insensitive(self):
+        result = resolve_tab(self._tabs(), "tab one")
+        assert result["id"] == "t1"
+
+    def test_match_by_id(self):
+        result = resolve_tab(self._tabs(), "t2")
+        assert result["id"] == "t2"
+
+    def test_title_priority_over_id(self):
+        """When a title matches, it takes priority over ID match."""
+        tabs = [
+            {"id": "t1", "title": "t2", "index": 0, "nesting_level": 0, "body": {}},
+            {"id": "t2", "title": "Other", "index": 1, "nesting_level": 0, "body": {}},
+        ]
+        result = resolve_tab(tabs, "t2")
+        assert result["id"] == "t1"  # title match wins
+
+    def test_not_found_raises(self):
+        with pytest.raises(GdocError, match="tab not found: nope") as exc_info:
+            resolve_tab(self._tabs(), "nope")
+        assert exc_info.value.exit_code == 3
+
+    def test_empty_tabs_raises(self):
+        with pytest.raises(GdocError, match="tab not found"):
+            resolve_tab([], "anything")
+
+    def test_match_by_title_exact_case(self):
+        result = resolve_tab(self._tabs(), "Tab Two")
+        assert result["id"] == "t2"

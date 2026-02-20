@@ -193,8 +193,51 @@ class TestEditTableRestriction:
             verbose=False,
             plain=False,
             case_sensitive=False,
+            tab=None,
             **{"all": True},
         )
 
         with pytest.raises(GdocError, match="tables not supported"):
             cmd_edit(args)
+
+
+class TestFindTableCellIndicesBody:
+    def test_explicit_body_parameter(self):
+        doc = _make_document_with_table(table_start=5, rows=2, cols=2)
+        body = doc["body"]
+        indices = _find_table_cell_indices(None, 5, body=body)
+        assert len(indices) == 2
+        assert len(indices[0]) == 2
+
+    def test_both_none_returns_empty(self):
+        indices = _find_table_cell_indices(None, 5)
+        assert indices == []
+
+
+class TestInsertTableTabId:
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_tab_id_in_location(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+
+        doc = _make_document_with_table(table_start=5, rows=2, cols=2)
+        # When tab_id is provided, _insert_table fetches with includeTabsContent
+        mock_tabs_doc = {
+            "tabs": [{
+                "tabProperties": {"tabId": "tab1", "title": "Tab 1", "index": 0},
+                "documentTab": doc,
+            }]
+        }
+        mock_service.documents().get().execute.return_value = mock_tabs_doc
+        mock_service.documents().batchUpdate().execute.return_value = {}
+
+        table = TableData(
+            rows=[["H1", "H2"], ["a", "b"]],
+            num_rows=2, num_cols=2,
+            plain_text_offset=0,
+        )
+        _insert_table("doc1", 5, table, tab_id="tab1")
+
+        # Verify insertTable batchUpdate was called with tabId in location
+        batch_calls = mock_service.documents().batchUpdate.call_args_list
+        assert len(batch_calls) >= 1
