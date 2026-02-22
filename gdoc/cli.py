@@ -57,6 +57,7 @@ def cmd_cat(args) -> int:
         )
 
     max_bytes = getattr(args, "max_bytes", 0)
+    no_images = getattr(args, "no_images", False)
 
     if tab or all_tabs:
         from gdoc.notify import pre_flight
@@ -81,6 +82,9 @@ def cmd_cat(args) -> int:
             if match is None:
                 raise GdocError(f"tab not found: {tab}", exit_code=3)
             content = get_tab_text(match)
+            if no_images:
+                from gdoc.mdimport import strip_images
+                content = strip_images(content)
             content = _truncate_bytes(content, max_bytes)
 
             from gdoc.format import format_json, get_output_mode
@@ -96,6 +100,9 @@ def cmd_cat(args) -> int:
                 parts.append(f"=== Tab: {t['title']} ===\n")
                 parts.append(get_tab_text(t))
             content = "".join(parts)
+            if no_images:
+                from gdoc.mdimport import strip_images
+                content = strip_images(content)
             content = _truncate_bytes(content, max_bytes)
 
             from gdoc.format import format_json, get_output_mode
@@ -116,6 +123,10 @@ def cmd_cat(args) -> int:
 
         from gdoc.api.drive import export_doc
         markdown = export_doc(doc_id, mime_type="text/markdown")
+
+        if no_images:
+            from gdoc.mdimport import strip_images
+            markdown = strip_images(markdown)
 
         from gdoc.api.comments import list_comments
         include_resolved = getattr(args, "all", False)
@@ -150,6 +161,9 @@ def cmd_cat(args) -> int:
     from gdoc.api.drive import export_doc
 
     content = export_doc(doc_id, mime_type=mime_type)
+    if no_images:
+        from gdoc.mdimport import strip_images
+        content = strip_images(content)
     content = _truncate_bytes(content, max_bytes)
 
     from gdoc.format import get_output_mode, format_json
@@ -1711,6 +1725,10 @@ def build_parser() -> GdocArgumentParser:
     cat_p.add_argument(
         "--max-bytes", type=int, default=0,
         help="Truncate output at N bytes (0 = unlimited)",
+    )
+    cat_p.add_argument(
+        "--no-images", action="store_true",
+        help="Strip image references from output",
     )
     cat_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"

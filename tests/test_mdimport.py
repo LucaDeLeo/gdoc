@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gdoc.mdimport import extract_images
+from gdoc.mdimport import extract_images, strip_images
 
 
 class TestExtractImages:
@@ -92,3 +92,46 @@ class TestExtractImages:
         content = "![photo](photo.jpeg)"
         cleaned, images = extract_images(content, str(tmp_path))
         assert images[0].mime_type == "image/jpeg"
+
+
+class TestStripImages:
+    def test_no_images(self):
+        content = "# Hello\n\nSome text"
+        assert strip_images(content) == content
+
+    def test_single_image_own_line(self):
+        content = "Before\n\n![alt](https://example.com/img.png)\n\nAfter"
+        assert strip_images(content) == "Before\n\nAfter"
+
+    def test_inline_image(self):
+        content = "Text ![icon](icon.png) more text"
+        assert strip_images(content) == "Text  more text"
+
+    def test_multiple_consecutive_images(self):
+        content = (
+            "# Title\n\n"
+            "![a](a.png)\n\n"
+            "![b](b.png)\n\n"
+            "End"
+        )
+        result = strip_images(content)
+        assert "![" not in result
+        assert "End" in result
+        # Collapsed blank lines
+        assert "\n\n\n" not in result
+
+    def test_blank_line_collapsing(self):
+        content = "Top\n\n\n\n\nBottom"
+        assert strip_images(content) == "Top\n\nBottom"
+
+    def test_preserves_non_image_markdown(self):
+        content = "# Heading\n\n- bullet\n\n[link](url)\n\n**bold**"
+        assert strip_images(content) == content
+
+    def test_empty_string(self):
+        assert strip_images("") == ""
+
+    def test_long_google_urls(self):
+        url = "https://lh7-us.googleusercontent.com/docs/ABC123_very_long_token_here"
+        content = f"Before\n\n![screenshot]({url})\n\nAfter"
+        assert strip_images(content) == "Before\n\nAfter"
