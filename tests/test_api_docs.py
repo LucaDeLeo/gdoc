@@ -341,11 +341,11 @@ class TestReplaceFormattedCleanupPositions:
             .get.return_value.execute.return_value = {"body": {"content": []}}
 
         matches = [{"startIndex": 10, "endIndex": 13}]  # 3-char match
-        replace_formatted("doc1", matches, "foobar", "rev1")  # 7-char plain_text
+        replace_formatted("doc1", matches, "foobar", "rev1")  # 6-char plain_text
 
         mock_cleanup.assert_called_once()
-        # cleanup pos = 10 + 7 = 17 (parse_markdown adds trailing \n)
-        assert mock_cleanup.call_args[0][1] == 17
+        # cleanup pos = 10 + 6 = 16 (trailing \n stripped in replace context)
+        assert mock_cleanup.call_args[0][1] == 16
 
     @patch("gdoc.api.docs._build_cleanup_requests", return_value=[])
     @patch("gdoc.api.docs.get_docs_service")
@@ -360,7 +360,7 @@ class TestReplaceFormattedCleanupPositions:
             .get.return_value.execute.return_value = {"body": {"content": []}}
 
         # 3 matches of 3-char text, replaced with "foobar" (plain_text
-        # is "foobar\n" = 7 chars, delta = 7 - 3 = 4)
+        # is "foobar" = 6 chars after trailing \n strip, delta = 6 - 3 = 3)
         matches = [
             {"startIndex": 10, "endIndex": 13},
             {"startIndex": 50, "endIndex": 53},
@@ -369,11 +369,11 @@ class TestReplaceFormattedCleanupPositions:
         replace_formatted("doc1", matches, "foobar", "rev1")
 
         positions = [c[0][1] for c in mock_cleanup.call_args_list]
-        # sorted_matches descending: [100, 50, 10]; delta=4
-        # j=0 (100): 100 + 7 + (3-1-0)*4 = 100 + 7 + 8 = 115
-        # j=1 (50):  50  + 7 + (3-1-1)*4 = 50  + 7 + 4 = 61
-        # j=2 (10):  10  + 7 + (3-1-2)*4 = 10  + 7 + 0 = 17
-        assert positions == [115, 61, 17]
+        # sorted_matches descending: [100, 50, 10]; delta=3
+        # j=0 (100): 100 + 6 + (3-1-0)*3 = 100 + 6 + 6 = 112
+        # j=1 (50):  50  + 6 + (3-1-1)*3 = 50  + 6 + 3 = 59
+        # j=2 (10):  10  + 6 + (3-1-2)*3 = 10  + 6 + 0 = 16
+        assert positions == [112, 59, 16]
 
     @patch("gdoc.api.docs._build_cleanup_requests", return_value=[])
     @patch("gdoc.api.docs.get_docs_service")
@@ -386,7 +386,7 @@ class TestReplaceFormattedCleanupPositions:
         mock_svc.return_value.documents.return_value \
             .get.return_value.execute.return_value = {"body": {"content": []}}
 
-        # 3-char match, "bar" -> plain_text "bar\n" (4 chars), delta=1
+        # 3-char match, "bar" -> plain_text "bar" (3 chars), delta=0
         matches = [
             {"startIndex": 10, "endIndex": 13},
             {"startIndex": 50, "endIndex": 53},
@@ -394,9 +394,9 @@ class TestReplaceFormattedCleanupPositions:
         replace_formatted("doc1", matches, "bar", "rev1")
 
         positions = [c[0][1] for c in mock_cleanup.call_args_list]
-        # j=0 (50): 50 + 4 + (2-1-0)*1 = 55
-        # j=1 (10): 10 + 4 + (2-1-1)*1 = 14
-        assert positions == [55, 14]
+        # j=0 (50): 50 + 3 + (2-1-0)*0 = 53
+        # j=1 (10): 10 + 3 + (2-1-1)*0 = 13
+        assert positions == [53, 13]
 
 
 class TestFindTextBody:
