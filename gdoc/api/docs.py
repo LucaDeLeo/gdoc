@@ -664,6 +664,16 @@ def replace_formatted(
 
     parsed = parse_markdown(new_markdown)
 
+    # Strip trailing \n — the existing paragraph in the document
+    # already has one.  Without this, every replacement inserts an
+    # extra paragraph break.
+    if parsed.plain_text.endswith("\n"):
+        old_len = len(parsed.plain_text)
+        parsed.plain_text = parsed.plain_text[:-1]
+        for s in parsed.styles:
+            if s.end == old_len:
+                s.end = old_len - 1
+
     # Sort matches by startIndex descending (last-to-first)
     sorted_matches = sorted(
         matches, key=lambda m: m["startIndex"], reverse=True,
