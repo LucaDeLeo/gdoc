@@ -22,6 +22,7 @@ def _make_args(**overrides):
         "tab": None,
         "all_tabs": False,
         "max_bytes": 0,
+        "no_images": False,
         "json": False,
         "verbose": False,
         "quiet": False,
@@ -379,3 +380,72 @@ class TestCatMaxBytes:
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
         assert data["content"] == "Hello"
+
+
+_MD_WITH_IMAGE = "# Title\n\n![photo](https://example.com/img.png)\n\nEnd\n"
+_MD_WITHOUT_IMAGE = "# Title\n\nEnd\n"
+
+
+class TestCatNoImages:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value=_MD_WITH_IMAGE)
+    def test_no_images_strips(self, _export, _svc, _pf, _update, capsys):
+        args = _make_args(no_images=True)
+        rc = cmd_cat(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "![" not in out
+        assert "End" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value="# No images here\n")
+    def test_no_images_noop_when_absent(self, _export, _svc, _pf, _update, capsys):
+        args = _make_args(no_images=True)
+        rc = cmd_cat(args)
+        assert rc == 0
+        assert capsys.readouterr().out == "# No images here\n"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value=_MD_WITH_IMAGE)
+    def test_no_images_json(self, _export, _svc, _pf, _update, capsys):
+        args = _make_args(no_images=True, json=True)
+        rc = cmd_cat(args)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert "![" not in data["content"]
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value=_MD_WITH_IMAGE)
+    def test_no_images_before_truncation(self, _export, _svc, _pf, _update, capsys):
+        """--no-images strips before --max-bytes truncates."""
+        args = _make_args(no_images=True, max_bytes=8)
+        rc = cmd_cat(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "![" not in out
+        # After stripping, content starts with "# Title\n..." — 8 bytes = "# Title\n"
+        assert len(out.encode("utf-8")) <= 8
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.export_doc", return_value=_MD_WITH_IMAGE)
+    def test_no_images_with_comments(
+        self, _export, _svc, _list, _csvc, _pf, _update, capsys,
+    ):
+        """--no-images strips before annotation."""
+        args = _make_args(no_images=True, comments=True, quiet=True)
+        rc = cmd_cat(args)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "![" not in out

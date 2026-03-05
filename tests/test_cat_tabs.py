@@ -20,6 +20,7 @@ def _make_args(**overrides):
         "all": False,
         "tab": None,
         "all_tabs": False,
+        "no_images": False,
         "json": False,
         "verbose": False,
         "quiet": False,

@@ -103,3 +103,10 @@ def extract_images(
 
     cleaned = _IMAGE_RE.sub(_replace, content)
     return cleaned, images
+
+
+def strip_images(content: str) -> str:
+    """Remove image references and collapse excess blank lines."""
+    result = _IMAGE_RE.sub("", content)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result
