@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gdoc"
-version = "0.6.1"
+version = "0.6.2"
 description = "Token-efficient CLI for Google Docs & Drive"
 requires-python = ">=3.10"
 dependencies = [
