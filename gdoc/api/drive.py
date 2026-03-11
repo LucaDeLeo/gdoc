@@ -70,6 +70,8 @@ def list_files(query: str) -> list[dict]:
                     fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
                     pageSize=100,
                     pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
                 )
                 .execute()
             )
@@ -115,6 +117,7 @@ def get_file_info(doc_id: str) -> dict:
                 fields="id, name, mimeType, modifiedTime, createdTime, "
                 "owners(emailAddress, displayName), "
                 "lastModifyingUser(emailAddress, displayName), size, version",
+                supportsAllDrives=True,
             )
             .execute()
         )
@@ -160,6 +163,7 @@ def update_doc_content(doc_id: str, content: str) -> int:
                 },
                 media_body=media,
                 fields="version",
+                supportsAllDrives=True,
             )
             .execute()
         )
@@ -180,6 +184,7 @@ def get_file_version(doc_id: str) -> dict:
             .get(
                 fileId=doc_id,
                 fields="modifiedTime, version, lastModifyingUser(displayName, emailAddress)",
+                supportsAllDrives=True,
             )
             .execute()
         )
@@ -283,7 +288,7 @@ def delete_file(file_id: str) -> None:
     """Delete a file from Drive."""
     try:
         service = get_drive_service()
-        service.files().delete(fileId=file_id).execute()
+        service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
     except HttpError as e:
         _translate_http_error(e, file_id)
 
@@ -339,6 +344,7 @@ def copy_doc(doc_id: str, title: str) -> dict:
                 fileId=doc_id,
                 body={"name": title},
                 fields="id, name, version, webViewLink",
+                supportsAllDrives=True,
             )
             .execute()
         )
@@ -372,6 +378,7 @@ def create_permission(doc_id: str, email: str, role: str) -> dict:
                     "emailAddress": email,
                 },
                 sendNotificationEmail=True,
+                supportsAllDrives=True,
             )
             .execute()
         )
