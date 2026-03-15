@@ -67,7 +67,7 @@ def list_files(query: str) -> list[dict]:
                 service.files()
                 .list(
                     q=query,
-                    fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+                    fields="nextPageToken, files(id, name, mimeType, modifiedTime, modifiedByMeTime)",
                     pageSize=100,
                     pageToken=page_token,
                 )
