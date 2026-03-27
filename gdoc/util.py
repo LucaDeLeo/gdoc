@@ -31,6 +31,44 @@ TOKEN_PATH = CONFIG_DIR / "token.json"
 CREDS_PATH = CONFIG_DIR / "credentials.json"
 STATE_DIR = CONFIG_DIR / "state"
 
+# Multi-account support: when set, token is stored under a per-account dir
+_active_account: str | None = None
+_VALID_ACCOUNT = re.compile(r'^[\w.\-@]+$')
+
+
+def _validate_account_name(account: str) -> None:
+    """Validate account name to prevent path traversal."""
+    if not _VALID_ACCOUNT.match(account):
+        raise GdocError(
+            f"Invalid account name: {account!r}. "
+            "Use alphanumeric characters, dots, hyphens, underscores, or @.",
+            exit_code=3,
+        )
+
+
+def set_active_account(account: str | None) -> None:
+    """Set the active account for token resolution."""
+    global _active_account
+    if account:
+        _validate_account_name(account)
+    _active_account = account
+
+
+def get_active_account() -> str | None:
+    """Return the active account, if set."""
+    return _active_account
+
+
+def get_token_path() -> Path:
+    """Return the token path for the active account.
+
+    Default account uses CONFIG_DIR/token.json (backward-compatible).
+    Named accounts use CONFIG_DIR/accounts/<account>/token.json.
+    """
+    if _active_account:
+        return CONFIG_DIR / "accounts" / _active_account / "token.json"
+    return TOKEN_PATH
+
 _PATTERNS = [
     re.compile(r"/d/([a-zA-Z0-9_-]+)"),
     re.compile(r"[?&]id=([a-zA-Z0-9_-]+)"),
