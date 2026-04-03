@@ -222,6 +222,79 @@ def cmd_tabs(args) -> int:
     return 0
 
 
+def cmd_toc(args) -> int:
+    """Handler for `gdoc toc`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    tab = getattr(args, "tab", None)
+    max_depth = getattr(args, "max_depth", 0)
+    no_links = getattr(args, "no_links", False)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.docs import get_document_headings
+
+    body = None
+    tab_id = None
+    if tab:
+        from gdoc.api.docs import get_document_tabs, resolve_tab
+
+        tabs = get_document_tabs(doc_id)
+        tab_match = resolve_tab(tabs, tab)
+        body = tab_match["body"]
+        tab_id = tab_match["id"]
+
+    headings = get_document_headings(doc_id, body=body)
+
+    if max_depth > 0:
+        headings = [h for h in headings if h["level"] <= max_depth]
+
+    base_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        items = []
+        for h in headings:
+            link = f"{base_url}#heading={h['heading_id']}"
+            if tab_id:
+                link += f"&tab=t.{tab_id}"
+            items.append({
+                "level": h["level"],
+                "heading_id": h["heading_id"],
+                "text": h["text"],
+                "link": link,
+            })
+        print(format_json(headings=items))
+    elif mode == "plain":
+        for h in headings:
+            link = f"{base_url}#heading={h['heading_id']}"
+            if tab_id:
+                link += f"&tab=t.{tab_id}"
+            print(f"{h['level']}\t{h['heading_id']}\t{h['text']}\t{link}")
+    else:
+        for h in headings:
+            indent = "  " * (h["level"] - 1)
+            if no_links:
+                print(f"{indent}- {h['text']}")
+            else:
+                link = f"{base_url}#heading={h['heading_id']}"
+                if tab_id:
+                    link += f"&tab=t.{tab_id}"
+                print(f"{indent}- [{h['text']}]({link})")
+        if mode == "verbose":
+            print(f"\n({len(headings)} headings)")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(doc_id, change_info, command="toc", quiet=quiet)
+
+    return 0
+
+
 def cmd_add_tab(args) -> int:
     """Handler for `gdoc add-tab`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -1742,6 +1815,26 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     tabs_p.set_defaults(func=cmd_tabs)
+
+    # toc
+    toc_p = sub.add_parser(
+        "toc", parents=[output_parent],
+        help="Extract table of contents with deep links",
+    )
+    toc_p.add_argument("doc", help="Document ID or URL")
+    toc_p.add_argument("--tab", help="Read a specific tab by title or ID")
+    toc_p.add_argument(
+        "--max-depth", type=int, default=0,
+        help="Only show headings up to level N (0 = all)",
+    )
+    toc_p.add_argument(
+        "--no-links", action="store_true",
+        help="Plain text outline without links",
+    )
+    toc_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks",
+    )
+    toc_p.set_defaults(func=cmd_toc)
 
     # add-tab
     add_tab_p = sub.add_parser(
