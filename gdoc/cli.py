@@ -252,6 +252,10 @@ def cmd_toc(args) -> int:
         headings = [h for h in headings if h["level"] <= max_depth]
 
     base_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+    tab_suffix = f"&tab=t.{tab_id}" if tab_id else ""
+
+    def _link(heading_id: str) -> str:
+        return f"{base_url}#heading={heading_id}{tab_suffix}"
 
     from gdoc.format import format_json, get_output_mode
 
@@ -259,32 +263,23 @@ def cmd_toc(args) -> int:
     if mode == "json":
         items = []
         for h in headings:
-            link = f"{base_url}#heading={h['heading_id']}"
-            if tab_id:
-                link += f"&tab=t.{tab_id}"
             items.append({
                 "level": h["level"],
                 "heading_id": h["heading_id"],
                 "text": h["text"],
-                "link": link,
+                "link": _link(h["heading_id"]),
             })
         print(format_json(headings=items))
     elif mode == "plain":
         for h in headings:
-            link = f"{base_url}#heading={h['heading_id']}"
-            if tab_id:
-                link += f"&tab=t.{tab_id}"
-            print(f"{h['level']}\t{h['heading_id']}\t{h['text']}\t{link}")
+            print(f"{h['level']}\t{h['heading_id']}\t{h['text']}\t{_link(h['heading_id'])}")
     else:
         for h in headings:
             indent = "  " * (h["level"] - 1)
             if no_links:
                 print(f"{indent}- {h['text']}")
             else:
-                link = f"{base_url}#heading={h['heading_id']}"
-                if tab_id:
-                    link += f"&tab=t.{tab_id}"
-                print(f"{indent}- [{h['text']}]({link})")
+                print(f"{indent}- [{h['text']}]({_link(h['heading_id'])})")
         if mode == "verbose":
             print(f"\n({len(headings)} headings)")
 
