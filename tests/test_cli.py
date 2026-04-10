@@ -1,8 +1,11 @@
 """Tests for gdoc.cli: argument parsing, exit codes, and error formatting."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+from gdoc import __version__
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
@@ -101,6 +104,17 @@ class TestHelpText:
         result = run_gdoc("auth", "--help")
         assert result.returncode == 0
         assert "--no-browser" in result.stdout
+
+    def test_version_matches_project_version(self):
+        result = run_gdoc("--version")
+        assert result.returncode == 0
+
+        pyproject = Path(REPO_ROOT, "pyproject.toml").read_text()
+        match = re.search(r'^version = "([^"]+)"$', pyproject, re.MULTILINE)
+
+        assert match is not None
+        assert __version__ == match.group(1)
+        assert result.stdout.strip() == f"gdoc {match.group(1)}"
 
 
 class TestPlainFlag:
