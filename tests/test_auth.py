@@ -125,7 +125,8 @@ class TestGetCredentials:
 
         assert result is mock_creds
         mock_creds.refresh.assert_called_once()
-        mock_save.assert_called_once_with(mock_creds)
+        mock_save.assert_called_once()
+        assert mock_save.call_args[0][0] is mock_creds
 
     def test_raises_when_not_authenticated(self):
         with patch("gdoc.auth._load_token", return_value=None):
@@ -150,15 +151,13 @@ class TestGetCredentials:
 class TestLoadToken:
     def test_missing_file(self, tmp_path):
         fake_token = tmp_path / "token.json"
-        with patch("gdoc.auth.TOKEN_PATH", fake_token):
-            assert _load_token() is None
+        assert _load_token(fake_token) is None
 
     def test_corrupt_json(self, tmp_path):
         fake_token = tmp_path / "token.json"
         fake_token.write_text("not valid json{{{")
 
-        with patch("gdoc.auth.TOKEN_PATH", fake_token):
-            result = _load_token()
+        result = _load_token(fake_token)
 
         assert result is None
         assert not fake_token.exists()
@@ -167,14 +166,11 @@ class TestLoadToken:
         fake_token = tmp_path / "token.json"
         fake_token.write_text('{"client_id": "x"}')
 
-        with (
-            patch("gdoc.auth.TOKEN_PATH", fake_token),
-            patch(
-                "gdoc.auth.Credentials.from_authorized_user_file",
-                side_effect=ValueError("missing fields"),
-            ),
+        with patch(
+            "gdoc.auth.Credentials.from_authorized_user_file",
+            side_effect=ValueError("missing fields"),
         ):
-            result = _load_token()
+            result = _load_token(fake_token)
 
         assert result is None
 
@@ -185,11 +181,7 @@ class TestSaveToken:
         mock_creds = MagicMock()
         mock_creds.to_json.return_value = '{"token": "test"}'
 
-        with (
-            patch("gdoc.auth.TOKEN_PATH", fake_token),
-            patch("gdoc.auth.CONFIG_DIR", tmp_path),
-        ):
-            _save_token(mock_creds)
+        _save_token(mock_creds, fake_token)
 
         assert fake_token.exists()
         assert oct(os.stat(fake_token).st_mode & 0o777) == "0o600"
@@ -209,12 +201,8 @@ class TestSaveToken:
             assert oct(stat.st_mode & 0o777) == "0o600"
             return fd
 
-        with (
-            patch("gdoc.auth.TOKEN_PATH", fake_token),
-            patch("gdoc.auth.CONFIG_DIR", tmp_path),
-            patch("gdoc.auth.os.open", side_effect=spy_open),
-        ):
-            _save_token(mock_creds)
+        with patch("gdoc.auth.os.open", side_effect=spy_open):
+            _save_token(mock_creds, fake_token)
 
 
 class TestCmdAuthIntegration:

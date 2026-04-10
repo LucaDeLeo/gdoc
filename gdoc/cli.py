@@ -1359,8 +1359,28 @@ def cmd_images(args) -> int:
 
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
-    from gdoc.auth import authenticate
+    if getattr(args, "list", False):
+        from gdoc.auth import list_accounts
+        accounts = list_accounts()
+        if not accounts:
+            print("No accounts found. Run `gdoc auth` to authenticate.", file=sys.stderr)
+            return 0
+        for acct in accounts:
+            print(acct)
+        return 0
 
+    remove = getattr(args, "remove", None)
+    if remove:
+        from gdoc.util import confirm_destructive
+        confirm_destructive(
+            f"remove credentials for account {remove!r}",
+            force=getattr(args, "force", False),
+        )
+        from gdoc.auth import remove_account
+        remove_account(remove)
+        return 0
+
+    from gdoc.auth import authenticate
     authenticate(no_browser=getattr(args, "no_browser", False))
     return 0
 
@@ -1656,6 +1676,11 @@ def build_parser() -> GdocArgumentParser:
         "--plain", action="store_true", default=argparse.SUPPRESS,
         help="Stable TSV output",
     )
+    output_parent.add_argument(
+        "--account",
+        default=os.environ.get("GDOC_ACCOUNT"),
+        help="Google account name for multi-account support (e.g. work, personal, or an email)",
+    )
 
     # Also add to the top-level parser for `gdoc --json <cmd>` form
     top_output_group = parser.add_mutually_exclusive_group()
@@ -1685,6 +1710,21 @@ def build_parser() -> GdocArgumentParser:
         "--no-browser",
         action="store_true",
         help="Don't open browser, print URL for manual auth",
+    )
+    auth_p.add_argument(
+        "--list",
+        action="store_true",
+        help="List all authenticated accounts",
+    )
+    auth_p.add_argument(
+        "--remove",
+        metavar="ACCOUNT",
+        help="Remove credentials for a named account",
+    )
+    auth_p.add_argument(
+        "--force", "-y",
+        action="store_true",
+        help="Skip confirmation for --remove",
     )
     auth_p.set_defaults(func=cmd_auth)
 
@@ -1998,12 +2038,18 @@ def main() -> int:
             print(f"ERR: command not allowed: {args.command}", file=sys.stderr)
             return 3
 
-    # Check for updates (skip for the update command itself and internal hooks)
-    if args.command not in ("update", "_sync-hook", "_pull-hook"):
-        from gdoc.update import check_for_update
-        check_for_update()
-
     try:
+        # Multi-account support
+        account = getattr(args, "account", None)
+        if account:
+            from gdoc.util import set_active_account
+            set_active_account(account)
+
+        # Check for updates (skip for the update command itself and internal hooks)
+        if args.command not in ("update", "_sync-hook", "_pull-hook"):
+            from gdoc.update import check_for_update
+            check_for_update()
+
         return args.func(args)
     except AuthError as e:
         print(f"ERR: {e}", file=sys.stderr)
