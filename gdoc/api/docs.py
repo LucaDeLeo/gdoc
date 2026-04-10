@@ -520,6 +520,49 @@ def download_image(content_uri: str, dest_path: str) -> None:
         f.write(data)
 
 
+_HEADING_LEVELS = {
+    "HEADING_1": 1, "HEADING_2": 2, "HEADING_3": 3,
+    "HEADING_4": 4, "HEADING_5": 5, "HEADING_6": 6,
+}
+
+
+def get_document_headings(doc_id: str, body: dict | None = None) -> list[dict]:
+    """Extract headings with deep-link IDs from a document body.
+
+    If *body* is provided (e.g. from a specific tab), it is used
+    directly; otherwise the document is fetched via documents().get().
+
+    Returns a list of dicts:
+        {"level": int, "heading_id": str, "text": str}
+    """
+    if body is None:
+        doc = get_document(doc_id)
+        body = doc.get("body", {})
+
+    headings: list[dict] = []
+    for element in body.get("content", []):
+        paragraph = element.get("paragraph")
+        if paragraph is None:
+            continue
+        style = paragraph.get("paragraphStyle", {})
+        named_style = style.get("namedStyleType", "")
+        heading_id = style.get("headingId")
+        if named_style not in _HEADING_LEVELS or not heading_id:
+            continue
+        text = "".join(
+            run.get("textRun", {}).get("content", "")
+            for run in paragraph.get("elements", [])
+        ).strip()
+        if not text:
+            continue
+        headings.append({
+            "level": _HEADING_LEVELS[named_style],
+            "heading_id": heading_id,
+            "text": text,
+        })
+    return headings
+
+
 def get_document_with_tabs(doc_id: str) -> dict:
     """Fetch document with includeTabsContent=True.
 
