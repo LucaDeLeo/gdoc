@@ -1284,7 +1284,7 @@ def cmd_images(args) -> int:
 
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
-    if getattr(args, "list", False):
+    if args.list:
         from gdoc.auth import list_accounts
         accounts = list_accounts()
         if not accounts:
@@ -1294,19 +1294,18 @@ def cmd_auth(args) -> int:
             print(acct)
         return 0
 
-    remove = getattr(args, "remove", None)
-    if remove:
+    if args.remove:
         from gdoc.util import confirm_destructive
         confirm_destructive(
-            f"remove credentials for account {remove!r}",
-            force=getattr(args, "force", False),
+            f"remove credentials for account {args.remove!r}",
+            force=args.force,
         )
         from gdoc.auth import remove_account
-        remove_account(remove)
+        remove_account(args.remove)
         return 0
 
     from gdoc.auth import authenticate
-    authenticate(no_browser=getattr(args, "no_browser", False))
+    authenticate(no_browser=args.no_browser)
     return 0
 
 

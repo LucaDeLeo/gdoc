@@ -10,7 +10,13 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-from gdoc.util import AuthError, CONFIG_DIR, CREDS_PATH, TOKEN_PATH, get_token_path
+from gdoc.util import (
+    CONFIG_DIR,
+    CREDS_PATH,
+    TOKEN_PATH,
+    AuthError,
+    get_token_path,
+)
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
@@ -22,8 +28,6 @@ def get_credentials() -> Credentials:
     """Load or refresh credentials. Returns valid Credentials or raises AuthError."""
     from gdoc.util import get_active_account
     account = get_active_account()
-    if not account:
-        print("account: default (use --account to switch)", file=sys.stderr)
 
     token_path = get_token_path()
     creds = _load_token(token_path)
@@ -39,10 +43,11 @@ def get_credentials() -> Credentials:
         except Exception:
             pass
 
-    from gdoc.util import get_active_account
-    account = get_active_account()
     hint = f" (account: {account})" if account else ""
-    raise AuthError(f"Not authenticated{hint}. Run `gdoc auth{' --account ' + account if account else ''}` to authenticate.")
+    auth_cmd = f"gdoc auth --account {account}" if account else "gdoc auth"
+    raise AuthError(
+        f"Not authenticated{hint}. Run `{auth_cmd}` to authenticate."
+    )
 
 
 def authenticate(no_browser: bool = False) -> Credentials:
@@ -86,10 +91,8 @@ def authenticate(no_browser: bool = False) -> Credentials:
     return creds
 
 
-def _load_token(token_path: Path | None = None) -> Credentials | None:
+def _load_token(token_path: Path) -> Credentials | None:
     """Load token.json with defensive error handling."""
-    if token_path is None:
-        token_path = get_token_path()
     if not token_path.exists():
         return None
 
@@ -105,10 +108,8 @@ def _load_token(token_path: Path | None = None) -> Credentials | None:
         return None
 
 
-def _save_token(creds: Credentials, token_path: Path | None = None) -> None:
+def _save_token(creds: Credentials, token_path: Path) -> None:
     """Save credentials to token.json with restricted permissions."""
-    if token_path is None:
-        token_path = get_token_path()
     token_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -135,21 +136,16 @@ def remove_account(account: str) -> None:
     """Remove credentials for a named account."""
     from gdoc.util import _validate_account_name
 
-    if account == "default":
-        if not TOKEN_PATH.exists():
-            raise AuthError("No default account credentials found.")
-        TOKEN_PATH.unlink()
-        print("OK removed default account credentials.", file=sys.stderr)
-        return
+    if account != "default":
+        _validate_account_name(account)
 
-    _validate_account_name(account)
-    account_dir = CONFIG_DIR / "accounts" / account
-    token = account_dir / "token.json"
-    if not token.exists():
+    token_path = TOKEN_PATH if account == "default" else get_token_path(account=account)
+    if not token_path.exists():
         raise AuthError(f"No credentials found for account: {account}")
-    token.unlink()
-    try:
-        account_dir.rmdir()  # only succeeds if empty
-    except OSError:
-        pass
+    token_path.unlink()
+    if account != "default":
+        try:
+            token_path.parent.rmdir()  # only succeeds if empty
+        except OSError:
+            pass
     print(f"OK removed credentials for account: {account}", file=sys.stderr)

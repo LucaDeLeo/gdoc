@@ -59,14 +59,15 @@ def get_active_account() -> str | None:
     return _active_account
 
 
-def get_token_path() -> Path:
-    """Return the token path for the active account.
+def get_token_path(account: str | None = None) -> Path:
+    """Return the token path for the given or active account.
 
     Default account uses CONFIG_DIR/token.json (backward-compatible).
     Named accounts use CONFIG_DIR/accounts/<account>/token.json.
     """
-    if _active_account:
-        return CONFIG_DIR / "accounts" / _active_account / "token.json"
+    acct = account or _active_account
+    if acct:
+        return CONFIG_DIR / "accounts" / acct / "token.json"
     return TOKEN_PATH
 
 _PATTERNS = [
