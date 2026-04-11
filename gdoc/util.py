@@ -95,6 +95,14 @@ def confirm_destructive(message: str, force: bool = False) -> None:
         raise GdocError("Cancelled", exit_code=3)
 
 
+def build_doc_url(doc_id: str, tab_id: str | None = None) -> str:
+    """Build a Google Docs URL, optionally pointing at a specific tab."""
+    url = f"https://docs.google.com/document/d/{doc_id}/edit"
+    if tab_id:
+        url += f"?tab={tab_id}"
+    return url
+
+
 def extract_doc_id(input_str: str) -> str:
     """Extract document ID from a URL or bare ID string.
 

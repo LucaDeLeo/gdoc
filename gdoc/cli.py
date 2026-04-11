@@ -306,23 +306,28 @@ def cmd_add_tab(args) -> int:
     from gdoc.api.drive import get_file_version
     command_version = get_file_version(doc_id).get("version")
 
+    from gdoc.util import build_doc_url
+    url = build_doc_url(doc_id, tab_id=tab_id)
+
     from gdoc.format import format_json, get_output_mode
     mode = get_output_mode(args)
     if mode == "json":
         print(format_json(
             id=tab_id, title=result["title"],
-            index=result["index"], doc_id=doc_id,
+            index=result["index"], doc_id=doc_id, url=url,
         ))
     elif mode == "verbose":
         print(f"Added tab: {result['title']}")
         print(f"ID: {tab_id}")
         print(f"Index: {result['index']}")
+        print(f"URL: {url}")
     elif mode == "plain":
         print(f"id\t{tab_id}")
         print(f"title\t{result['title']}")
         print(f"index\t{result['index']}")
+        print(f"url\t{url}")
     else:
-        print(f"{tab_id}\t{result['title']}")
+        print(f"{tab_id}\t{result['title']}\t{url}")
 
     from gdoc.state import update_state_after_command
     update_state_after_command(
@@ -330,6 +335,95 @@ def cmd_add_tab(args) -> int:
         command_version=command_version,
     )
 
+    return 0
+
+
+def _print_tab_write_result(
+    mode: str, doc_id: str, result: dict, version, verb: str,
+) -> None:
+    """Print the output for a successful per-tab write (insert or write --tab).
+
+    `verb` is one of "inserted" / "wrote"; it controls the terse line, the
+    verbose phrasing, the `status` column for plain mode, and the JSON
+    boolean key (`inserted` vs `written`).
+    """
+    from gdoc.format import format_json
+
+    json_key = "inserted" if verb == "inserted" else "written"
+    status = "inserted" if verb == "inserted" else "updated"
+    title = result["tab_title"]
+
+    if mode == "json":
+        print(format_json(**{
+            json_key: True,
+            "tab_id": result["tab_id"],
+            "tab_title": title,
+            "version": version,
+        }))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print(f"tab_id\t{result['tab_id']}")
+        print(f"status\t{status}")
+    elif mode == "verbose":
+        label = "Inserted into tab" if verb == "inserted" else "Wrote tab"
+        print(f'{label}: "{title}"')
+        print(f"Tab ID: {result['tab_id']}")
+    else:
+        terse = (
+            f'OK inserted into "{title}"' if verb == "inserted"
+            else f'OK wrote "{title}"'
+        )
+        print(terse)
+
+
+def cmd_insert(args) -> int:
+    """Handler for `gdoc insert`."""
+    import os
+
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    force = getattr(args, "force", False)
+    tab_name = args.tab
+    position = getattr(args, "position", "start")
+    file_path = args.file
+
+    if not os.path.isfile(file_path):
+        raise GdocError(f"file not found: {file_path}", exit_code=3)
+    try:
+        with open(file_path) as f:
+            content = f.read()
+    except OSError as e:
+        raise GdocError(f"cannot read file: {e}", exit_code=3) from e
+
+    from gdoc.frontmatter import parse_frontmatter
+    _, content = parse_frontmatter(content)
+
+    if not content.strip():
+        raise GdocError("input file has no content to insert", exit_code=3)
+
+    change_info = _check_write_conflict(doc_id, quiet, force)
+
+    from gdoc.api.docs import insert_markdown_into_tab
+
+    result = insert_markdown_into_tab(
+        doc_id, tab_name, content, position=position, replace=False,
+    )
+
+    from gdoc.api.drive import get_file_version
+    version_data = get_file_version(doc_id)
+    command_version = version_data.get("version")
+
+    from gdoc.format import get_output_mode
+    _print_tab_write_result(
+        get_output_mode(args), doc_id, result, command_version,
+        verb="inserted",
+    )
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="insert",
+        quiet=quiet, command_version=command_version,
+    )
     return 0
 
 
@@ -524,13 +618,18 @@ def cmd_edit(args) -> int:
     new_file = getattr(args, "new_file", None)
 
     if old_file or new_file:
-        if not (old_file and new_file):
+        if new_file and not old_file:
             raise GdocError(
-                "--old-file and --new-file must be used together",
+                "--new-file requires --old-file (needs an anchor). "
+                "To add content without an anchor, use `gdoc insert`.",
                 exit_code=3,
             )
         old_text = _read_file(old_file)
-        new_text = _read_file(new_file)
+        if new_file:
+            new_text = _read_file(new_file)
+        else:
+            # --old-file alone → delete the matched range.
+            new_text = ""
     elif old_text is None or new_text is None:
         raise GdocError(
             "old_text and new_text required "
@@ -683,6 +782,8 @@ def cmd_write(args) -> int:
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     force = getattr(args, "force", False)
+    tab_name = getattr(args, "tab", None)
+    force_collapse = getattr(args, "force_collapse_tabs", False)
     file_path = args.file
 
     # Read local file first (fail fast on missing file)
@@ -692,29 +793,58 @@ def cmd_write(args) -> int:
         with open(file_path) as f:
             content = f.read()
     except OSError as e:
-        raise GdocError(f"cannot read file: {e}", exit_code=3)
+        raise GdocError(f"cannot read file: {e}", exit_code=3) from e
+
+    # Strip frontmatter — pull prepends it, and leaving it in the upload
+    # dumps visible YAML into the doc body.
+    from gdoc.frontmatter import parse_frontmatter
+    _, content = parse_frontmatter(content)
 
     # Conflict detection
     change_info = _check_write_conflict(doc_id, quiet, force)
 
-    # Upload content via Drive API
-    from gdoc.api.drive import update_doc_content
-
-    command_version = update_doc_content(doc_id, content)
-
-    # Output
     from gdoc.format import format_json, get_output_mode
-
     mode = get_output_mode(args)
-    if mode == "json":
-        print(format_json(written=True, version=command_version))
-    elif mode == "plain":
-        print(f"id\t{doc_id}")
-        print(f"status\tupdated")
-    else:
-        print("OK written")
 
-    # Update state (Decision #4: last_version only)
+    if tab_name:
+        from gdoc.api.docs import insert_markdown_into_tab
+        result = insert_markdown_into_tab(
+            doc_id, tab_name, content, replace=True,
+        )
+
+        from gdoc.api.drive import get_file_version
+        version_data = get_file_version(doc_id)
+        command_version = version_data.get("version")
+
+        _print_tab_write_result(
+            mode, doc_id, result, command_version, verb="wrote",
+        )
+    else:
+        # Refuse destructive multi-tab collapse unless the user opts in.
+        if not force_collapse:
+            from gdoc.api.docs import count_document_tabs
+            tab_count = count_document_tabs(doc_id)
+            if tab_count > 1:
+                raise GdocError(
+                    f"write would collapse {tab_count} tabs into 1. "
+                    "Use `gdoc write --tab NAME FILE` for per-tab "
+                    "writes, `gdoc insert --tab NAME FILE` to populate "
+                    "a tab, or pass --force-collapse-tabs to confirm.",
+                    exit_code=3,
+                )
+
+        from gdoc.api.drive import update_doc_content
+        command_version = update_doc_content(doc_id, content)
+
+        if mode == "json":
+            print(format_json(written=True, version=command_version))
+        elif mode == "plain":
+            print(f"id\t{doc_id}")
+            print("status\tupdated")
+        else:
+            print("OK written")
+
+    # Update state
     from gdoc.state import update_state_after_command
 
     update_state_after_command(
@@ -1920,9 +2050,28 @@ def build_parser() -> GdocArgumentParser:
     diff_p.set_defaults(func=cmd_diff)
 
     # write
-    write_p = sub.add_parser("write", parents=[output_parent], help="Overwrite doc from local file")
+    write_p = sub.add_parser(
+        "write", parents=[output_parent],
+        help="Overwrite doc (or one tab) from local file",
+        description=(
+            "Upload a markdown file and replace the doc's contents. "
+            "Without --tab, write replaces the entire document and "
+            "collapses any additional tabs into one — use --tab NAME "
+            "for per-tab writes, or `gdoc insert` to add content to an "
+            "existing tab. YAML frontmatter in the input is stripped "
+            "automatically."
+        ),
+    )
     write_p.add_argument("doc", help="Document ID or URL")
     write_p.add_argument("file", help="Local markdown file")
+    write_p.add_argument(
+        "--tab",
+        help="Replace only this tab (by title or ID); leaves siblings alone",
+    )
+    write_p.add_argument(
+        "--force-collapse-tabs", action="store_true",
+        help="Confirm you intend to collapse a multi-tab doc into one tab",
+    )
     write_p.add_argument(
         "--force", action="store_true", help="Force overwrite even if doc changed"
     )
@@ -1930,6 +2079,35 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     write_p.set_defaults(func=cmd_write)
+
+    # insert
+    insert_p = sub.add_parser(
+        "insert", parents=[output_parent],
+        help="Insert local markdown into an existing tab",
+        description=(
+            "Insert the contents of a markdown file into a specific tab "
+            "without touching any other tab. Frontmatter is stripped "
+            "before upload."
+        ),
+    )
+    insert_p.add_argument("doc", help="Document ID or URL")
+    insert_p.add_argument("file", help="Local markdown file")
+    insert_p.add_argument(
+        "--tab", required=True,
+        help="Target tab by title or ID",
+    )
+    insert_p.add_argument(
+        "--position", choices=["start", "end"], default="start",
+        help="Insert at the start (default) or end of the tab body",
+    )
+    insert_p.add_argument(
+        "--force", action="store_true",
+        help="Proceed even if the doc changed since the last read",
+    )
+    insert_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    insert_p.set_defaults(func=cmd_insert)
 
     # pull
     pull_p = sub.add_parser("pull", parents=[output_parent], help="Download doc as local markdown")

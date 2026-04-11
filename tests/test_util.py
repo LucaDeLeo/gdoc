@@ -4,7 +4,30 @@ from unittest.mock import patch
 
 import pytest
 
-from gdoc.util import AuthError, GdocError, confirm_destructive, extract_doc_id
+from gdoc.util import (
+    AuthError,
+    GdocError,
+    build_doc_url,
+    confirm_destructive,
+    extract_doc_id,
+)
+
+
+class TestBuildDocUrl:
+    def test_without_tab(self):
+        assert (
+            build_doc_url("abc123")
+            == "https://docs.google.com/document/d/abc123/edit"
+        )
+
+    def test_with_tab(self):
+        assert (
+            build_doc_url("abc123", tab_id="t.xyz")
+            == "https://docs.google.com/document/d/abc123/edit?tab=t.xyz"
+        )
+
+    def test_tab_id_none_omits_param(self):
+        assert "?tab=" not in build_doc_url("abc123", tab_id=None)
 
 
 class TestExtractDocId:

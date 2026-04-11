@@ -14,7 +14,14 @@ from gdoc.util import AuthError, GdocError
 
 
 def _make_args(**overrides):
-    """Build a SimpleNamespace mimicking parsed write args."""
+    """Build a SimpleNamespace mimicking parsed write args.
+
+    Defaults match what `build_parser()` produces: `tab=None`,
+    `force_collapse_tabs=False`. Tests that need to bypass the
+    multi-tab safety gate either pass `force_collapse_tabs=True`
+    or rely on the module-level `_stub_single_tab` autouse fixture
+    below, which pretends the remote doc has a single tab.
+    """
     defaults = {
         "command": "write",
         "doc": "abc123",
@@ -23,9 +30,27 @@ def _make_args(**overrides):
         "json": False,
         "verbose": False,
         "quiet": False,
+        "tab": None,
+        "force_collapse_tabs": False,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+@pytest.fixture(autouse=True)
+def _stub_single_tab():
+    """Default `count_document_tabs` to `1` for the whole test module.
+
+    Keeps legacy success-path tests honest to the real CLI defaults
+    (force_collapse_tabs=False) without forcing every test to decorate
+    the patch. Tests that need a different count (e.g.
+    `TestWriteCollapseSafety.test_refuses_multi_tab_without_flag`)
+    stack their own `@patch("gdoc.api.docs.count_document_tabs", ...)`
+    on top — unittest.mock.patch is LIFO so the inner patch wins for
+    the duration of the test.
+    """
+    with patch("gdoc.api.docs.count_document_tabs", return_value=1):
+        yield
 
 
 class TestWriteBasic:
@@ -597,3 +622,161 @@ class TestWritePlain:
         out = capsys.readouterr().out
         assert "id\tabc123" in out
         assert "status\tupdated" in out
+
+
+class TestWriteFrontmatterStrip:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.notify.pre_flight")
+    def test_frontmatter_stripped_from_upload(
+        self, mock_pf, mock_update, _update_state, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text(
+            "---\ngdoc: abc123\ntitle: Demo\n---\n# Real body\n",
+        )
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        args = _make_args(file=str(f))
+        cmd_write(args)
+        uploaded = mock_update.call_args.args[1]
+        assert "---" not in uploaded
+        assert "gdoc:" not in uploaded
+        assert uploaded.startswith("# Real body")
+
+
+class TestWriteCollapseSafety:
+    """Writes against multi-tab docs without --force-collapse-tabs fail."""
+
+    @patch("gdoc.api.drive.update_doc_content")
+    @patch("gdoc.api.docs.count_document_tabs", return_value=2)
+    @patch("gdoc.notify.pre_flight")
+    def test_refuses_multi_tab_without_flag(
+        self, mock_pf, _mock_count, mock_update, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text("content")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        args = _make_args(file=str(f), force_collapse_tabs=False)
+        with pytest.raises(GdocError, match="collapse 2 tabs") as exc:
+            cmd_write(args)
+        msg = str(exc.value)
+        assert "--force-collapse-tabs" in msg
+        assert "--tab" in msg
+        assert "insert" in msg
+        mock_update.assert_not_called()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.api.docs.count_document_tabs", return_value=1)
+    @patch("gdoc.notify.pre_flight")
+    def test_single_tab_passes_through(
+        self, mock_pf, _mock_count, mock_update, _u, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text("content")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        args = _make_args(file=str(f), force_collapse_tabs=False)
+        rc = cmd_write(args)
+        assert rc == 0
+        mock_update.assert_called_once()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.api.docs.count_document_tabs")
+    @patch("gdoc.notify.pre_flight")
+    def test_force_collapse_bypasses_check(
+        self, mock_pf, mock_count, mock_update, _u, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text("content")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        args = _make_args(file=str(f), force_collapse_tabs=True)
+        rc = cmd_write(args)
+        assert rc == 0
+        # With the opt-in flag, no count lookup happens at all.
+        mock_count.assert_not_called()
+        mock_update.assert_called_once()
+
+
+class TestWriteTabScoped:
+    """--tab NAME writes only to that tab via Docs API."""
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.notify.pre_flight")
+    def test_tab_scoped_uses_docs_api(
+        self, mock_pf, mock_insert, _ver, _update, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text("# New body\n")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        mock_insert.return_value = {
+            "tab_id": "t.todo",
+            "tab_title": "TODO for Mark",
+            "insert_index": 1,
+        }
+        args = _make_args(file=str(f), tab="TODO for Mark")
+        rc = cmd_write(args)
+        assert rc == 0
+        mock_insert.assert_called_once_with(
+            "abc123", "TODO for Mark", "# New body\n", replace=True,
+        )
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
+    @patch("gdoc.api.drive.update_doc_content")
+    @patch("gdoc.api.docs.count_document_tabs")
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.notify.pre_flight")
+    def test_tab_scoped_does_not_touch_drive(
+        self, mock_pf, mock_insert, mock_tabs, mock_update_doc, _ver,
+        _update, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text("body")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        mock_insert.return_value = {
+            "tab_id": "t.todo", "tab_title": "TODO", "insert_index": 1,
+        }
+        args = _make_args(file=str(f), tab="TODO")
+        cmd_write(args)
+        mock_update_doc.assert_not_called()
+        # The tab-count safety check runs only on the full-doc path;
+        # --tab writes must not invoke it.
+        mock_tabs.assert_not_called()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.notify.pre_flight")
+    def test_tab_scoped_strips_frontmatter(
+        self, mock_pf, mock_insert, _ver, _update, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text(
+            "---\ngdoc: abc123\n---\n# Real body\n",
+        )
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        mock_insert.return_value = {
+            "tab_id": "t.a", "tab_title": "A", "insert_index": 1,
+        }
+        args = _make_args(file=str(f), tab="A")
+        cmd_write(args)
+        uploaded = mock_insert.call_args.args[2]
+        assert "---" not in uploaded
+        assert uploaded.startswith("# Real body")

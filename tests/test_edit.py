@@ -404,17 +404,27 @@ class TestEditFileInput:
             "abc123", _single_match(), "world", "rev123", tab_id=None,
         )
 
-    def test_missing_new_file_flag(self, tmp_path):
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
+    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_old_file_alone_deletes(
+        self, _pf, _doc, _find, mock_replace, _ver, _update, tmp_path,
+    ):
+        """--old-file alone → delete the matched range."""
         old_f = tmp_path / "old.txt"
         old_f.write_text("hello")
         args = _make_args(
             old_text=None, new_text=None,
             old_file=str(old_f), new_file=None,
         )
-        msg = "--old-file and --new-file must be used together"
-        with pytest.raises(GdocError, match=msg) as exc_info:
-            cmd_edit(args)
-        assert exc_info.value.exit_code == 3
+        cmd_edit(args)
+        # new_text defaults to empty string for a pure delete.
+        mock_replace.assert_called_once_with(
+            "abc123", _single_match(), "", "rev123", tab_id=None,
+        )
 
     def test_missing_old_file_flag(self, tmp_path):
         new_f = tmp_path / "new.txt"
@@ -423,10 +433,12 @@ class TestEditFileInput:
             old_text=None, new_text=None,
             old_file=None, new_file=str(new_f),
         )
-        msg = "--old-file and --new-file must be used together"
-        with pytest.raises(GdocError, match=msg) as exc_info:
+        with pytest.raises(
+            GdocError, match="--new-file requires --old-file",
+        ) as exc_info:
             cmd_edit(args)
         assert exc_info.value.exit_code == 3
+        assert "gdoc insert" in str(exc_info.value)
 
     def test_file_not_found(self, tmp_path):
         missing = str(tmp_path / "nope.txt")
