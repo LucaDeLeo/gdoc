@@ -45,6 +45,12 @@ All notable changes to `gdoc` are documented here. This project follows
   `"The range should not be empty"`, which broke any flow that tried
   to use a zero-width match as a pure insert (e.g., `edit --tab` on
   an empty tab).
+- `parse_frontmatter` no longer strips a leading `---\n...\n---\n`
+  block unless it contains at least one `key: value` line. Previous
+  behavior could silently eat content from markdown files that open
+  with a thematic break followed by another `---`. All
+  frontmatter-consuming commands (`write`, `insert`, `push`,
+  `_pull-hook`, etc.) benefit.
 - `__version__` was drifting from `pyproject.toml` again; resynced.
 
 ## [0.7.0] — 2026-04-09
