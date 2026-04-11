@@ -16,9 +16,11 @@ from gdoc.util import AuthError, GdocError
 def _make_args(**overrides):
     """Build a SimpleNamespace mimicking parsed write args.
 
-    Defaults `force_collapse_tabs=True` so the safety check doesn't
-    require patching `get_document_tabs` in every legacy test. Tests
-    that exercise the multi-tab safety path should override it.
+    Defaults match what `build_parser()` produces: `tab=None`,
+    `force_collapse_tabs=False`. Tests that need to bypass the
+    multi-tab safety gate either pass `force_collapse_tabs=True`
+    or rely on the module-level `_stub_single_tab` autouse fixture
+    below, which pretends the remote doc has a single tab.
     """
     defaults = {
         "command": "write",
@@ -29,10 +31,26 @@ def _make_args(**overrides):
         "verbose": False,
         "quiet": False,
         "tab": None,
-        "force_collapse_tabs": True,
+        "force_collapse_tabs": False,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+@pytest.fixture(autouse=True)
+def _stub_single_tab():
+    """Default `count_document_tabs` to `1` for the whole test module.
+
+    Keeps legacy success-path tests honest to the real CLI defaults
+    (force_collapse_tabs=False) without forcing every test to decorate
+    the patch. Tests that need a different count (e.g.
+    `TestWriteCollapseSafety.test_refuses_multi_tab_without_flag`)
+    stack their own `@patch("gdoc.api.docs.count_document_tabs", ...)`
+    on top — unittest.mock.patch is LIFO so the inner patch wins for
+    the duration of the test.
+    """
+    with patch("gdoc.api.docs.count_document_tabs", return_value=1):
+        yield
 
 
 class TestWriteBasic:

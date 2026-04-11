@@ -393,7 +393,7 @@ def cmd_insert(args) -> int:
         with open(file_path) as f:
             content = f.read()
     except OSError as e:
-        raise GdocError(f"cannot read file: {e}", exit_code=3)
+        raise GdocError(f"cannot read file: {e}", exit_code=3) from e
 
     from gdoc.frontmatter import parse_frontmatter
     _, content = parse_frontmatter(content)
@@ -793,7 +793,7 @@ def cmd_write(args) -> int:
         with open(file_path) as f:
             content = f.read()
     except OSError as e:
-        raise GdocError(f"cannot read file: {e}", exit_code=3)
+        raise GdocError(f"cannot read file: {e}", exit_code=3) from e
 
     # Strip frontmatter — pull prepends it, and leaving it in the upload
     # dumps visible YAML into the doc body.
@@ -2101,7 +2101,8 @@ def build_parser() -> GdocArgumentParser:
         help="Insert at the start (default) or end of the tab body",
     )
     insert_p.add_argument(
-        "--force", action="store_true", help="Skip conflict detection"
+        "--force", action="store_true",
+        help="Proceed even if the doc changed since the last read",
     )
     insert_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
