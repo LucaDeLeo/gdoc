@@ -336,6 +336,10 @@ uv run pytest tests/test_cat.py -k "test_name" -v
 uv run ruff check gdoc/ tests/
 ```
 
+## Changelog
+
+Release notes and upgrade highlights live in [CHANGELOG.md](./CHANGELOG.md).
+
 ## License
 
 MIT

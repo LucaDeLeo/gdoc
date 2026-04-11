@@ -11,6 +11,7 @@ from urllib.request import urlopen
 _GITHUB_REPO = "LucaDeLeo/gdoc"
 _PACKAGE_NAME = "gdoc"
 _CACHE_FILE = Path.home() / ".config" / "gdoc" / "update_check.json"
+_CHANGELOG_URL = f"https://github.com/{_GITHUB_REPO}/blob/main/CHANGELOG.md"
 
 
 def _installed_version() -> str:
@@ -61,7 +62,8 @@ def check_for_update() -> None:
         if latest and latest != _installed_version():
             print(
                 f"Update available: {_installed_version()} → {latest}. "
-                f"Run `gdoc update` to update.",
+                f"Run `gdoc update` to update. "
+                f"Changelog: {_CHANGELOG_URL}",
                 file=sys.stderr,
             )
     except Exception:
@@ -88,6 +90,7 @@ def run_update() -> int:
     )
     if result.returncode == 0:
         print(f"\nUpdated to v{latest}.")
+        print(f"Changelog: {_CHANGELOG_URL}")
         _write_cache(latest)
         return 0
     else:
