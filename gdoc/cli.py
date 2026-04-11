@@ -306,9 +306,8 @@ def cmd_add_tab(args) -> int:
     from gdoc.api.drive import get_file_version
     command_version = get_file_version(doc_id).get("version")
 
-    url = (
-        f"https://docs.google.com/document/d/{doc_id}/edit?tab={tab_id}"
-    )
+    from gdoc.util import build_doc_url
+    url = build_doc_url(doc_id, tab_id=tab_id)
 
     from gdoc.format import format_json, get_output_mode
     mode = get_output_mode(args)
