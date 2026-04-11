@@ -124,6 +124,35 @@ def get_document_tabs(doc_id: str) -> list[dict]:
         _translate_http_error(e, doc_id)
 
 
+def count_document_tabs(doc_id: str) -> int:
+    """Return the total tab count (including nested child tabs).
+
+    Uses a fields mask so only tab IDs come back — no body content — so
+    the call is cheap enough to run as a per-write safety check.
+    """
+    try:
+        service = get_docs_service()
+        doc = (
+            service.documents()
+            .get(
+                documentId=doc_id,
+                fields="tabs(tabProperties/tabId,childTabs)",
+            )
+            .execute()
+        )
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+    def _walk(tabs: list[dict]) -> int:
+        total = 0
+        for tab in tabs:
+            total += 1
+            total += _walk(tab.get("childTabs", []))
+        return total
+
+    return _walk(doc.get("tabs", []))
+
+
 def get_tab_text(tab: dict) -> str:
     """Extract plain text from a tab's body content.
 
@@ -680,6 +709,119 @@ def _build_cleanup_requests(
     return requests
 
 
+def _tab_body_range(body: dict) -> tuple[int, int]:
+    """Return (startIndex, endIndex_exclusive_final_newline) for a tab body.
+
+    A tab body always begins at index 1. The "end" is one less than the
+    final element's endIndex because Docs stores a trailing newline that
+    cannot be deleted. Returns (1, 1) for an empty body.
+    """
+    last_end = 1
+    for elem in body.get("content", []):
+        end = elem.get("endIndex")
+        if end is not None and end > last_end:
+            last_end = end
+    if last_end <= 1:
+        return (1, 1)
+    return (1, last_end - 1)
+
+
+def insert_markdown_into_tab(
+    doc_id: str,
+    tab_name: str,
+    markdown: str,
+    position: str = "start",
+    replace: bool = False,
+) -> dict:
+    """Insert (or replace) markdown content in a tab via Docs API.
+
+    Bypasses Drive's markdown importer so multi-tab docs are never
+    collapsed. Reused by both `gdoc insert` and `gdoc write --tab`.
+
+    Args:
+        doc_id: Document ID.
+        tab_name: Tab title (case-insensitive) or tab ID.
+        markdown: Markdown source to insert (frontmatter should be
+            stripped by the caller).
+        position: "start" or "end". Ignored when replace=True.
+        replace: If True, delete the tab body first then insert at the
+            body start.
+
+    Returns:
+        Dict with "tab_id", "tab_title", "insert_index".
+    """
+    from gdoc.mdparse import parse_markdown, to_docs_requests
+
+    doc = get_document_with_tabs(doc_id)
+    revision_id = doc.get("revisionId", "")
+    tabs = flatten_tabs(doc.get("tabs", []))
+    tab_match = resolve_tab(tabs, tab_name)
+    tab_id = tab_match["id"]
+    body = tab_match["body"]
+
+    body_start, body_end = _tab_body_range(body)
+
+    if replace:
+        insert_index = body_start
+    elif position == "end":
+        insert_index = body_end
+    else:
+        insert_index = body_start
+
+    parsed = parse_markdown(markdown)
+
+    # Strip trailing \n — the existing paragraph already owns one.
+    # Without this, every insert leaves an extra blank line behind.
+    if parsed.plain_text.endswith("\n"):
+        old_len = len(parsed.plain_text)
+        parsed.plain_text = parsed.plain_text[:-1]
+        for s in parsed.styles:
+            if s.end == old_len:
+                s.end = old_len - 1
+
+    requests: list[dict] = []
+
+    if replace and body_end > body_start:
+        delete_range = {
+            "startIndex": body_start,
+            "endIndex": body_end,
+            "tabId": tab_id,
+        }
+        requests.append({"deleteContentRange": {"range": delete_range}})
+
+    requests.extend(
+        to_docs_requests(parsed, insert_index, tab_id=tab_id)
+    )
+
+    if requests:
+        try:
+            service = get_docs_service()
+            service.documents().batchUpdate(
+                documentId=doc_id,
+                body={
+                    "requests": requests,
+                    "writeControl": {"requiredRevisionId": revision_id},
+                },
+            ).execute()
+        except HttpError as e:
+            _translate_http_error(e, doc_id)
+
+    if parsed.tables:
+        for table in reversed(parsed.tables):
+            _insert_table(
+                doc_id,
+                insert_index + table.plain_text_offset,
+                table,
+                tab_id=tab_id,
+            )
+
+    return {
+        "tab_id": tab_id,
+        "tab_title": tab_match["title"],
+        "insert_index": insert_index,
+    }
+
+
 def replace_formatted(
     doc_id: str,
     matches: list[dict],
@@ -725,18 +867,21 @@ def replace_formatted(
     all_requests: list[dict] = []
 
     for match in sorted_matches:
-        # Delete the matched range
-        delete_range = {
-            "startIndex": match["startIndex"],
-            "endIndex": match["endIndex"],
-        }
-        if tab_id:
-            delete_range["tabId"] = tab_id
-        all_requests.append({
-            "deleteContentRange": {
-                "range": delete_range,
+        # Delete the matched range (skip empty ranges — Docs API rejects
+        # them with "The range should not be empty", and a zero-width
+        # match is a pure insert).
+        if match["endIndex"] > match["startIndex"]:
+            delete_range = {
+                "startIndex": match["startIndex"],
+                "endIndex": match["endIndex"],
             }
-        })
+            if tab_id:
+                delete_range["tabId"] = tab_id
+            all_requests.append({
+                "deleteContentRange": {
+                    "range": delete_range,
+                }
+            })
 
         # Insert formatted replacement
         insert_requests = to_docs_requests(

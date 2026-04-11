@@ -206,6 +206,8 @@ class TestAddTab:
         assert rc == 0
         out = capsys.readouterr().out
         assert "t99\tNew Tab" in out
+        # Clickable URL is now part of the default output.
+        assert "https://docs.google.com/document/d/abc123/edit?tab=t99" in out
         mock_add.assert_called_once_with("abc123", "New Tab")
 
     @patch("gdoc.state.update_state_after_command")
@@ -222,6 +224,9 @@ class TestAddTab:
         assert data["title"] == "New Tab"
         assert data["index"] == 2
         assert data["doc_id"] == "abc123"
+        assert data["url"] == (
+            "https://docs.google.com/document/d/abc123/edit?tab=t99"
+        )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
@@ -235,6 +240,7 @@ class TestAddTab:
         assert "Added tab: New Tab" in out
         assert "ID: t99" in out
         assert "Index: 2" in out
+        assert "URL: https://docs.google.com/document/d/abc123/edit?tab=t99" in out
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
@@ -248,6 +254,10 @@ class TestAddTab:
         assert "id\tt99" in out
         assert "title\tNew Tab" in out
         assert "index\t2" in out
+        assert (
+            "url\thttps://docs.google.com/document/d/abc123/edit?tab=t99"
+            in out
+        )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})

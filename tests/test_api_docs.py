@@ -471,3 +471,209 @@ class TestAddTab:
 
         with pytest.raises(GdocError, match="Unexpected API response"):
             add_tab("doc1", "Notes")
+
+
+def _capture_batch_updates(mock_svc):
+    """Wire mock_svc so every documents().batchUpdate(...) is captured.
+
+    Returns a list that accumulates each call's body kwarg.
+    """
+    captured: list = []
+
+    def _bu(documentId, body):
+        captured.append(body)
+        inner = MagicMock()
+        inner.execute.return_value = {}
+        return inner
+
+    mock_svc.return_value.documents.return_value \
+        .batchUpdate.side_effect = _bu
+    return captured
+
+
+class TestCountDocumentTabs:
+    """count_document_tabs uses a fields mask and counts nested tabs."""
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_flat_tab_list(self, mock_svc):
+        from gdoc.api.docs import count_document_tabs
+
+        mock_svc.return_value.documents.return_value \
+            .get.return_value.execute.return_value = {
+                "tabs": [
+                    {"tabProperties": {"tabId": "t1"}},
+                    {"tabProperties": {"tabId": "t2"}},
+                ],
+            }
+        assert count_document_tabs("doc1") == 2
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_nested_child_tabs_counted(self, mock_svc):
+        from gdoc.api.docs import count_document_tabs
+
+        mock_svc.return_value.documents.return_value \
+            .get.return_value.execute.return_value = {
+                "tabs": [
+                    {
+                        "tabProperties": {"tabId": "t1"},
+                        "childTabs": [
+                            {"tabProperties": {"tabId": "t1a"}},
+                            {"tabProperties": {"tabId": "t1b"}},
+                        ],
+                    },
+                    {"tabProperties": {"tabId": "t2"}},
+                ],
+            }
+        assert count_document_tabs("doc1") == 4
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_uses_fields_mask(self, mock_svc):
+        from gdoc.api.docs import count_document_tabs
+
+        mock_svc.return_value.documents.return_value \
+            .get.return_value.execute.return_value = {"tabs": []}
+        count_document_tabs("doc1")
+        # The fields mask must request only tab IDs (and childTabs for
+        # recursion) — never full body content — so the safety check is
+        # cheap enough to run on every full-doc write.
+        call_kwargs = mock_svc.return_value.documents.return_value \
+            .get.call_args.kwargs
+        assert "fields" in call_kwargs
+        assert "tabId" in call_kwargs["fields"]
+        assert "content" not in call_kwargs["fields"]
+
+
+class TestZeroWidthReplace:
+    """Zero-width matches in replace_formatted act as pure inserts — no
+    deleteContentRange is emitted (Docs API rejects empty ranges)."""
+
+    @patch("gdoc.api.docs._build_cleanup_requests", return_value=[])
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_zero_width_match_skips_delete(self, mock_svc, _cleanup):
+        from gdoc.api.docs import replace_formatted
+
+        captured = _capture_batch_updates(mock_svc)
+        mock_svc.return_value.documents.return_value \
+            .get.return_value.execute.return_value = {"body": {"content": []}}
+
+        matches = [{"startIndex": 1, "endIndex": 1}]
+        replace_formatted("doc1", matches, "hello", "rev1")
+
+        assert captured, "batchUpdate not called"
+        reqs = captured[0]["requests"]
+        delete_reqs = [r for r in reqs if "deleteContentRange" in r]
+        insert_reqs = [r for r in reqs if "insertText" in r]
+        assert delete_reqs == []
+        assert len(insert_reqs) == 1
+        assert insert_reqs[0]["insertText"]["text"] == "hello"
+
+
+class TestInsertMarkdownIntoTab:
+    def _tabs_doc(self, body_content=None):
+        return {
+            "revisionId": "rev-xyz",
+            "tabs": [{
+                "tabProperties": {
+                    "tabId": "t.todo", "title": "TODO", "index": 0,
+                },
+                "documentTab": {
+                    "body": {"content": body_content or []},
+                },
+            }],
+        }
+
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_insert_empty_tab_start(self, mock_get, mock_svc):
+        from gdoc.api.docs import insert_markdown_into_tab
+
+        mock_get.return_value = self._tabs_doc()
+        captured = _capture_batch_updates(mock_svc)
+
+        result = insert_markdown_into_tab(
+            "doc1", "TODO", "hello\n", position="start", replace=False,
+        )
+
+        assert result["tab_id"] == "t.todo"
+        assert result["insert_index"] == 1
+        assert len(captured) == 1
+        reqs = captured[0]["requests"]
+        delete_reqs = [r for r in reqs if "deleteContentRange" in r]
+        insert_reqs = [r for r in reqs if "insertText" in r]
+        assert delete_reqs == []
+        assert len(insert_reqs) == 1
+        # parse_markdown emits "hello\n\n" for "hello\n"; single trailing
+        # \n strip matches replace_formatted's behavior, leaving one \n as
+        # the paragraph marker.
+        assert insert_reqs[0]["insertText"]["text"] == "hello\n"
+        assert captured[0]["writeControl"] == {
+            "requiredRevisionId": "rev-xyz",
+        }
+        assert insert_reqs[0]["insertText"]["location"]["tabId"] == "t.todo"
+
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_insert_nonempty_tab_end(self, mock_get, mock_svc):
+        from gdoc.api.docs import insert_markdown_into_tab
+
+        mock_get.return_value = self._tabs_doc(body_content=[
+            {"startIndex": 1, "endIndex": 20, "paragraph": {}},
+        ])
+        captured = _capture_batch_updates(mock_svc)
+
+        result = insert_markdown_into_tab(
+            "doc1", "TODO", "tail", position="end", replace=False,
+        )
+
+        assert result["insert_index"] == 19
+        reqs = captured[0]["requests"]
+        insert_reqs = [r for r in reqs if "insertText" in r]
+        assert insert_reqs[0]["insertText"]["location"]["index"] == 19
+        assert insert_reqs[0]["insertText"]["text"] == "tail"
+
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_replace_tab_body(self, mock_get, mock_svc):
+        from gdoc.api.docs import insert_markdown_into_tab
+
+        mock_get.return_value = self._tabs_doc(body_content=[
+            {"startIndex": 1, "endIndex": 30, "paragraph": {}},
+        ])
+        captured = _capture_batch_updates(mock_svc)
+
+        insert_markdown_into_tab(
+            "doc1", "TODO", "new content", replace=True,
+        )
+
+        reqs = captured[0]["requests"]
+        delete_reqs = [r for r in reqs if "deleteContentRange" in r]
+        assert len(delete_reqs) == 1
+        d_range = delete_reqs[0]["deleteContentRange"]["range"]
+        assert d_range["startIndex"] == 1
+        assert d_range["endIndex"] == 29
+        assert d_range["tabId"] == "t.todo"
+
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_replace_empty_tab_no_delete(self, mock_get, mock_svc):
+        from gdoc.api.docs import insert_markdown_into_tab
+
+        mock_get.return_value = self._tabs_doc()
+        captured = _capture_batch_updates(mock_svc)
+
+        insert_markdown_into_tab(
+            "doc1", "TODO", "content", replace=True,
+        )
+
+        reqs = captured[0]["requests"]
+        delete_reqs = [r for r in reqs if "deleteContentRange" in r]
+        assert delete_reqs == []
+
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_missing_tab_errors(self, mock_get):
+        from gdoc.api.docs import insert_markdown_into_tab
+
+        mock_get.return_value = self._tabs_doc()
+
+        with pytest.raises(GdocError, match="tab not found"):
+            insert_markdown_into_tab("doc1", "Not A Real Tab", "hi")
