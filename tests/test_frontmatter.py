@@ -33,11 +33,23 @@ class TestParseFrontmatter:
         assert meta == {}
         assert body == content
 
-    def test_empty_frontmatter(self):
+    def test_empty_frontmatter_left_in_place(self):
+        # A leading `---\\n\\n---\\n` block with no key:value content
+        # isn't treated as frontmatter — otherwise a markdown file that
+        # opens with a thematic break would silently lose its first
+        # section.
         content = "---\n\n---\nBody here."
         meta, body = parse_frontmatter(content)
         assert meta == {}
-        assert body == "Body here."
+        assert body == content
+
+    def test_thematic_break_with_prose_not_stripped(self):
+        # Innocent markdown that happens to start with `---` and has
+        # another `---` later must round-trip unchanged.
+        content = "---\n\n# Real heading\n\nFirst paragraph.\n\n---\nFooter"
+        meta, body = parse_frontmatter(content)
+        assert meta == {}
+        assert body == content
 
     def test_value_with_colons(self):
         content = "---\nurl: https://example.com:8080/path\n---\nBody"

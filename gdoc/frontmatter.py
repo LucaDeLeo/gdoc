@@ -11,6 +11,12 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     Returns (metadata_dict, body_without_frontmatter).
     If no valid frontmatter, returns ({}, content).
     Only supports flat key: value pairs.
+
+    A leading `---\\n...\\n---\\n` block is only treated as frontmatter
+    when at least one `key: value` line parses out of it. Empty blocks
+    or blocks containing only prose (for example, a thematic break
+    followed by another `---`) are left in place to avoid silently
+    eating content.
     """
     match = _FRONTMATTER_RE.match(content)
     if not match:
@@ -29,6 +35,9 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
         value = line[colon + 1 :].strip()
         if key:
             metadata[key] = value
+
+    if not metadata:
+        return {}, content
 
     body = content[match.end() :]
     return metadata, body

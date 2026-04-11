@@ -127,8 +127,10 @@ def get_document_tabs(doc_id: str) -> list[dict]:
 def count_document_tabs(doc_id: str) -> int:
     """Return the total tab count (including nested child tabs).
 
-    Uses a fields mask so only tab IDs come back — no body content — so
-    the call is cheap enough to run as a per-write safety check.
+    Passes `includeTabsContent=True` because the Docs API only populates
+    Document.tabs when that flag is set, and a fields mask so the server
+    still only returns tab IDs (no body content) — keeping the call
+    cheap enough to run as a per-write safety check.
     """
     try:
         service = get_docs_service()
@@ -136,6 +138,7 @@ def count_document_tabs(doc_id: str) -> int:
             service.documents()
             .get(
                 documentId=doc_id,
+                includeTabsContent=True,
                 fields="tabs(tabProperties/tabId,childTabs)",
             )
             .execute()
