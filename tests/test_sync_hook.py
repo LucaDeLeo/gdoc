@@ -5,6 +5,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from gdoc.cli import cmd_sync_hook
 
 
@@ -15,6 +17,18 @@ def _make_args():
 def _stdin_json(file_path):
     data = {"tool_input": {"file_path": file_path}}
     return io.StringIO(json.dumps(data))
+
+
+@pytest.fixture(autouse=True)
+def _stub_single_tab():
+    """Default `count_document_tabs` to `1` for the whole test module.
+
+    The multi-tab safety check would otherwise call the real Docs API.
+    Tests asserting the multi-tab skip override this with their own
+    patch.
+    """
+    with patch("gdoc.api.docs.count_document_tabs", return_value=1):
+        yield
 
 
 class TestSyncHookBasic:
@@ -128,3 +142,25 @@ class TestSyncHookErrorHandling:
         with patch("sys.stdin", _stdin_json(str(f))):
             rc = cmd_sync_hook(args)
         assert rc == 0
+
+
+class TestSyncHookMultiTabSafety:
+    """Sync hook must not silently flatten a multi-tab doc."""
+
+    @patch("gdoc.api.docs.count_document_tabs", return_value=3)
+    @patch("gdoc.api.drive.update_doc_content")
+    def test_skip_multi_tab(
+        self, mock_update_doc, _count, tmp_path, capsys,
+    ):
+        f = tmp_path / "spec.md"
+        f.write_text("---\ngdoc: abc123\ntitle: My Doc\n---\n# Hello\n")
+        args = _make_args()
+        with patch("sys.stdin", _stdin_json(str(f))):
+            rc = cmd_sync_hook(args)
+        assert rc == 0
+        # Critical: the destructive write must not have fired.
+        mock_update_doc.assert_not_called()
+        err = capsys.readouterr().err
+        assert "SYNC: skipped" in err
+        assert "My Doc" in err
+        assert "multi-tab" in err

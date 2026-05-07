@@ -920,6 +920,7 @@ def cmd_push(args) -> int:
     file_path = args.file
     quiet = getattr(args, "quiet", False)
     force = getattr(args, "force", False)
+    force_collapse = getattr(args, "force_collapse_tabs", False)
 
     # Read local file (fail fast)
     if not os.path.isfile(file_path):
@@ -944,6 +945,22 @@ def cmd_push(args) -> int:
 
     # Conflict detection (reuse shared helper)
     change_info = _check_write_conflict(doc_id, quiet, force)
+
+    # Refuse destructive multi-tab collapse unless the user opts in.
+    # `pull`/`push` round-trips a multi-tab doc through a flat markdown
+    # file, so an unguarded push silently deletes every tab but the
+    # first. Mirror the safety check from `cmd_write`.
+    if not force_collapse:
+        from gdoc.api.docs import count_document_tabs
+        tab_count = count_document_tabs(doc_id)
+        if tab_count > 1:
+            raise GdocError(
+                f"push would collapse {tab_count} tabs into 1. "
+                "Use `gdoc edit --tab NAME` for find/replace within a "
+                "tab, `gdoc insert --tab NAME FILE` to add content to a "
+                "tab, or pass --force-collapse-tabs to confirm.",
+                exit_code=3,
+            )
 
     # Upload body (frontmatter stripped)
     from gdoc.api.drive import update_doc_content
@@ -1002,6 +1019,21 @@ def cmd_sync_hook(args) -> int:
             return 0
 
         doc_id = _resolve_doc_id(metadata["gdoc"])
+
+        # Refuse to silently flatten a multi-tab doc. The hook runs
+        # without user attention on every matching file edit, so there
+        # is no safe way to surface a confirmation prompt — skip
+        # entirely and log to stderr.
+        from gdoc.api.docs import count_document_tabs
+        if count_document_tabs(doc_id) > 1:
+            title = metadata.get("title", doc_id)
+            print(
+                f'SYNC: skipped "{title}" (multi-tab doc; sync would '
+                "collapse tabs). Use `gdoc edit --tab` or "
+                "`gdoc insert --tab` to write to a specific tab.",
+                file=sys.stderr,
+            )
+            return 0
 
         from gdoc.api.drive import update_doc_content
 
@@ -2123,6 +2155,10 @@ def build_parser() -> GdocArgumentParser:
     push_p.add_argument("file", help="Local file with gdoc frontmatter")
     push_p.add_argument(
         "--force", action="store_true", help="Force overwrite even if doc changed"
+    )
+    push_p.add_argument(
+        "--force-collapse-tabs", action="store_true",
+        help="Confirm you intend to collapse a multi-tab doc into one tab",
     )
     push_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"

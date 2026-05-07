@@ -17,6 +17,7 @@ def _make_args(**overrides):
         "command": "push",
         "file": "/tmp/test.md",
         "force": False,
+        "force_collapse_tabs": False,
         "json": False,
         "verbose": False,
         "quiet": False,
@@ -26,6 +27,20 @@ def _make_args(**overrides):
 
 
 FRONTMATTER = "---\ngdoc: abc123\ntitle: My Doc\n---\n"
+
+
+@pytest.fixture(autouse=True)
+def _stub_single_tab():
+    """Default `count_document_tabs` to `1` for the whole test module.
+
+    Mirrors the pattern from `test_write.py`: legacy push tests assume
+    a single-tab doc, and the new multi-tab safety check would
+    otherwise call the real Docs API. Tests that need a different
+    count stack their own `@patch("gdoc.api.docs.count_document_tabs",
+    ...)` on top.
+    """
+    with patch("gdoc.api.docs.count_document_tabs", return_value=1):
+        yield
 
 
 class TestPushBasic:
@@ -278,3 +293,47 @@ class TestPushPlain:
         out = capsys.readouterr().out
         assert "id\tabc123" in out
         assert "status\tupdated" in out
+
+
+class TestPushCollapseSafety:
+    """Pushes against multi-tab docs without --force-collapse-tabs fail."""
+
+    @patch("gdoc.api.drive.update_doc_content")
+    @patch("gdoc.api.docs.count_document_tabs", return_value=3)
+    @patch("gdoc.notify.pre_flight")
+    def test_refuses_multi_tab_without_flag(
+        self, mock_pf, _mock_count, mock_update, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text(FRONTMATTER + "# Hello\n")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        args = _make_args(file=str(f), force_collapse_tabs=False)
+        with pytest.raises(GdocError, match="collapse 3 tabs") as exc:
+            cmd_push(args)
+        msg = str(exc.value)
+        assert "--force-collapse-tabs" in msg
+        assert "--tab" in msg
+        assert "insert" in msg
+        # Critical: the destructive write must not have fired.
+        mock_update.assert_not_called()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.api.docs.count_document_tabs")
+    @patch("gdoc.notify.pre_flight")
+    def test_force_collapse_bypasses_check(
+        self, mock_pf, mock_count, mock_update, _u, tmp_path,
+    ):
+        f = tmp_path / "doc.md"
+        f.write_text(FRONTMATTER + "# Hello\n")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=10,
+        )
+        args = _make_args(file=str(f), force_collapse_tabs=True)
+        rc = cmd_push(args)
+        assert rc == 0
+        # With the opt-in flag, no count lookup happens at all.
+        mock_count.assert_not_called()
+        mock_update.assert_called_once()
