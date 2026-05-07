@@ -492,7 +492,7 @@ def _capture_batch_updates(mock_svc):
 
 
 class TestCountDocumentTabs:
-    """count_document_tabs uses a fields mask and counts nested tabs."""
+    """count_document_tabs requests tab content and counts nested tabs."""
 
     @patch("gdoc.api.docs.get_docs_service")
     def test_flat_tab_list(self, mock_svc):
@@ -527,7 +527,7 @@ class TestCountDocumentTabs:
         assert count_document_tabs("doc1") == 4
 
     @patch("gdoc.api.docs.get_docs_service")
-    def test_requests_tabs_content_with_minimal_fields(self, mock_svc):
+    def test_requests_tabs_content_without_fields_mask(self, mock_svc):
         from gdoc.api.docs import count_document_tabs
 
         mock_svc.return_value.documents.return_value \
@@ -535,15 +535,8 @@ class TestCountDocumentTabs:
         count_document_tabs("doc1")
         call_kwargs = mock_svc.return_value.documents.return_value \
             .get.call_args.kwargs
-        # includeTabsContent=True is required — without it the Docs API
-        # leaves Document.tabs unpopulated and the safety check silently
-        # reports 0 tabs.
         assert call_kwargs.get("includeTabsContent") is True
-        # The fields mask keeps the server response minimal: only tab
-        # IDs (and childTabs for recursion), never body content.
-        assert "fields" in call_kwargs
-        assert "tabId" in call_kwargs["fields"]
-        assert "content" not in call_kwargs["fields"]
+        assert "fields" not in call_kwargs
 
 
 class TestZeroWidthReplace:
