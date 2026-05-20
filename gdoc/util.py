@@ -1,5 +1,6 @@
 """URL-to-ID extraction, error classes, and constants."""
 
+import json
 import re
 from pathlib import Path
 
@@ -30,6 +31,7 @@ if _OLD_CONFIG_DIR.is_dir() and not CONFIG_DIR.exists():
 TOKEN_PATH = CONFIG_DIR / "token.json"
 CREDS_PATH = CONFIG_DIR / "credentials.json"
 STATE_DIR = CONFIG_DIR / "state"
+CONFIG_PATH = CONFIG_DIR / "config.json"
 
 # Multi-account support: when set, token is stored under a per-account dir
 _active_account: str | None = None
@@ -59,14 +61,55 @@ def get_active_account() -> str | None:
     return _active_account
 
 
+def _load_config() -> dict:
+    """Load gdoc config with defensive fallback for invalid JSON."""
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        with CONFIG_PATH.open() as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _save_config(config: dict) -> None:
+    """Save gdoc config."""
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+
+def get_default_account() -> str | None:
+    """Return the configured default named account, if any."""
+    account = _load_config().get("default_account")
+    if isinstance(account, str) and account:
+        _validate_account_name(account)
+        return account
+    return None
+
+
+def set_default_account(account: str) -> None:
+    """Set the default named account used when --account is omitted."""
+    _validate_account_name(account)
+    config = _load_config()
+    config["default_account"] = account
+    _save_config(config)
+
+
 def get_token_path() -> Path:
     """Return the token path for the active account.
 
-    Default account uses CONFIG_DIR/token.json (backward-compatible).
+    Configured default accounts resolve to the named account token.
+    CONFIG_DIR/token.json is only a legacy fallback.
     Named accounts use CONFIG_DIR/accounts/<account>/token.json.
     """
     if _active_account:
         return CONFIG_DIR / "accounts" / _active_account / "token.json"
+    default_account = get_default_account()
+    if default_account:
+        return CONFIG_DIR / "accounts" / default_account / "token.json"
     return TOKEN_PATH
 
 _PATTERNS = [

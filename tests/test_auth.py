@@ -1,6 +1,5 @@
 """Tests for gdoc.auth: OAuth2 flow, token management, and credential storage."""
 
-import json
 import os
 import subprocess
 import sys
@@ -9,8 +8,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gdoc.auth import _load_token, _save_token, authenticate, get_credentials
-from gdoc.util import AuthError
+from gdoc.auth import (
+    _load_token,
+    _save_token,
+    authenticate,
+    configure_default_account,
+    get_credentials,
+    list_accounts,
+)
+from gdoc.util import (
+    AuthError,
+    get_default_account,
+    get_token_path,
+    set_active_account,
+    set_default_account,
+)
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
@@ -36,6 +48,8 @@ class TestAuthenticate:
             patch("gdoc.auth.CREDS_PATH", fake_creds),
             patch("gdoc.auth.TOKEN_PATH", fake_token),
             patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.TOKEN_PATH", fake_token),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
             patch(
                 "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
                 return_value=mock_flow,
@@ -54,18 +68,26 @@ class TestAuthenticate:
         mock_flow = MagicMock()
         mock_creds = MagicMock()
         mock_creds.to_json.return_value = '{"token": "test"}'
-        mock_flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?...", "state")
+        mock_flow.authorization_url.return_value = (
+            "https://accounts.google.com/o/oauth2/auth?...",
+            "state",
+        )
         mock_flow.credentials = mock_creds
 
         with (
             patch("gdoc.auth.CREDS_PATH", fake_creds),
             patch("gdoc.auth.TOKEN_PATH", fake_token),
             patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.TOKEN_PATH", fake_token),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
             patch(
                 "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
                 return_value=mock_flow,
             ),
-            patch("builtins.input", return_value="http://localhost:1/?code=test-auth-code&scope=test"),
+            patch(
+                "builtins.input",
+                return_value="http://localhost:1/?code=test-auth-code&scope=test",
+            ),
         ):
             result = authenticate(no_browser=True)
 
@@ -82,21 +104,59 @@ class TestAuthenticate:
         fake_token = tmp_path / "token.json"
 
         mock_flow = MagicMock()
-        mock_flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?...", "state")
+        mock_flow.authorization_url.return_value = (
+            "https://accounts.google.com/o/oauth2/auth?...",
+            "state",
+        )
         mock_flow.fetch_token.side_effect = Exception("invalid_grant")
 
         with (
             patch("gdoc.auth.CREDS_PATH", fake_creds),
             patch("gdoc.auth.TOKEN_PATH", fake_token),
             patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.TOKEN_PATH", fake_token),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
             patch(
                 "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
                 return_value=mock_flow,
             ),
-            patch("builtins.input", return_value="http://localhost:1/?code=bad-code&scope=test"),
+            patch(
+                "builtins.input",
+                return_value="http://localhost:1/?code=bad-code&scope=test",
+            ),
         ):
-            with pytest.raises(AuthError, match="Failed to exchange authorization code"):
+            with pytest.raises(
+                AuthError, match="Failed to exchange authorization code"
+            ):
                 authenticate(no_browser=True)
+
+    def test_named_auth_sets_default_account_when_missing(self, tmp_path):
+        fake_creds = tmp_path / "credentials.json"
+        fake_creds.write_text("{}")
+        fake_config = tmp_path / "config.json"
+
+        mock_flow = MagicMock()
+        mock_creds = MagicMock()
+        mock_creds.to_json.return_value = '{"token": "test"}'
+        mock_flow.run_local_server.return_value = mock_creds
+
+        with (
+            patch("gdoc.auth.CREDS_PATH", fake_creds),
+            patch("gdoc.util.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_PATH", fake_config),
+            patch(
+                "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
+                return_value=mock_flow,
+            ),
+        ):
+            set_active_account("pete@example.com")
+            try:
+                authenticate(no_browser=False)
+                assert get_default_account() == "pete@example.com"
+            finally:
+                set_active_account(None)
+
+        assert (tmp_path / "accounts" / "pete@example.com" / "token.json").exists()
 
 
 class TestGetCredentials:
@@ -146,6 +206,79 @@ class TestGetCredentials:
         ):
             with pytest.raises(AuthError, match="Not authenticated"):
                 get_credentials()
+
+
+class TestDefaultAccount:
+    def test_configured_default_resolves_to_named_token(self, tmp_path):
+        with (
+            patch("gdoc.util.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
+            patch("gdoc.util.TOKEN_PATH", tmp_path / "token.json"),
+        ):
+            set_active_account(None)
+            set_default_account("pete@example.com")
+
+            assert get_token_path() == (
+                tmp_path / "accounts" / "pete@example.com" / "token.json"
+            )
+
+    def test_explicit_account_overrides_configured_default(self, tmp_path):
+        with (
+            patch("gdoc.util.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
+            patch("gdoc.util.TOKEN_PATH", tmp_path / "token.json"),
+        ):
+            set_default_account("pete@example.com")
+            set_active_account("work@example.com")
+            try:
+                assert get_token_path() == (
+                    tmp_path / "accounts" / "work@example.com" / "token.json"
+                )
+            finally:
+                set_active_account(None)
+
+    def test_can_configure_default_to_existing_named_account(self, tmp_path):
+        account_token = tmp_path / "accounts" / "pete@example.com" / "token.json"
+        account_token.parent.mkdir(parents=True)
+        account_token.write_text("{}")
+
+        with (
+            patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
+        ):
+            configure_default_account("pete@example.com")
+
+            assert get_default_account() == "pete@example.com"
+
+    def test_configure_default_requires_existing_named_account(self, tmp_path):
+        with (
+            patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
+        ):
+            with pytest.raises(AuthError, match="No credentials found"):
+                configure_default_account("missing@example.com")
+
+    def test_list_accounts_shows_configured_default_as_alias(self, tmp_path):
+        legacy_token = tmp_path / "token.json"
+        legacy_token.write_text("{}")
+        account_token = tmp_path / "accounts" / "pete@example.com" / "token.json"
+        account_token.parent.mkdir(parents=True)
+        account_token.write_text("{}")
+
+        with (
+            patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.auth.TOKEN_PATH", legacy_token),
+            patch("gdoc.util.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
+        ):
+            set_default_account("pete@example.com")
+
+            assert list_accounts() == [
+                "default -> pete@example.com",
+                "pete@example.com",
+            ]
 
 
 class TestLoadToken:

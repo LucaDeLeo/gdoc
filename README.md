@@ -32,6 +32,21 @@ gdoc auth
 
 This opens a browser for the OAuth flow. Use `--no-browser` for headless environments (prints a URL to visit manually).
 
+For multiple Google accounts, authenticate each named account with
+`--account`:
+
+```bash
+gdoc auth --account pete@example.com
+gdoc auth --account work@example.com
+```
+
+The first named account you authenticate becomes the default for bare
+`gdoc` commands. To change it later without reauthenticating:
+
+```bash
+gdoc auth --set-default pete@example.com
+```
+
 ## Quick start
 
 ```bash
@@ -317,7 +332,9 @@ All files are stored under `~/.config/gdoc/`:
 | File | Purpose |
 |------|---------|
 | `credentials.json` | OAuth client credentials (from Google Cloud Console) |
-| `token.json` | Stored OAuth token (created by `gdoc auth`) |
+| `token.json` | Legacy default OAuth token (created by older `gdoc auth` flows) |
+| `accounts/<ACCOUNT>/token.json` | OAuth token for a named account |
+| `config.json` | Default account preference and other local configuration |
 | `state/<DOC_ID>.json` | Per-document state for change detection |
 
 ## Development

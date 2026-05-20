@@ -1589,6 +1589,12 @@ def cmd_images(args) -> int:
 
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
+    set_default = getattr(args, "set_default", None)
+    if set_default:
+        from gdoc.auth import configure_default_account
+        configure_default_account(set_default)
+        return 0
+
     if getattr(args, "list", False):
         from gdoc.auth import list_accounts
         accounts = list_accounts()
@@ -1941,15 +1947,21 @@ def build_parser() -> GdocArgumentParser:
         action="store_true",
         help="Don't open browser, print URL for manual auth",
     )
-    auth_p.add_argument(
+    auth_action = auth_p.add_mutually_exclusive_group()
+    auth_action.add_argument(
         "--list",
         action="store_true",
         help="List all authenticated accounts",
     )
-    auth_p.add_argument(
+    auth_action.add_argument(
         "--remove",
         metavar="ACCOUNT",
         help="Remove credentials for a named account",
+    )
+    auth_action.add_argument(
+        "--set-default",
+        metavar="ACCOUNT",
+        help="Use an authenticated named account when --account is omitted",
     )
     auth_p.add_argument(
         "--force", "-y",
