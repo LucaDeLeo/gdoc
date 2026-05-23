@@ -312,6 +312,7 @@ class TestPushCollapseSafety:
         args = _make_args(file=str(f), force_collapse_tabs=False)
         with pytest.raises(GdocError, match="collapse 3 tabs") as exc:
             cmd_push(args)
+        assert exc.value.exit_code == 3
         msg = str(exc.value)
         assert "--force-collapse-tabs" in msg
         assert "--tab" in msg

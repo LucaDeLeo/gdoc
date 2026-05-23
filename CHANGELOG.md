@@ -4,6 +4,23 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] — 2026-05-23
+
+### Added
+- **`gdoc push --force-collapse-tabs`** — opt-in flag mirroring
+  `gdoc write`. Without it, `push` now refuses to overwrite a
+  multi-tab document (exits 3 before any API write) and points you at
+  `gdoc edit --tab`, `gdoc insert --tab`, or the new flag.
+
+### Changed
+- **`gdoc push`** and **`gdoc _sync-hook`** now refuse to silently
+  collapse multi-tab documents into one tab — extending the safety
+  guard 0.7.1 added to `gdoc write` across the remaining destructive
+  paths. A `pull`/`push` round-trip on a multi-tab doc previously
+  deleted every tab but the first with no warning. `_sync-hook` runs
+  non-interactively, so it hard-skips multi-tab docs and logs
+  `SYNC: skipped "<title>" (multi-tab doc; ...)` to stderr.
+
 ## [0.7.2] — 2026-05-07
 
 ### Fixed
