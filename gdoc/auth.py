@@ -10,7 +10,15 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-from gdoc.util import AuthError, CONFIG_DIR, CREDS_PATH, TOKEN_PATH, get_token_path
+from gdoc.util import (
+    CONFIG_DIR,
+    CREDS_PATH,
+    TOKEN_PATH,
+    AuthError,
+    get_default_account,
+    get_token_path,
+    set_default_account,
+)
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
@@ -21,7 +29,7 @@ SCOPES = [
 def get_credentials() -> Credentials:
     """Load or refresh credentials. Returns valid Credentials or raises AuthError."""
     from gdoc.util import get_active_account
-    account = get_active_account()
+    account = get_active_account() or get_default_account()
     if not account:
         print("account: default (use --account to switch)", file=sys.stderr)
 
@@ -39,10 +47,11 @@ def get_credentials() -> Credentials:
         except Exception:
             pass
 
-    from gdoc.util import get_active_account
-    account = get_active_account()
     hint = f" (account: {account})" if account else ""
-    raise AuthError(f"Not authenticated{hint}. Run `gdoc auth{' --account ' + account if account else ''}` to authenticate.")
+    command_hint = f" --account {account}" if account else ""
+    raise AuthError(
+        f"Not authenticated{hint}. Run `gdoc auth{command_hint}` to authenticate."
+    )
 
 
 def authenticate(no_browser: bool = False) -> Credentials:
@@ -79,6 +88,10 @@ def authenticate(no_browser: bool = False) -> Credentials:
     token_path = get_token_path()
     token_path.parent.mkdir(parents=True, exist_ok=True)
     _save_token(creds, token_path)
+    from gdoc.util import get_active_account
+    account = get_active_account()
+    if account and not get_default_account():
+        set_default_account(account)
     print(
         f"OK authenticated successfully. Credentials stored in {token_path}",
         file=sys.stderr,
@@ -118,11 +131,15 @@ def _save_token(creds: Credentials, token_path: Path | None = None) -> None:
 def list_accounts() -> list[str]:
     """List all authenticated accounts.
 
-    Returns account names, with 'default' for the base token.
+    Returns account names. A configured default is shown as an alias to its named
+    account; the base token is shown as a legacy default fallback.
     """
     accounts = []
-    if TOKEN_PATH.exists():
-        accounts.append("default")
+    default_account = get_default_account()
+    if default_account:
+        accounts.append(f"default -> {default_account}")
+    elif TOKEN_PATH.exists():
+        accounts.append("default (legacy)")
     accounts_dir = CONFIG_DIR / "accounts"
     if accounts_dir.is_dir():
         for entry in sorted(accounts_dir.iterdir()):
@@ -153,3 +170,15 @@ def remove_account(account: str) -> None:
     except OSError:
         pass
     print(f"OK removed credentials for account: {account}", file=sys.stderr)
+
+
+def configure_default_account(account: str) -> None:
+    """Configure the default account alias."""
+    from gdoc.util import _validate_account_name
+
+    _validate_account_name(account)
+    token = CONFIG_DIR / "accounts" / account / "token.json"
+    if not token.exists():
+        raise AuthError(f"No credentials found for account: {account}")
+    set_default_account(account)
+    print(f"OK default account set to: {account}", file=sys.stderr)

@@ -4,6 +4,19 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] — 2026-05-23
+
+### Added
+- **`gdoc auth --set-default ACCOUNT`** — configure which authenticated
+  named account bare `gdoc` commands use when `--account` and
+  `GDOC_ACCOUNT` are omitted.
+
+### Fixed
+- The default account now resolves to the configured named account token
+  instead of requiring a separate `~/.config/gdoc/token.json` credential.
+  The legacy token remains as a fallback when no default account is
+  configured.
+
 ## [0.7.3] — 2026-05-23
 
 ### Added
