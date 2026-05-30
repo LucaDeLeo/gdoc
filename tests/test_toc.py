@@ -166,13 +166,17 @@ class TestTocTab:
     def test_tab_appends_tab_id_to_links(
         self, _svc, mock_tabs, mock_resolve, mock_headings, _pf, _update, capsys,
     ):
-        mock_tabs.return_value = [{"id": "t1", "title": "Notes", "body": {}}]
-        mock_resolve.return_value = {"id": "t1", "title": "Notes", "body": {}}
+        # Google returns tabId already prefixed with "t." — pass it through
+        # verbatim as a query parameter, with the heading anchor as the fragment.
+        tab = {"id": "t.o50waw95wxfc", "title": "Notes", "body": {}}
+        mock_tabs.return_value = [tab]
+        mock_resolve.return_value = tab
         mock_headings.return_value = _headings((1, "h.abc", "Title"))
         rc = cmd_toc(_make_args(tab="Notes"))
         assert rc == 0
         out = capsys.readouterr().out
-        assert "&tab=t.t1" in out
+        assert f"{BASE_URL}?tab=t.o50waw95wxfc#heading=h.abc" in out
+        assert "t.t." not in out
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -183,13 +187,15 @@ class TestTocTab:
     def test_tab_json_includes_tab_in_links(
         self, _svc, mock_tabs, mock_resolve, mock_headings, _pf, _update, capsys,
     ):
-        mock_tabs.return_value = [{"id": "t1", "title": "Notes", "body": {}}]
-        mock_resolve.return_value = {"id": "t1", "title": "Notes", "body": {}}
+        tab = {"id": "t.o50waw95wxfc", "title": "Notes", "body": {}}
+        mock_tabs.return_value = [tab]
+        mock_resolve.return_value = tab
         mock_headings.return_value = _headings((1, "h.abc", "Title"))
         rc = cmd_toc(_make_args(tab="Notes", json=True))
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
-        assert "&tab=t.t1" in data["headings"][0]["link"]
+        link = data["headings"][0]["link"]
+        assert link == f"{BASE_URL}?tab=t.o50waw95wxfc#heading=h.abc"
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
