@@ -191,6 +191,35 @@ def get_document(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
+def _collect_chars(content: list[dict], chars: list[tuple[int, str]]) -> None:
+    """Append (doc_index, char) pairs for all text in body content.
+
+    Walks paragraph.elements → textRun.content and recurses into table
+    cells (and nested tables), so text inside tables is searchable. Mirrors
+    the cell walk in get_tab_text(). Document order is preserved: a cell's
+    paragraphs end in a trailing "\\n", which keeps the concat boundary
+    between cells and prevents a match from spanning two cells — the same
+    guarantee paragraphs already have.
+    """
+    for element in content:
+        paragraph = element.get("paragraph")
+        if paragraph is not None:
+            for pe in paragraph.get("elements", []):
+                text_run = pe.get("textRun")
+                if text_run is None:
+                    continue
+                run = text_run.get("content", "")
+                start_idx = pe.get("startIndex", 0)
+                for i, ch in enumerate(run):
+                    chars.append((start_idx + i, ch))
+            continue
+        table = element.get("table")
+        if table is not None:
+            for row in table.get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    _collect_chars(cell.get("content", []), chars)
+
+
 def find_text_in_document(
     document: dict | None,
     text: str,
@@ -199,7 +228,7 @@ def find_text_in_document(
 ) -> list[dict]:
     """Find all occurrences of text within the document body.
 
-    Walks body.content → paragraph.elements → textRun.content to
+    Walks body.content (paragraphs and table cells) → textRun.content to
     build a concatenated string with position mapping, then searches.
 
     Args:
@@ -218,18 +247,7 @@ def find_text_in_document(
         if document is None:
             return []
         body = document.get("body", {})
-    for element in body.get("content", []):
-        paragraph = element.get("paragraph")
-        if paragraph is None:
-            continue
-        for pe in paragraph.get("elements", []):
-            text_run = pe.get("textRun")
-            if text_run is None:
-                continue
-            content = text_run.get("content", "")
-            start_idx = pe.get("startIndex", 0)
-            for i, ch in enumerate(content):
-                chars.append((start_idx + i, ch))
+    _collect_chars(body.get("content", []), chars)
 
     if not chars:
         return []

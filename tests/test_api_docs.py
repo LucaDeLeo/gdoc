@@ -420,6 +420,68 @@ class TestFindTextBody:
 
         assert find_text_in_document(None, "text") == []
 
+    @staticmethod
+    def _cell(text, start):
+        return {"content": [{
+            "paragraph": {
+                "elements": [{"startIndex": start, "textRun": {"content": text}}],
+            },
+        }]}
+
+    def test_find_text_in_table_cell(self):
+        from gdoc.api.docs import find_text_in_document
+
+        body = {"content": [{
+            "table": {"tableRows": [{"tableCells": [
+                self._cell("Label\n", 5),
+                self._cell("Answer here\n", 20),
+            ]}]},
+        }]}
+        matches = find_text_in_document(None, "Answer", body=body)
+        assert len(matches) == 1
+        assert matches[0]["startIndex"] == 20
+        assert matches[0]["endIndex"] == 26
+
+    def test_find_text_in_nested_table(self):
+        from gdoc.api.docs import find_text_in_document
+
+        inner = {"table": {"tableRows": [{"tableCells": [
+            self._cell("deep value\n", 50),
+        ]}]}}
+        body = {"content": [{
+            "table": {"tableRows": [{"tableCells": [
+                {"content": [inner]},
+            ]}]},
+        }]}
+        matches = find_text_in_document(None, "deep", body=body)
+        assert len(matches) == 1
+        assert matches[0]["startIndex"] == 50
+
+    def test_match_does_not_span_cells(self):
+        from gdoc.api.docs import find_text_in_document
+
+        body = {"content": [{
+            "table": {"tableRows": [{"tableCells": [
+                self._cell("foo\n", 10),
+                self._cell("bar\n", 30),
+            ]}]},
+        }]}
+        assert find_text_in_document(None, "foobar", body=body) == []
+
+    def test_paragraph_and_table_coexist(self):
+        from gdoc.api.docs import find_text_in_document
+
+        body = {"content": [
+            {"paragraph": {"elements": [
+                {"startIndex": 1, "textRun": {"content": "hello world\n"}},
+            ]}},
+            {"table": {"tableRows": [{"tableCells": [
+                self._cell("world\n", 20),
+            ]}]}},
+        ]}
+        matches = find_text_in_document(None, "world", body=body)
+        assert [m["startIndex"] for m in matches] == [7, 20]
+
 
 class TestAddTab:
     @patch("gdoc.api.docs.get_docs_service")
