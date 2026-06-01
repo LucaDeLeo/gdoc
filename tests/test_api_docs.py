@@ -466,7 +466,14 @@ class TestFindTextBody:
                 self._cell("bar\n", 30),
             ]}]},
         }]}
+        # Neither a plain concatenation ("foobar") nor a newline-spanning
+        # anchor ("foo\nbar") may match across the cell boundary — that would
+        # yield an invalid cross-cell delete range.
         assert find_text_in_document(None, "foobar", body=body) == []
+        assert find_text_in_document(None, "foo\nbar", body=body) == []
+        # Each cell is still searchable on its own.
+        assert find_text_in_document(None, "foo", body=body)[0]["startIndex"] == 10
+        assert find_text_in_document(None, "bar", body=body)[0]["startIndex"] == 30
 
     def test_paragraph_and_table_coexist(self):
         from gdoc.api.docs import find_text_in_document

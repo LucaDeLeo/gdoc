@@ -192,16 +192,17 @@ def get_document(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
-def _collect_chars(content: list[dict], chars: list[tuple[int, str]]) -> None:
-    """Append (doc_index, char) pairs for all text in body content.
+def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
+    """Group (doc_index, char) pairs into independently-searchable segments.
 
-    Walks paragraph.elements → textRun.content and recurses into table
-    cells (and nested tables), so text inside tables is searchable. Mirrors
-    the cell walk in get_tab_text(). Document order is preserved: a cell's
-    paragraphs end in a trailing "\\n", which keeps the concat boundary
-    between cells and prevents a match from spanning two cells — the same
-    guarantee paragraphs already have.
+    Paragraph text at one level forms a single segment; each table cell is
+    its own segment (recursively, for nested tables). Searching per segment
+    means a match can never span a table-cell boundary — the Docs API can't
+    delete a range that crosses cells or removes a cell's final paragraph
+    mark, so such a match would produce an invalid edit.
     """
+    segments: list[list[tuple[int, str]]] = []
+    root: list[tuple[int, str]] = []
     for element in content:
         paragraph = element.get("paragraph")
         if paragraph is not None:
@@ -212,13 +213,16 @@ def _collect_chars(content: list[dict], chars: list[tuple[int, str]]) -> None:
                 run = text_run.get("content", "")
                 start_idx = pe.get("startIndex", 0)
                 for i, ch in enumerate(run):
-                    chars.append((start_idx + i, ch))
+                    root.append((start_idx + i, ch))
             continue
         table = element.get("table")
         if table is not None:
             for row in table.get("tableRows", []):
                 for cell in row.get("tableCells", []):
-                    _collect_chars(cell.get("content", []), chars)
+                    segments.extend(_collect_segments(cell.get("content", [])))
+    if root:
+        segments.append(root)
+    return segments
 
 
 def find_text_in_document(
@@ -230,8 +234,8 @@ def find_text_in_document(
 ) -> list[dict]:
     """Find all occurrences of text within the document body.
 
-    Walks body.content (paragraphs and table cells) → textRun.content to
-    build a concatenated string with position mapping, then searches.
+    Searches body.content per segment (top-level paragraphs, and each table
+    cell on its own) so a match never crosses a table-cell boundary.
 
     Args:
         document: The full document dict (used if body is None).
@@ -243,46 +247,42 @@ def find_text_in_document(
             indices stay correct.
 
     Returns list of {"startIndex": int, "endIndex": int} in document
-    coordinates.
+    coordinates, ordered by startIndex.
     """
-    # Build a mapping: (doc_index, char) for each character in the document
-    chars: list[tuple[int, str]] = []
-
     if body is None:
         if document is None:
             return []
         body = document.get("body", {})
-    _collect_chars(body.get("content", []), chars)
-
-    if not chars:
-        return []
-
-    # Build the concatenated text and index map
-    concat = "".join(ch for _, ch in chars)
-    doc_indices = [idx for idx, _ in chars]
-
-    search_text = text
-    search_in = concat
-    if normalize:
-        search_text = fold_typography(search_text)
-        search_in = fold_typography(search_in)
-    if not match_case:
-        search_text = search_text.lower()
-        search_in = search_in.lower()
 
     matches = []
-    start = 0
-    while True:
-        pos = search_in.find(search_text, start)
-        if pos == -1:
-            break
-        end_pos = pos + len(search_text)
-        matches.append({
-            "startIndex": doc_indices[pos],
-            "endIndex": doc_indices[end_pos - 1] + 1,
-        })
-        start = pos + 1
+    for chars in _collect_segments(body.get("content", [])):
+        concat = "".join(ch for _, ch in chars)
+        doc_indices = [idx for idx, _ in chars]
 
+        search_text = text
+        search_in = concat
+        if normalize:
+            search_text = fold_typography(search_text)
+            search_in = fold_typography(search_in)
+        if not match_case:
+            search_text = search_text.lower()
+            search_in = search_in.lower()
+        if not search_text:
+            continue
+
+        start = 0
+        while True:
+            pos = search_in.find(search_text, start)
+            if pos == -1:
+                break
+            end_pos = pos + len(search_text)
+            matches.append({
+                "startIndex": doc_indices[pos],
+                "endIndex": doc_indices[end_pos - 1] + 1,
+            })
+            start = pos + 1
+
+    matches.sort(key=lambda m: m["startIndex"])
     return matches
 
 
@@ -312,9 +312,10 @@ def diagnose_no_match(
     # spaces, non-breaking spaces). Folded so quote style doesn't mask it.
     if body is None and document is not None:
         body = document.get("body", {})
-    chars: list[tuple[int, str]] = []
-    _collect_chars((body or {}).get("content", []), chars)
-    concat = fold_typography("".join(c for _, c in chars))
+    segments = _collect_segments((body or {}).get("content", []))
+    concat = fold_typography(
+        "\n".join("".join(c for _, c in seg) for seg in segments)
+    )
     needle = fold_typography(text)
 
     def collapse(s: str) -> str:
