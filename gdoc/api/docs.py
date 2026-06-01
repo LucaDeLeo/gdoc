@@ -332,6 +332,102 @@ def diagnose_no_match(
     return None
 
 
+_COORD_RE = re.compile(r"^\s*(\d+)\s*,\s*(\d+)\s*$")
+
+
+def _parse_coord(spec: str) -> tuple[int, int] | None:
+    """Parse 'R,C' into (row, col) ints, or None if not coordinate form."""
+    m = _COORD_RE.match(spec)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def _cell_text_range(cell: dict) -> dict | None:
+    """Editable text range of a table cell as {startIndex, endIndex}.
+
+    Spans the cell's text but excludes the final structural paragraph mark
+    (the Docs API forbids deleting a cell's last newline). An empty cell
+    yields a zero-width range → pure insert. Returns None if no paragraph
+    element with an index can be located.
+    """
+    first_start: int | None = None
+    last_start: int | None = None
+    last_content = ""
+    for element in cell.get("content", []):
+        para = element.get("paragraph")
+        if para is None:
+            continue
+        for pe in para.get("elements", []):
+            start = pe.get("startIndex")
+            if start is None:
+                continue
+            if first_start is None:
+                first_start = start
+            tr = pe.get("textRun")
+            last_start = start
+            last_content = tr.get("content", "") if tr else ""
+    if first_start is None:
+        content = cell.get("content", [])
+        fs = content[0].get("startIndex") if content else None
+        return {"startIndex": fs, "endIndex": fs} if fs is not None else None
+    end = last_start + len(last_content)
+    if last_content.endswith("\n"):
+        end -= 1  # keep the cell's final paragraph mark
+    if end < first_start:
+        end = first_start
+    return {"startIndex": first_start, "endIndex": end}
+
+
+def resolve_cell_range(
+    body: dict,
+    cell: str,
+    col: int | None = None,
+    table_index: int = 0,
+    normalize: bool = False,
+) -> dict | None:
+    """Resolve a cell address to an editable {startIndex, endIndex} range.
+
+    Two forms, auto-detected:
+    - coordinate ('R,C'): row R, column C of table `table_index` (0-based).
+    - label (anything else): find the first row cell whose text equals
+      `cell`; the target is column `col` if given, else the cell to its
+      right. Scans every table in document order.
+
+    `normalize` folds smart quotes/dashes when comparing labels. Returns
+    None if nothing resolves.
+    """
+    tables = [el["table"] for el in body.get("content", []) if "table" in el]
+
+    coord = _parse_coord(cell)
+    if coord is not None:
+        r, c = coord
+        if not 0 <= table_index < len(tables):
+            return None
+        rows = tables[table_index].get("tableRows", [])
+        if not 0 <= r < len(rows):
+            return None
+        cells = rows[r].get("tableCells", [])
+        if not 0 <= c < len(cells):
+            return None
+        return _cell_text_range(cells[c])
+
+    target = fold_typography(cell) if normalize else cell
+    target = target.strip()
+    for table in tables:
+        for row in table.get("tableRows", []):
+            cells = row.get("tableCells", [])
+            for ci, c_ in enumerate(cells):
+                label = _extract_paragraphs_text(c_.get("content", []))
+                label = (fold_typography(label) if normalize else label).strip()
+                if label == target:
+                    target_col = col if col is not None else ci + 1
+                    if not 0 <= target_col < len(cells):
+                        return None
+                    return _cell_text_range(cells[target_col])
+    return None
+
+
 def _find_table_cell_indices(
     document: dict | None,
     table_start_index: int,

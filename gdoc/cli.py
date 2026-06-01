@@ -615,6 +615,9 @@ def cmd_edit(args) -> int:
     replace_all = getattr(args, "all", False)
     case_sensitive = getattr(args, "case_sensitive", False)
     normalize = getattr(args, "normalize", False)
+    cell = getattr(args, "cell", None)
+    col = getattr(args, "col", None)
+    table_index = getattr(args, "table", 0)
 
     # Resolve text from args or files (fail fast before API calls)
     old_text = args.old_text
@@ -622,7 +625,20 @@ def cmd_edit(args) -> int:
     old_file = getattr(args, "old_file", None)
     new_file = getattr(args, "new_file", None)
 
-    if old_file or new_file:
+    if cell is not None:
+        # Cell mode: the cell address is the anchor, so the single positional
+        # (or --new-file) carries the replacement — no separate old_text.
+        if new_file:
+            new_text = _read_file(new_file)
+        else:
+            new_text = new_text if new_text is not None else old_text
+        if new_text is None:
+            raise GdocError(
+                "cell edit needs replacement text "
+                "(NEW_TEXT positional or --new-file)",
+                exit_code=3,
+            )
+    elif old_file or new_file:
         if new_file and not old_file:
             raise GdocError(
                 "--new-file requires --old-file (needs an anchor). "
@@ -657,8 +673,6 @@ def cmd_edit(args) -> int:
     tab_name = getattr(args, "tab", None)
     tab_id = None
 
-    search_body = None
-    document = None
     if tab_name:
         from gdoc.api.docs import flatten_tabs, get_document_with_tabs, resolve_tab
         doc = get_document_with_tabs(doc_id)
@@ -667,30 +681,38 @@ def cmd_edit(args) -> int:
         tab_match = resolve_tab(tabs, tab_name)
         tab_id = tab_match["id"]
         search_body = tab_match["body"]
+    else:
+        document = get_document(doc_id)
+        revision_id = document.get("revisionId", "")
+        search_body = document.get("body", {})
+
+    if cell is not None:
+        from gdoc.api.docs import resolve_cell_range
+        cell_range = resolve_cell_range(
+            search_body, cell, col=col, table_index=table_index,
+            normalize=normalize,
+        )
+        if cell_range is None:
+            raise GdocError(f"cell not found: {cell!r}", exit_code=3)
+        matches = [cell_range]
+    else:
         matches = find_text_in_document(
             None, old_text, match_case=case_sensitive,
             body=search_body, normalize=normalize,
         )
-    else:
-        document = get_document(doc_id)
-        revision_id = document.get("revisionId", "")
-        matches = find_text_in_document(
-            document, old_text, match_case=case_sensitive, normalize=normalize,
-        )
-
-    if not matches:
-        from gdoc.api.docs import diagnose_no_match
-        reason = diagnose_no_match(
-            document, old_text, match_case=case_sensitive,
-            body=search_body, already_normalized=normalize,
-        )
-        msg = "no match found" + (f"; {reason}" if reason else "")
-        raise GdocError(msg, exit_code=3)
-    if not replace_all and len(matches) > 1:
-        raise GdocError(
-            f"multiple matches ({len(matches)} found). Use --all",
-            exit_code=3,
-        )
+        if not matches:
+            from gdoc.api.docs import diagnose_no_match
+            reason = diagnose_no_match(
+                None, old_text, match_case=case_sensitive,
+                body=search_body, already_normalized=normalize,
+            )
+            msg = "no match found" + (f"; {reason}" if reason else "")
+            raise GdocError(msg, exit_code=3)
+        if not replace_all and len(matches) > 1:
+            raise GdocError(
+                f"multiple matches ({len(matches)} found). Use --all",
+                exit_code=3,
+            )
 
     # Check if replacement contains tables — not supported with --all
     from gdoc.mdparse import parse_markdown as _parse_md
@@ -2096,6 +2118,20 @@ def build_parser() -> GdocArgumentParser:
     edit_p.add_argument(
         "--normalize", action="store_true",
         help="Match through smart-quote/dash differences (’ matches ')",
+    )
+    edit_p.add_argument(
+        "--cell",
+        help="Target a table cell instead of searching text: a label "
+             "(replaces the cell to its right) or 'ROW,COL' coordinates",
+    )
+    edit_p.add_argument(
+        "--col", type=int,
+        help="With --cell label, the 0-based column to replace "
+             "(default: the column right of the label)",
+    )
+    edit_p.add_argument(
+        "--table", type=int, default=0,
+        help="With --cell 'ROW,COL', which table in the body (default 0)",
     )
     edit_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
