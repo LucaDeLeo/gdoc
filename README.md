@@ -126,7 +126,8 @@ gdoc cat 1aBcDeFg...
 
 | Command | Description |
 |---------|-------------|
-| `edit DOC OLD NEW` | Find and replace text with markdown formatting, including tables (`--all` for all) |
+| `edit DOC OLD NEW` | Find and replace text with markdown formatting, including text inside tables (`--all` for all; `--normalize` to match through smart quotes/dashes; `-` reads an argument from stdin) |
+| `edit DOC --cell ADDR NEW` | Replace a table cell by label or `ROW,COL` coordinates (`--col`, `--table`) |
 | `write DOC FILE` | Overwrite document from a local markdown file |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
 | `cp DOC TITLE` | Duplicate a document |
@@ -264,6 +265,39 @@ gdoc edit DOC "placeholder" "| Name | Score |
 ```
 
 Tables require a single match — use without `--all` when the replacement contains a table.
+
+## Editing inside tables
+
+`edit` searches and replaces text inside table cells, not just plain paragraphs. For label/value grids (a label in one column, the value in the next), address a cell directly instead of anchoring on its current text:
+
+```bash
+# Replace the cell to the right of a label
+gdoc edit DOC --tab "Tab 1" --cell "Discussion topics from JP" "Show and tell; Q2 planning"
+
+# Address by ROW,COL coordinates (0-based) within the Nth table (--table, default 0)
+gdoc edit DOC --cell 7,1 "new value"
+
+# --col overrides which column to write (default: the one right of the label)
+gdoc edit DOC --cell "Status" --col 2 "Done"
+```
+
+Cell edits preserve the cell's paragraph structure; an empty cell is filled in place. The replacement supports the same markdown formatting as a normal `edit`.
+
+### Matching tolerance
+
+By default matching is exact. If an anchor isn't found, `edit` explains why — most often a smart-quote apostrophe (`'` vs `'`) or a line break where the anchor had a space. Pass `--normalize` to match through smart-quote and dash differences:
+
+```bash
+gdoc edit DOC "JP's job" "JP's role" --normalize   # matches "JP's job" in the doc
+```
+
+### Multi-line arguments from stdin
+
+Pass `-` for the old or new argument to read it from stdin (one stream, so at most one `-`):
+
+```bash
+printf 'line one\nline two' | gdoc edit DOC --cell "Notes" -
+```
 
 ## Import from file
 

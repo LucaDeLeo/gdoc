@@ -4,6 +4,27 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`gdoc edit` now works inside tables.** `find_text_in_document` descends
+  into table cells (and nested tables), so search/replace finds text that was
+  previously invisible — `edit` used to return "no match found" for in-table
+  text that `cat` could read.
+- **`gdoc edit --cell ADDR`** — address a table cell directly instead of
+  anchoring on its text. Label mode (`--cell "Discussion topics"`) replaces the
+  cell to the label's right (`--col` to override); coordinate mode
+  (`--cell ROW,COL`, `--table N`) indexes a cell by position. Empty cells are
+  filled in place.
+- **`gdoc edit --normalize`** — match through smart-quote/dash differences
+  (e.g. `'` matches `'`). Exact by default.
+- **`-` reads an argument from stdin** for `gdoc edit`, enabling heredocs and
+  pipes for multi-line anchors/replacements (at most one `-`).
+
+### Changed
+- A failed `edit` match now explains why (smart-quote or whitespace near-match)
+  instead of a bare "no match found".
+
 ## [0.7.5] — 2026-06-01
 
 ### Fixed

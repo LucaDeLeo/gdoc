@@ -20,8 +20,12 @@ gdoc cat DOC_ID --comments                   # Line-numbered with comment annota
 gdoc cat DOC_ID --plain                      # Export as plain text
 gdoc cat DOC_ID > local.md                   # Save locally
 
-gdoc edit DOC_ID "old text" "new text"       # Find unique match & replace
+gdoc edit DOC_ID "old text" "new text"       # Find unique match & replace (works inside tables)
 gdoc edit DOC_ID "old text" "new text" --all # Replace all occurrences
+gdoc edit DOC_ID "old" "new" --normalize     # Match through smart quotes/dashes (’ matches ')
+gdoc edit DOC_ID --cell "Label" "new value"  # Replace the table cell right of a label
+gdoc edit DOC_ID --cell 7,1 "new value"      # Replace cell by ROW,COL (--table N, default 0)
+printf 'multi\nline' | gdoc edit DOC_ID --cell "Notes" -  # '-' reads an arg from stdin
 gdoc write DOC_ID FILE.md                    # Overwrite doc body from local markdown
 
 gdoc comments DOC_ID                         # List open comments
