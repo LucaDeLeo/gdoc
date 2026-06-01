@@ -482,6 +482,56 @@ class TestFindTextBody:
         matches = find_text_in_document(None, "world", body=body)
         assert [m["startIndex"] for m in matches] == [7, 20]
 
+    def test_normalize_matches_smart_quotes(self):
+        from gdoc.api.docs import find_text_in_document
+
+        body = {"content": [{
+            "paragraph": {"elements": [{
+                "startIndex": 1, "textRun": {"content": "JP’s job\n"},
+            }]},
+        }]}
+        assert find_text_in_document(None, "JP's job", body=body) == []
+        m = find_text_in_document(None, "JP's job", body=body, normalize=True)
+        assert len(m) == 1 and m[0]["startIndex"] == 1
+
+
+class TestDiagnoseNoMatch:
+    @staticmethod
+    def _para_body(text):
+        return {"content": [{
+            "paragraph": {"elements": [{
+                "startIndex": 1, "textRun": {"content": text},
+            }]},
+        }]}
+
+    def test_suggests_normalize_on_quote_mismatch(self):
+        from gdoc.api.docs import diagnose_no_match
+
+        reason = diagnose_no_match(None, "JP's job", body=self._para_body("JP’s job\n"))
+        assert reason is not None and "--normalize" in reason
+
+    def test_reports_whitespace_difference(self):
+        from gdoc.api.docs import diagnose_no_match
+
+        reason = diagnose_no_match(
+            None, "a b", body=self._para_body("a\nb\n"),
+        )
+        assert reason is not None and "whitespace" in reason
+
+    def test_no_near_match_returns_none(self):
+        from gdoc.api.docs import diagnose_no_match
+
+        assert diagnose_no_match(None, "zzz", body=self._para_body("abc\n")) is None
+
+    def test_already_normalized_skips_quote_suggestion(self):
+        from gdoc.api.docs import diagnose_no_match
+
+        reason = diagnose_no_match(
+            None, "JP's job", body=self._para_body("JP’s job\n"),
+            already_normalized=True,
+        )
+        assert reason is None or "--normalize" not in reason
+
 
 class TestAddTab:
     @patch("gdoc.api.docs.get_docs_service")

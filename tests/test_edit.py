@@ -20,6 +20,7 @@ def _make_args(**overrides):
         "new_text": "world",
         "all": False,
         "case_sensitive": False,
+        "normalize": False,
         "json": False,
         "verbose": False,
         "plain": False,
@@ -167,6 +168,70 @@ class TestEditPrecheck:
         args = _make_args(old_text="hello")
         rc = cmd_edit(args)
         assert rc == 0
+
+
+def _doc_with(text, revision_id="rev123"):
+    """A document whose single paragraph contains `text`."""
+    return {
+        "revisionId": revision_id,
+        "body": {"content": [{
+            "paragraph": {"elements": [{
+                "startIndex": 1,
+                "textRun": {"content": text},
+            }]},
+        }]},
+    }
+
+
+class TestEditNormalize:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
+    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_normalize_threaded_into_find(
+        self, _pf, _doc, mock_find, _replace, _ver, _update,
+    ):
+        cmd_edit(_make_args(normalize=True))
+        assert mock_find.call_args[1]["normalize"] is True
+
+    @patch("gdoc.api.docs.replace_formatted")
+    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP’s job\n"))
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_miss_suggests_normalize(self, _pf, _doc, mock_replace):
+        """Exact search with an ASCII apostrophe misses smart-quote text."""
+        args = _make_args(old_text="JP's job", new_text="x")
+        with pytest.raises(GdocError, match="--normalize") as exc:
+            cmd_edit(args)
+        assert exc.value.exit_code == 3
+        mock_replace.assert_not_called()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP’s job\n"))
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_normalize_matches_smart_quotes(
+        self, _pf, _doc, mock_replace, _ver, _update, capsys,
+    ):
+        """With --normalize, the ASCII anchor matches the smart-quote text."""
+        args = _make_args(old_text="JP's job", new_text="x", normalize=True)
+        rc = cmd_edit(args)
+        assert rc == 0
+        assert "OK replaced 1 occurrence" in capsys.readouterr().out
+        mock_replace.assert_called_once()
+
+    @patch("gdoc.api.docs.replace_formatted")
+    @patch("gdoc.api.docs.get_document", return_value=_doc_with("line one\nline two\n"))
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_miss_reports_whitespace_difference(self, _pf, _doc, mock_replace):
+        """A space where the doc has a newline → whitespace diagnostic."""
+        args = _make_args(old_text="line one line two", new_text="x")
+        with pytest.raises(GdocError, match="whitespace") as exc:
+            cmd_edit(args)
+        assert exc.value.exit_code == 3
+        mock_replace.assert_not_called()
 
 
 class TestEditJson:

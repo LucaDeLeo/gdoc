@@ -138,6 +138,31 @@ def confirm_destructive(message: str, force: bool = False) -> None:
         raise GdocError("Cancelled", exit_code=3)
 
 
+# Smart quotes / dashes → ASCII. Each entry maps one char to exactly one
+# char, so the fold is length-preserving and an index map built on the
+# original text stays valid after folding (used by --normalize matching).
+_TYPOGRAPHY_FOLD = str.maketrans({
+    "‘": "'",  # ' left single quote
+    "’": "'",  # ' right single quote / apostrophe
+    "“": '"',  # " left double quote
+    "”": '"',  # " right double quote
+    "′": "'",  # ′ prime
+    "″": '"',  # ″ double prime
+    "–": "-",  # – en dash
+    "—": "-",  # — em dash
+})
+
+
+def fold_typography(s: str) -> str:
+    """Fold smart quotes and en/em dashes to their ASCII equivalents.
+
+    Length-preserving (1:1 per character) so a smart-quote apostrophe
+    (U+2019) matches an ASCII apostrophe in a search anchor without
+    disturbing any character-index mapping.
+    """
+    return s.translate(_TYPOGRAPHY_FOLD)
+
+
 def build_doc_url(doc_id: str, tab_id: str | None = None) -> str:
     """Build a Google Docs URL, optionally pointing at a specific tab."""
     url = f"https://docs.google.com/document/d/{doc_id}/edit"

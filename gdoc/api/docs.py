@@ -1,11 +1,12 @@
 """Google Docs API v1 wrapper functions with error translation."""
 
+import re
 from functools import lru_cache
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from gdoc.util import AuthError, GdocError
+from gdoc.util import AuthError, GdocError, fold_typography
 
 
 @lru_cache(maxsize=1)
@@ -225,6 +226,7 @@ def find_text_in_document(
     text: str,
     match_case: bool = False,
     body: dict | None = None,
+    normalize: bool = False,
 ) -> list[dict]:
     """Find all occurrences of text within the document body.
 
@@ -236,6 +238,9 @@ def find_text_in_document(
         text: Text to search for.
         match_case: If True, case-sensitive matching.
         body: Optional body dict to search in (e.g. from a specific tab).
+        normalize: If True, fold smart quotes/dashes to ASCII on both sides
+            before matching. The fold is length-preserving, so returned
+            indices stay correct.
 
     Returns list of {"startIndex": int, "endIndex": int} in document
     coordinates.
@@ -258,9 +263,12 @@ def find_text_in_document(
 
     search_text = text
     search_in = concat
+    if normalize:
+        search_text = fold_typography(search_text)
+        search_in = fold_typography(search_in)
     if not match_case:
-        search_text = text.lower()
-        search_in = concat.lower()
+        search_text = search_text.lower()
+        search_in = search_in.lower()
 
     matches = []
     start = 0
@@ -276,6 +284,52 @@ def find_text_in_document(
         start = pos + 1
 
     return matches
+
+
+def diagnose_no_match(
+    document: dict | None,
+    text: str,
+    match_case: bool = False,
+    body: dict | None = None,
+    already_normalized: bool = False,
+) -> str | None:
+    """Explain why an exact search for `text` found nothing.
+
+    Returns a human-readable reason (to append to "no match found") or None
+    if no near-match can explain the miss. Runs entirely on the already-
+    fetched document — no extra API calls.
+    """
+    # Near-match that differs only in quote/dash style.
+    if not already_normalized and find_text_in_document(
+        document, text, match_case=match_case, body=body, normalize=True,
+    ):
+        return (
+            "but a near-match exists with different quote/dash style "
+            "(e.g. ’ vs '). Re-run with --normalize to match it"
+        )
+
+    # Near-match that differs only in whitespace (line breaks, runs of
+    # spaces, non-breaking spaces). Folded so quote style doesn't mask it.
+    if body is None and document is not None:
+        body = document.get("body", {})
+    chars: list[tuple[int, str]] = []
+    _collect_chars((body or {}).get("content", []), chars)
+    concat = fold_typography("".join(c for _, c in chars))
+    needle = fold_typography(text)
+
+    def collapse(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip()
+
+    hay_c, needle_c = collapse(concat), collapse(needle)
+    if not match_case:
+        hay_c, needle_c = hay_c.lower(), needle_c.lower()
+    if needle_c and needle_c in hay_c:
+        return (
+            "but the text appears with different whitespace (line breaks "
+            "or non-breaking spaces). Adjust the anchor to match exactly"
+        )
+
+    return None
 
 
 def _find_table_cell_indices(

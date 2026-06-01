@@ -614,6 +614,7 @@ def cmd_edit(args) -> int:
     quiet = getattr(args, "quiet", False)
     replace_all = getattr(args, "all", False)
     case_sensitive = getattr(args, "case_sensitive", False)
+    normalize = getattr(args, "normalize", False)
 
     # Resolve text from args or files (fail fast before API calls)
     old_text = args.old_text
@@ -656,6 +657,8 @@ def cmd_edit(args) -> int:
     tab_name = getattr(args, "tab", None)
     tab_id = None
 
+    search_body = None
+    document = None
     if tab_name:
         from gdoc.api.docs import flatten_tabs, get_document_with_tabs, resolve_tab
         doc = get_document_with_tabs(doc_id)
@@ -663,16 +666,26 @@ def cmd_edit(args) -> int:
         tabs = flatten_tabs(doc.get("tabs", []))
         tab_match = resolve_tab(tabs, tab_name)
         tab_id = tab_match["id"]
+        search_body = tab_match["body"]
         matches = find_text_in_document(
-            None, old_text, match_case=case_sensitive, body=tab_match["body"],
+            None, old_text, match_case=case_sensitive,
+            body=search_body, normalize=normalize,
         )
     else:
         document = get_document(doc_id)
         revision_id = document.get("revisionId", "")
-        matches = find_text_in_document(document, old_text, match_case=case_sensitive)
+        matches = find_text_in_document(
+            document, old_text, match_case=case_sensitive, normalize=normalize,
+        )
 
     if not matches:
-        raise GdocError("no match found", exit_code=3)
+        from gdoc.api.docs import diagnose_no_match
+        reason = diagnose_no_match(
+            document, old_text, match_case=case_sensitive,
+            body=search_body, already_normalized=normalize,
+        )
+        msg = "no match found" + (f"; {reason}" if reason else "")
+        raise GdocError(msg, exit_code=3)
     if not replace_all and len(matches) > 1:
         raise GdocError(
             f"multiple matches ({len(matches)} found). Use --all",
@@ -2079,6 +2092,10 @@ def build_parser() -> GdocArgumentParser:
     )
     edit_p.add_argument(
         "--case-sensitive", action="store_true", help="Case-sensitive matching"
+    )
+    edit_p.add_argument(
+        "--normalize", action="store_true",
+        help="Match through smart-quote/dash differences (’ matches ')",
     )
     edit_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
