@@ -251,11 +251,15 @@ def cmd_toc(args) -> int:
     if max_depth > 0:
         headings = [h for h in headings if h["level"] <= max_depth]
 
-    base_url = f"https://docs.google.com/document/d/{doc_id}/edit"
-    tab_suffix = f"&tab=t.{tab_id}" if tab_id else ""
+    from gdoc.util import build_doc_url
+
+    # build_doc_url emits `?tab=<tab_id>` as a query parameter before the
+    # fragment, and tab_id already carries Google's `t.` prefix. The heading
+    # anchor is the URL fragment, so it must come last.
+    base_url = build_doc_url(doc_id, tab_id=tab_id)
 
     def _link(heading_id: str) -> str:
-        return f"{base_url}#heading={heading_id}{tab_suffix}"
+        return f"{base_url}#heading={heading_id}"
 
     from gdoc.format import format_json, get_output_mode
 
