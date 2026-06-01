@@ -698,3 +698,43 @@ class TestEditTab:
         args = _make_args(tab="Notes")
         with pytest.raises(GdocError, match="Document not found"):
             cmd_edit(args)
+
+
+class TestEditStdin:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
+    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_new_text_dash_reads_stdin(
+        self, _pf, _doc, _find, mock_replace, _ver, _update,
+    ):
+        args = _make_args(old_text="hello", new_text="-")
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = "from stdin"
+            cmd_edit(args)
+        assert mock_replace.call_args[0][2] == "from stdin"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
+    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_old_text_dash_reads_stdin(
+        self, _pf, _doc, mock_find, _replace, _ver, _update,
+    ):
+        args = _make_args(old_text="-", new_text="world")
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.read.return_value = "anchor text"
+            cmd_edit(args)
+        # The stdin content becomes the search anchor.
+        assert mock_find.call_args[0][1] == "anchor text"
+
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_both_dash_errors(self, _pf):
+        args = _make_args(old_text="-", new_text="-")
+        with pytest.raises(GdocError, match="only one argument") as exc:
+            cmd_edit(args)
+        assert exc.value.exit_code == 3

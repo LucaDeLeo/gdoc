@@ -625,6 +625,18 @@ def cmd_edit(args) -> int:
     old_file = getattr(args, "old_file", None)
     new_file = getattr(args, "new_file", None)
 
+    # `-` reads that positional from stdin (one stream → at most one `-`).
+    if old_text == "-" and new_text == "-":
+        raise GdocError(
+            "only one argument can read from stdin ('-')", exit_code=3,
+        )
+    if old_text == "-" or new_text == "-":
+        stdin_data = sys.stdin.read()
+        if old_text == "-":
+            old_text = stdin_data
+        if new_text == "-":
+            new_text = stdin_data
+
     if cell is not None:
         # Cell mode: the cell address is the anchor, so the single positional
         # (or --new-file) carries the replacement — no separate old_text.
