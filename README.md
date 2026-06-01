@@ -126,7 +126,7 @@ gdoc cat 1aBcDeFg...
 
 | Command | Description |
 |---------|-------------|
-| `edit DOC OLD NEW` | Find and replace text with markdown formatting, including text inside tables (`--all` for all; `--normalize` to match through smart quotes/dashes; `-` reads an argument from stdin) |
+| `edit DOC OLD NEW` | Find and replace text with Markdown formatting, including text inside tables (`--all` for all; `--normalize` to match through smart quotes/dashes; `-` reads an argument from stdin) |
 | `edit DOC --cell ADDR NEW` | Replace a table cell by label or `ROW,COL` coordinates (`--col`, `--table`) |
 | `write DOC FILE` | Overwrite document from a local markdown file |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
@@ -281,11 +281,11 @@ gdoc edit DOC --cell 7,1 "new value"
 gdoc edit DOC --cell "Status" --col 2 "Done"
 ```
 
-Cell edits preserve the cell's paragraph structure; an empty cell is filled in place. The replacement supports the same markdown formatting as a normal `edit`.
+Cell edits preserve the cell's paragraph structure; an empty cell is filled in place. The replacement supports the same Markdown formatting as a normal `edit`.
 
 ### Matching tolerance
 
-By default matching is exact. If an anchor isn't found, `edit` explains why — most often a smart-quote apostrophe (`'` vs `'`) or a line break where the anchor had a space. Pass `--normalize` to match through smart-quote and dash differences:
+By default matching is exact. If an anchor isn't found, `edit` explains why — most often a smart-quote apostrophe (`’` vs `'`) or a line break where the anchor had a space. Pass `--normalize` to match through smart-quote and dash differences:
 
 ```bash
 gdoc edit DOC "JP's job" "JP's role" --normalize   # matches "JP's job" in the doc

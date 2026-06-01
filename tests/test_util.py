@@ -135,19 +135,19 @@ class TestFoldTypography:
     def test_folds_smart_single_quotes(self):
         from gdoc.util import fold_typography
 
-        assert fold_typography("JP’s job") == "JP's job"
-        assert fold_typography("‘hi’") == "'hi'"
+        assert fold_typography("JP\u2019s job") == "JP's job"
+        assert fold_typography("\u2018hi\u2019") == "'hi'"
 
     def test_folds_smart_double_quotes_and_dashes(self):
         from gdoc.util import fold_typography
 
-        assert fold_typography("“quote”") == '"quote"'
-        assert fold_typography("a – b — c") == "a - b - c"
+        assert fold_typography("\u201cquote\u201d") == '"quote"'
+        assert fold_typography("a \u2013 b \u2014 c") == "a - b - c"
 
     def test_length_preserving(self):
         from gdoc.util import fold_typography
 
-        s = "‘a’ “b” – —"
+        s = "\u2018a\u2019 \u201cb\u201d \u2013 \u2014"
         assert len(fold_typography(s)) == len(s)
 
     def test_plain_ascii_unchanged(self):

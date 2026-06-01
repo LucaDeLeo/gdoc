@@ -197,7 +197,7 @@ class TestEditNormalize:
         assert mock_find.call_args[1]["normalize"] is True
 
     @patch("gdoc.api.docs.replace_formatted")
-    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP’s job\n"))
+    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP\u2019s job\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_miss_suggests_normalize(self, _pf, _doc, mock_replace):
         """Exact search with an ASCII apostrophe misses smart-quote text."""
@@ -210,7 +210,7 @@ class TestEditNormalize:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
-    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP’s job\n"))
+    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP\u2019s job\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_normalize_matches_smart_quotes(
         self, _pf, _doc, mock_replace, _ver, _update, capsys,

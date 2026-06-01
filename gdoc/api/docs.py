@@ -197,7 +197,7 @@ def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
 
     Paragraph text at one level forms a single segment; each table cell is
     its own segment (recursively, for nested tables). Searching per segment
-    means a match can never span a table-cell boundary — the Docs API can't
+    means a match can never span a table-cell boundary \u2014 the Docs API can't
     delete a range that crosses cells or removes a cell's final paragraph
     mark, so such a match would produce an invalid edit.
     """
@@ -297,7 +297,7 @@ def diagnose_no_match(
 
     Returns a human-readable reason (to append to "no match found") or None
     if no near-match can explain the miss. Runs entirely on the already-
-    fetched document — no extra API calls.
+    fetched document \u2014 no extra API calls.
     """
     # Near-match that differs only in quote/dash style.
     if not already_normalized and find_text_in_document(
@@ -305,7 +305,7 @@ def diagnose_no_match(
     ):
         return (
             "but a near-match exists with different quote/dash style "
-            "(e.g. ’ vs '). Re-run with --normalize to match it"
+            "(e.g. \u2019 vs '). Re-run with --normalize to match it"
         )
 
     # Near-match that differs only in whitespace (line breaks, runs of
@@ -384,16 +384,18 @@ def resolve_cell_range(
     body: dict,
     cell: str,
     col: int | None = None,
-    table_index: int = 0,
+    table_index: int | None = None,
     normalize: bool = False,
 ) -> dict | None:
     """Resolve a cell address to an editable {startIndex, endIndex} range.
 
     Two forms, auto-detected:
-    - coordinate ('R,C'): row R, column C of table `table_index` (0-based).
+    - coordinate ('R,C'): row R, column C of a table (0-based). Uses table
+      `table_index`, or the first table when `table_index` is None.
     - label (anything else): find the first row cell whose text equals
       `cell`; the target is column `col` if given, else the cell to its
-      right. Scans every table in document order.
+      right. Searches every table by default, or only table `table_index`
+      when one is given.
 
     `normalize` folds smart quotes/dashes when comparing labels. Returns
     None if nothing resolves.
@@ -403,9 +405,10 @@ def resolve_cell_range(
     coord = _parse_coord(cell)
     if coord is not None:
         r, c = coord
-        if not 0 <= table_index < len(tables):
+        ti = 0 if table_index is None else table_index
+        if not 0 <= ti < len(tables):
             return None
-        rows = tables[table_index].get("tableRows", [])
+        rows = tables[ti].get("tableRows", [])
         if not 0 <= r < len(rows):
             return None
         cells = rows[r].get("tableCells", [])
@@ -413,9 +416,17 @@ def resolve_cell_range(
             return None
         return _cell_text_range(cells[c])
 
+    # Label mode: honor an explicit --table; otherwise scan all tables.
+    if table_index is None:
+        search_tables = tables
+    elif 0 <= table_index < len(tables):
+        search_tables = [tables[table_index]]
+    else:
+        return None
+
     target = fold_typography(cell) if normalize else cell
     target = target.strip()
-    for table in tables:
+    for table in search_tables:
         for row in table.get("tableRows", []):
             cells = row.get("tableCells", [])
             for ci, c_ in enumerate(cells):
@@ -792,7 +803,7 @@ def _build_cleanup_requests(
 ) -> list[dict]:
     """Build batchUpdate requests to clean up an empty heading paragraph.
 
-    Pure function — inspects body content and returns request dicts
+    Pure function \u2014 inspects body content and returns request dicts
     without making API calls. When the deleted text was the entire
     content of a heading paragraph, an empty "\\n" with the heading
     style remains. This returns requests that transfer that style to
@@ -920,7 +931,7 @@ def insert_markdown_into_tab(
 
     parsed = parse_markdown(markdown)
 
-    # Strip trailing \n — the existing paragraph already owns one.
+    # Strip trailing \n \u2014 the existing paragraph already owns one.
     # Without this, every insert leaves an extra blank line behind.
     if parsed.plain_text.endswith("\n"):
         old_len = len(parsed.plain_text)
@@ -999,7 +1010,7 @@ def replace_formatted(
 
     parsed = parse_markdown(new_markdown)
 
-    # Strip trailing \n — the existing paragraph in the document
+    # Strip trailing \n \u2014 the existing paragraph in the document
     # already has one.  Without this, every replacement inserts an
     # extra paragraph break.
     if parsed.plain_text.endswith("\n"):
@@ -1017,7 +1028,7 @@ def replace_formatted(
     all_requests: list[dict] = []
 
     for match in sorted_matches:
-        # Delete the matched range (skip empty ranges — Docs API rejects
+        # Delete the matched range (skip empty ranges \u2014 Docs API rejects
         # them with "The range should not be empty", and a zero-width
         # match is a pure insert).
         if match["endIndex"] > match["startIndex"]:

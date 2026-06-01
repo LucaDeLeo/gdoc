@@ -138,18 +138,19 @@ def confirm_destructive(message: str, force: bool = False) -> None:
         raise GdocError("Cancelled", exit_code=3)
 
 
-# Smart quotes / dashes → ASCII. Each entry maps one char to exactly one
+# Smart quotes / dashes -> ASCII. Each entry maps one char to exactly one
 # char, so the fold is length-preserving and an index map built on the
 # original text stays valid after folding (used by --normalize matching).
+# Escapes (not literals) keep the source free of ambiguous Unicode (RUF001).
 _TYPOGRAPHY_FOLD = str.maketrans({
-    "‘": "'",  # ' left single quote
-    "’": "'",  # ' right single quote / apostrophe
-    "“": '"',  # " left double quote
-    "”": '"',  # " right double quote
-    "′": "'",  # ′ prime
-    "″": '"',  # ″ double prime
-    "–": "-",  # – en dash
-    "—": "-",  # — em dash
+    "\u2018": "'",  # left single quote
+    "\u2019": "'",  # right single quote / apostrophe
+    "\u201c": '"',  # left double quote
+    "\u201d": '"',  # right double quote
+    "\u2032": "'",  # prime
+    "\u2033": '"',  # double prime
+    "\u2013": "-",  # en dash
+    "\u2014": "-",  # em dash
 })
 
 

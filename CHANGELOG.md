@@ -17,7 +17,7 @@ All notable changes to `gdoc` are documented here. This project follows
   (`--cell ROW,COL`, `--table N`) indexes a cell by position. Empty cells are
   filled in place.
 - **`gdoc edit --normalize`** — match through smart-quote/dash differences
-  (e.g. `'` matches `'`). Exact by default.
+  (e.g. `’` matches `'`). Exact by default.
 - **`-` reads an argument from stdin** for `gdoc edit`, enabling heredocs and
   pipes for multi-line anchors/replacements (at most one `-`).
 

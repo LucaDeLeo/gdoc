@@ -91,8 +91,22 @@ class TestResolveCellRange:
         assert resolve_cell_range(GRID, "9,9") is None
         assert resolve_cell_range(GRID, "0,1", table_index=5) is None
 
+    def test_label_honors_explicit_table(self):
+        two = {"content": [
+            _table([[("Dup\n", 5), ("first\n", 20)]]),
+            _table([[("Dup\n", 40), ("second\n", 55)]]),
+        ]}
+        # No --table → scan all tables; first match (table 0) wins.
+        assert resolve_cell_range(two, "Dup") == {"startIndex": 20, "endIndex": 25}
+        # --table 1 selects the matching cell in the second table.
+        assert resolve_cell_range(two, "Dup", table_index=1) == {
+            "startIndex": 55, "endIndex": 61,
+        }
+        # Out-of-range table → None even if the label exists elsewhere.
+        assert resolve_cell_range(two, "Dup", table_index=9) is None
+
     def test_normalize_label(self):
-        body = {"content": [_table([[("JP’s job\n", 5), ("v\n", 20)]])]}
+        body = {"content": [_table([[("JP\u2019s job\n", 5), ("v\n", 20)]])]}
         assert resolve_cell_range(body, "JP's job") is None
         assert resolve_cell_range(body, "JP's job", normalize=True) == {
             "startIndex": 20, "endIndex": 21,
@@ -105,7 +119,7 @@ def _args(**kw):
         "old_text": None, "new_text": None,
         "old_file": None, "new_file": None,
         "all": False, "case_sensitive": False, "normalize": False,
-        "cell": None, "col": None, "table": 0,
+        "cell": None, "col": None, "table": None,
         "json": False, "verbose": False, "plain": False,
         "quiet": False, "tab": None,
     }
@@ -132,7 +146,7 @@ class TestCmdEditCell:
         rc = cmd_edit(_args(cell="Label A", old_text="new value"))
         assert rc == 0
         assert "OK replaced 1 occurrence" in capsys.readouterr().out
-        args, kwargs = mock_replace.call_args
+        args = mock_replace.call_args[0]
         assert args[1] == [{"startIndex": 20, "endIndex": 27}]
         assert args[2] == "new value"
 

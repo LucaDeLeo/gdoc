@@ -467,7 +467,7 @@ class TestFindTextBody:
             ]}]},
         }]}
         # Neither a plain concatenation ("foobar") nor a newline-spanning
-        # anchor ("foo\nbar") may match across the cell boundary — that would
+        # anchor ("foo\nbar") may match across the cell boundary \u2014 that would
         # yield an invalid cross-cell delete range.
         assert find_text_in_document(None, "foobar", body=body) == []
         assert find_text_in_document(None, "foo\nbar", body=body) == []
@@ -494,7 +494,7 @@ class TestFindTextBody:
 
         body = {"content": [{
             "paragraph": {"elements": [{
-                "startIndex": 1, "textRun": {"content": "JP’s job\n"},
+                "startIndex": 1, "textRun": {"content": "JP\u2019s job\n"},
             }]},
         }]}
         assert find_text_in_document(None, "JP's job", body=body) == []
@@ -514,7 +514,7 @@ class TestDiagnoseNoMatch:
     def test_suggests_normalize_on_quote_mismatch(self):
         from gdoc.api.docs import diagnose_no_match
 
-        reason = diagnose_no_match(None, "JP's job", body=self._para_body("JP’s job\n"))
+        reason = diagnose_no_match(None, "JP's job", body=self._para_body("JP\u2019s job\n"))
         assert reason is not None and "--normalize" in reason
 
     def test_reports_whitespace_difference(self):
@@ -534,7 +534,7 @@ class TestDiagnoseNoMatch:
         from gdoc.api.docs import diagnose_no_match
 
         reason = diagnose_no_match(
-            None, "JP's job", body=self._para_body("JP’s job\n"),
+            None, "JP's job", body=self._para_body("JP\u2019s job\n"),
             already_normalized=True,
         )
         assert reason is None or "--normalize" not in reason
@@ -659,7 +659,7 @@ class TestCountDocumentTabs:
 
 
 class TestZeroWidthReplace:
-    """Zero-width matches in replace_formatted act as pure inserts — no
+    """Zero-width matches in replace_formatted act as pure inserts \u2014 no
     deleteContentRange is emitted (Docs API rejects empty ranges)."""
 
     @patch("gdoc.api.docs._build_cleanup_requests", return_value=[])

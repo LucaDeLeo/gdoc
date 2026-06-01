@@ -617,7 +617,7 @@ def cmd_edit(args) -> int:
     normalize = getattr(args, "normalize", False)
     cell = getattr(args, "cell", None)
     col = getattr(args, "col", None)
-    table_index = getattr(args, "table", 0)
+    table_index = getattr(args, "table", None)
 
     # Resolve text from args or files (fail fast before API calls)
     old_text = args.old_text
@@ -625,17 +625,15 @@ def cmd_edit(args) -> int:
     old_file = getattr(args, "old_file", None)
     new_file = getattr(args, "new_file", None)
 
-    # `-` reads that positional from stdin (one stream → at most one `-`).
-    if old_text == "-" and new_text == "-":
-        raise GdocError(
-            "only one argument can read from stdin ('-')", exit_code=3,
-        )
-    if old_text == "-" or new_text == "-":
-        stdin_data = sys.stdin.read()
-        if old_text == "-":
-            old_text = stdin_data
-        if new_text == "-":
-            new_text = stdin_data
+    # Read stdin lazily, once, and only for an argument that is actually used
+    # (`-` on a positional that cell-mode ignores must not block on stdin).
+    _stdin_data = None
+
+    def read_stdin() -> str:
+        nonlocal _stdin_data
+        if _stdin_data is None:
+            _stdin_data = sys.stdin.read()
+        return _stdin_data
 
     if cell is not None:
         # Cell mode: the cell address is the anchor, so the single positional
@@ -643,7 +641,10 @@ def cmd_edit(args) -> int:
         if new_file:
             new_text = _read_file(new_file)
         else:
-            new_text = new_text if new_text is not None else old_text
+            replacement = new_text if new_text is not None else old_text
+            if replacement == "-":
+                replacement = read_stdin()
+            new_text = replacement
         if new_text is None:
             raise GdocError(
                 "cell edit needs replacement text "
@@ -663,12 +664,24 @@ def cmd_edit(args) -> int:
         else:
             # --old-file alone → delete the matched range.
             new_text = ""
-    elif old_text is None or new_text is None:
-        raise GdocError(
-            "old_text and new_text required "
-            "(or use --old-file/--new-file)",
-            exit_code=3,
-        )
+    else:
+        # `-` reads that positional from stdin (one stream → at most one `-`).
+        if old_text == "-" and new_text == "-":
+            raise GdocError(
+                "only one argument can read from stdin ('-')", exit_code=3,
+            )
+        if old_text == "-" or new_text == "-":
+            stdin_data = read_stdin()
+            if old_text == "-":
+                old_text = stdin_data
+            if new_text == "-":
+                new_text = stdin_data
+        if old_text is None or new_text is None:
+            raise GdocError(
+                "old_text and new_text required "
+                "(or use --old-file/--new-file)",
+                exit_code=3,
+            )
 
     # Pre-flight awareness check
     from gdoc.notify import pre_flight
@@ -2129,7 +2142,7 @@ def build_parser() -> GdocArgumentParser:
     )
     edit_p.add_argument(
         "--normalize", action="store_true",
-        help="Match through smart-quote/dash differences (’ matches ')",
+        help="Match through smart-quote/dash differences (\u2019 matches ')",
     )
     edit_p.add_argument(
         "--cell",
@@ -2142,8 +2155,10 @@ def build_parser() -> GdocArgumentParser:
              "(default: the column right of the label)",
     )
     edit_p.add_argument(
-        "--table", type=int, default=0,
-        help="With --cell 'ROW,COL', which table in the body (default 0)",
+        "--table", type=int, default=None,
+        help="Which table in the body to address with --cell (0-based). "
+             "Coordinates default to the first table; a label searches all "
+             "tables unless this is set.",
     )
     edit_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
