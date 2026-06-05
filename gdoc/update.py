@@ -31,6 +31,21 @@ def _latest_version() -> str | None:
         return None
 
 
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """Parse the numeric parts of a version string for comparison."""
+    return tuple(int(p) for p in re.findall(r"\d+", version))
+
+
+def _is_newer(latest: str, current: str) -> bool:
+    """True if latest is strictly newer than current.
+
+    Plain inequality would offer an "update" to an older version whenever
+    the GitHub raw cache lags behind the installed build (and `gdoc update`
+    would actually downgrade).
+    """
+    return _version_tuple(latest) > _version_tuple(current)
+
+
 def _read_cache() -> dict:
     try:
         return json.loads(_CACHE_FILE.read_text()) if _CACHE_FILE.exists() else {}
@@ -59,7 +74,7 @@ def check_for_update() -> None:
             latest = _latest_version()
             if latest:
                 _write_cache(latest)
-        if latest and latest != _installed_version():
+        if latest and _is_newer(latest, _installed_version()):
             print(
                 f"Update available: {_installed_version()} → {latest}. "
                 f"Run `gdoc update` to update. "
@@ -79,7 +94,7 @@ def run_update() -> int:
     if latest is None:
         print("Could not check for updates. Are you online?")
         return 1
-    if latest == current:
+    if not _is_newer(latest, current):
         print("Already up to date.")
         _write_cache(latest)
         return 0
@@ -94,6 +109,6 @@ def run_update() -> int:
         _write_cache(latest)
         return 0
     else:
-        print(f"\nUpdate failed. Try manually:")
+        print("\nUpdate failed. Try manually:")
         print(f"  uv tool install --force git+https://github.com/{_GITHUB_REPO}.git")
         return 1

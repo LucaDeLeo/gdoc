@@ -4,6 +4,15 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-06-05
+
+### Fixed
+- `gdoc update` compared versions with plain inequality, so a stale GitHub
+  raw cache reporting an *older* version produced a backwards
+  "Update available: 0.8.0 → 0.7.6" notice — and `gdoc update` would
+  actually downgrade. Versions are now compared numerically and only
+  strictly-newer remotes trigger the notice/install.
+
 ## [0.8.0] — 2026-06-05
 
 ### Added
