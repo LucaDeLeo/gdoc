@@ -175,7 +175,7 @@ def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
         if t["title"].lower() == tab_name.lower():
             return t
     for t in tabs:
-        if t["id"] == tab_name:
+        if str(t["id"]) == tab_name:
             return t
     raise GdocError(f"tab not found: {tab_name}", exit_code=3)
 

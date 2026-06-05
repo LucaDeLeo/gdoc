@@ -32,6 +32,9 @@ class ChangeInfo:
     all_comment_ids: list[str] = field(default_factory=list)
     all_resolved_ids: list[str] = field(default_factory=list)
 
+    # File mimeType from the pre-flight files.get (spreadsheet detection)
+    mime_type: str = ""
+
     @property
     def has_changes(self) -> bool:
         """True if any changes were detected."""
@@ -93,6 +96,7 @@ def pre_flight(doc_id: str, quiet: bool = False) -> ChangeInfo | None:
         current_version=current_version,
         preflight_timestamp=preflight_ts,
         last_read_version=last_read_version,
+        mime_type=version_data.get("mimeType", ""),
     )
 
     if state is None:

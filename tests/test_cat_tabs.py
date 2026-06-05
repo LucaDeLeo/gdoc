@@ -11,6 +11,11 @@ from gdoc.notify import ChangeInfo
 from gdoc.util import GdocError
 
 
+@pytest.fixture(autouse=True)
+def _doc_mime(doc_mime):
+    """Keep spreadsheet detection on the Docs path for this module."""
+
+
 def _make_args(**overrides):
     defaults = {
         "command": "cat",

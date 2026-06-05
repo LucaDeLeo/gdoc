@@ -5,7 +5,7 @@ import os
 import sys
 
 from gdoc import __version__
-from gdoc.util import AuthError, GdocError
+from gdoc.util import SPREADSHEET_MIME, AuthError, GdocError
 
 
 class GdocArgumentParser(argparse.ArgumentParser):
@@ -39,6 +39,143 @@ def _resolve_doc_id(raw: str) -> str:
         raise GdocError(str(e), exit_code=3)
 
 
+
+def _file_mime(doc_id: str, change_info) -> str:
+    """Get the file's mimeType, reusing the pre-flight metadata when available."""
+    if change_info is not None and change_info.mime_type:
+        return change_info.mime_type
+    from gdoc.api.drive import get_file_version
+
+    return get_file_version(doc_id).get("mimeType", "")
+
+
+def _require_doc(doc_id: str, change_info) -> None:
+    """Reject spreadsheets early on doc-only commands.
+
+    Only fires when pre-flight already fetched the mime — quiet mode falls
+    through to the API's own error rather than paying an extra lookup.
+    """
+    if change_info is not None and change_info.mime_type == SPREADSHEET_MIME:
+        raise GdocError(
+            f"not a Google Doc: {doc_id} "
+            "(spreadsheets support cat/tabs/info/cells only)",
+            exit_code=3,
+        )
+
+
+def _quote_sheet_title(title: str) -> str:
+    """Quote a sheet title for use in an A1 range reference."""
+    return "'" + title.replace("'", "''") + "'"
+
+
+def _pad_rows(values: list[list]) -> list[list[str]]:
+    """Pad rows to equal width (the API omits trailing empty cells)."""
+    width = max((len(r) for r in values), default=0)
+    return [[str(c) for c in r] + [""] * (width - len(r)) for r in values]
+
+
+def _format_sheet_tsv(values: list[list]) -> str:
+    """Format cell values as TSV. Tabs/newlines inside cells become spaces."""
+    rows = _pad_rows(values)
+    clean = [
+        "\t".join(c.replace("\t", " ").replace("\n", " ") for c in r)
+        for r in rows
+    ]
+    return "\n".join(clean) + ("\n" if clean else "")
+
+
+def _format_sheet_table(values: list[list]) -> str:
+    """Format cell values as a markdown table (first row as header)."""
+    rows = _pad_rows(values)
+    if not rows:
+        return "(no values)\n"
+    rows = [[c.replace("|", "\\|").replace("\n", " ") for c in r] for r in rows]
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    widths = [max(w, 3) for w in widths]
+
+    def fmt(row):
+        return "| " + " | ".join(c.ljust(w) for c, w in zip(row, widths)) + " |"
+
+    lines = [fmt(rows[0]), "| " + " | ".join("-" * w for w in widths) + " |"]
+    lines.extend(fmt(r) for r in rows[1:])
+    return "\n".join(lines) + "\n"
+
+
+def _cat_sheet(args, doc_id: str, change_info) -> int:
+    """Spreadsheet branch of `gdoc cat`: print cell values."""
+    if getattr(args, "comments", False):
+        raise GdocError("--comments is not supported for spreadsheets", exit_code=3)
+
+    quiet = getattr(args, "quiet", False)
+    tab = getattr(args, "tab", None)
+    all_tabs = getattr(args, "all_tabs", False)
+    range_ = getattr(args, "range", None)
+    max_bytes = getattr(args, "max_bytes", 0)
+
+    from gdoc.api.docs import resolve_tab
+    from gdoc.api.sheets import batch_get_values, get_spreadsheet_meta, get_values
+    from gdoc.format import format_json, get_output_mode
+
+    meta = get_spreadsheet_meta(doc_id)
+    sheets = sorted(meta["sheets"], key=lambda s: s["index"])
+    if not sheets:
+        raise GdocError("spreadsheet has no worksheets")
+
+    mode = get_output_mode(args)
+    formatter = _format_sheet_tsv if mode == "plain" else _format_sheet_table
+
+    if all_tabs:
+        if range_:
+            raise GdocError(
+                "--range and --all-tabs are mutually exclusive", exit_code=3
+            )
+        ranges = [_quote_sheet_title(s["title"]) for s in sheets]
+        results = list(zip(sheets, batch_get_values(doc_id, ranges)))
+        if mode == "json":
+            print(
+                format_json(
+                    tabs=[
+                        {
+                            "title": s["title"],
+                            "range": d["range"],
+                            "values": d["values"],
+                        }
+                        for s, d in results
+                    ]
+                )
+            )
+        else:
+            parts = []
+            for s, d in results:
+                parts.append(f"=== Tab: {s['title']} ===\n")
+                parts.append(formatter(d["values"]))
+            print(_truncate_bytes("".join(parts), max_bytes), end="")
+    else:
+        if tab:
+            target = resolve_tab(sheets, tab)
+        else:
+            target = sheets[0]
+            if len(sheets) > 1 and not quiet:
+                print(
+                    f"--- {len(sheets)} tabs; showing \"{target['title']}\" "
+                    "(use --tab or --all-tabs) ---",
+                    file=sys.stderr,
+                )
+        a1 = _quote_sheet_title(target["title"])
+        if range_:
+            a1 += f"!{range_}"
+        data = get_values(doc_id, a1)
+        if mode == "json":
+            print(format_json(range=data["range"], values=data["values"]))
+        else:
+            print(_truncate_bytes(formatter(data["values"]), max_bytes), end="")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(doc_id, change_info, command="cat", quiet=quiet)
+    return 0
+
+
 def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -59,10 +196,16 @@ def cmd_cat(args) -> int:
     max_bytes = getattr(args, "max_bytes", 0)
     no_images = getattr(args, "no_images", False)
 
-    if tab or all_tabs:
-        from gdoc.notify import pre_flight
-        change_info = pre_flight(doc_id, quiet=quiet)
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
 
+    if _file_mime(doc_id, change_info) == SPREADSHEET_MIME:
+        return _cat_sheet(args, doc_id, change_info)
+
+    if getattr(args, "range", None):
+        raise GdocError("--range is only supported for spreadsheets", exit_code=3)
+
+    if tab or all_tabs:
         from gdoc.api.docs import get_document_tabs, get_tab_text
 
         tabs = get_document_tabs(doc_id)
@@ -118,9 +261,6 @@ def cmd_cat(args) -> int:
 
     if getattr(args, "comments", False):
         # Annotated view: line-numbered content + inline comment annotations
-        from gdoc.notify import pre_flight
-        change_info = pre_flight(doc_id, quiet=quiet)
-
         from gdoc.api.drive import export_doc
         markdown = export_doc(doc_id, mime_type="text/markdown")
 
@@ -152,10 +292,6 @@ def cmd_cat(args) -> int:
 
         return 0
 
-    # Pre-flight awareness check
-    from gdoc.notify import pre_flight
-    change_info = pre_flight(doc_id, quiet=quiet)
-
     mime_type = "text/plain" if getattr(args, "plain", False) else "text/markdown"
 
     from gdoc.api.drive import export_doc
@@ -181,6 +317,33 @@ def cmd_cat(args) -> int:
     return 0
 
 
+def _tabs_sheet(args, doc_id: str, change_info) -> int:
+    """Spreadsheet branch of `gdoc tabs`: list worksheets."""
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.api.sheets import get_spreadsheet_meta
+    from gdoc.format import format_json, get_output_mode
+
+    sheets = sorted(get_spreadsheet_meta(doc_id)["sheets"], key=lambda s: s["index"])
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(tabs=sheets))
+    elif mode == "plain":
+        for s in sheets:
+            print(f"{s['id']}\t{s['title']}")
+    elif not sheets:
+        print("No tabs.")
+    else:
+        for s in sheets:
+            print(f"{s['id']}\t{s['title']}\t{s['rows']}x{s['cols']}")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(doc_id, change_info, command="tabs", quiet=quiet)
+    return 0
+
+
 def cmd_tabs(args) -> int:
     """Handler for `gdoc tabs`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -188,6 +351,9 @@ def cmd_tabs(args) -> int:
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
+
+    if _file_mime(doc_id, change_info) == SPREADSHEET_MIME:
+        return _tabs_sheet(args, doc_id, change_info)
 
     from gdoc.api.docs import get_document_tabs
 
@@ -233,6 +399,7 @@ def cmd_toc(args) -> int:
     from gdoc.notify import pre_flight
 
     change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
 
     from gdoc.api.docs import get_document_headings
 
@@ -302,6 +469,7 @@ def cmd_add_tab(args) -> int:
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
 
     from gdoc.api.docs import add_tab
     result = add_tab(doc_id, title)
@@ -431,6 +599,87 @@ def cmd_insert(args) -> int:
     return 0
 
 
+def _read_cell_rows(args) -> list[list[str]]:
+    """Collect cell values for `gdoc cells` from -v/--file/--stdin."""
+    values = getattr(args, "value", None)
+    file_path = getattr(args, "file", None)
+    use_stdin = getattr(args, "stdin", False)
+
+    sources = sum(1 for s in (values, file_path, use_stdin) if s)
+    if sources != 1:
+        raise GdocError(
+            "provide values via exactly one of -v/--value, --file, or --stdin",
+            exit_code=3,
+        )
+
+    if values:
+        return [list(values)]
+
+    if file_path:
+        try:
+            with open(file_path, encoding="utf-8", newline="") as f:
+                if file_path.lower().endswith(".csv"):
+                    import csv
+
+                    return list(csv.reader(f))
+                return [line.rstrip("\n").split("\t") for line in f]
+        except OSError as e:
+            raise GdocError(f"cannot read {file_path}: {e}", exit_code=3)
+
+    rows = [line.rstrip("\n").split("\t") for line in sys.stdin]
+    if not rows:
+        raise GdocError("no values on stdin", exit_code=3)
+    return rows
+
+
+def cmd_cells(args) -> int:
+    """Handler for `gdoc cells`: write values into a spreadsheet range."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+
+    rows = _read_cell_rows(args)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    # Only checked when pre-flight already fetched the mime — the Sheets API
+    # rejects non-spreadsheets anyway, so --quiet skips the extra lookup.
+    if change_info is not None and change_info.mime_type not in (
+        "",
+        SPREADSHEET_MIME,
+    ):
+        raise GdocError(f"not a spreadsheet: {doc_id}", exit_code=3)
+
+    from gdoc.api.sheets import write_values
+
+    append = getattr(args, "append", False)
+    result = write_values(
+        doc_id,
+        args.range,
+        rows,
+        user_entered=getattr(args, "user_entered", False),
+        append=append,
+    )
+    verb = "Appended" if append else "Updated"
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(**result))
+    elif mode == "plain":
+        print(f"range\t{result['range']}")
+        print(f"cells\t{result['cells']}")
+    else:
+        print(f"{verb} {result['range']} ({result['cells']} cells)")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(doc_id, change_info, command="cells", quiet=quiet)
+    return 0
+
+
 def cmd_info(args) -> int:
     """Handler for `gdoc info`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -444,14 +693,22 @@ def cmd_info(args) -> int:
     from gdoc.format import get_output_mode, format_json
 
     metadata = get_file_info(doc_id)
-    try:
-        text = export_doc(doc_id, mime_type="text/plain")
-        word_count = len(text.split())
-    except GdocError as e:
-        if "file is not a Google Docs editor document" in str(e):
-            word_count = None
-        else:
-            raise
+
+    sheet_tabs = None
+    if metadata.get("mimeType") == SPREADSHEET_MIME:
+        from gdoc.api.sheets import get_spreadsheet_meta
+
+        sheet_tabs = get_spreadsheet_meta(doc_id)["sheets"]
+        word_count = None
+    else:
+        try:
+            text = export_doc(doc_id, mime_type="text/plain")
+            word_count = len(text.split())
+        except GdocError as e:
+            if "file is not a Google Docs editor document" in str(e):
+                word_count = None
+            else:
+                raise
 
     title = metadata.get("name", "")
     owners = metadata.get("owners", [])
@@ -468,7 +725,15 @@ def cmd_info(args) -> int:
 
     mode = get_output_mode(args)
 
-    words_display = word_count if word_count is not None else "N/A"
+    if sheet_tabs is not None:
+        label, json_extra = "Tabs", {"tabs": sheet_tabs}
+        value = ", ".join(
+            f"{s['title']} ({s['rows']}x{s['cols']})" for s in sheet_tabs
+        )
+    else:
+        label = "Words"
+        value = word_count if word_count is not None else "N/A"
+        json_extra = {"words": value}
 
     if mode == "json":
         print(
@@ -477,14 +742,14 @@ def cmd_info(args) -> int:
                 title=title,
                 owner=owner,
                 modified=modified,
-                words=words_display,
+                **json_extra,
             )
         )
     elif mode == "plain":
         print(f"title\t{title}")
         print(f"owner\t{owner}")
         print(f"modified\t{modified}")
-        print(f"words\t{words_display}")
+        print(f"{label.lower()}\t{value}")
     elif mode == "verbose":
         print(f"Title: {title}")
         print(f"Owner: {owner}")
@@ -493,12 +758,12 @@ def cmd_info(args) -> int:
         print(f"Last editor: {last_editor}")
         print(f"Type: {mime_type}")
         print(f"Size: {size or 'N/A'}")
-        print(f"Words: {words_display}")
+        print(f"{label}: {value}")
     else:
         print(f"Title: {title}")
         print(f"Owner: {owner}")
         print(f"Modified: {modified[:10]}")
-        print(f"Words: {words_display}")
+        print(f"{label}: {value}")
 
     # Update state after success (version from get_file_info, Decision #14)
     command_version = metadata.get("version")
@@ -687,6 +952,7 @@ def cmd_edit(args) -> int:
     from gdoc.notify import pre_flight
 
     change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
 
     # Conflict warning (warn but don't block, per spec)
     if change_info and change_info.has_conflict:
@@ -792,6 +1058,7 @@ def _check_write_conflict(doc_id: str, quiet: bool, force: bool):
         from gdoc.notify import pre_flight
 
         change_info = pre_flight(doc_id, quiet=False)
+        _require_doc(doc_id, change_info)
 
         if not force:
             if change_info.last_read_version is None:
@@ -929,6 +1196,7 @@ def cmd_pull(args) -> int:
     from gdoc.notify import pre_flight
 
     change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
 
     # Export doc as markdown
     from gdoc.api.drive import export_doc, get_file_info
@@ -1212,6 +1480,7 @@ def cmd_diff(args) -> int:
     from gdoc.notify import pre_flight
 
     change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
 
     # Export doc
     from gdoc.api.drive import export_doc
@@ -1584,6 +1853,7 @@ def cmd_images(args) -> int:
     from gdoc.notify import pre_flight
 
     change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
 
     from gdoc.api.docs import list_inline_objects
 
@@ -2052,7 +2322,10 @@ def build_parser() -> GdocArgumentParser:
     find_p.set_defaults(func=cmd_find)
 
     # cat
-    cat_p = sub.add_parser("cat", parents=[output_parent], help="Export doc as markdown")
+    cat_p = sub.add_parser(
+        "cat", parents=[output_parent],
+        help="Export doc as markdown (spreadsheets print as a table)",
+    )
     cat_p.add_argument("doc", help="Document ID or URL")
     cat_p.add_argument(
         "--comments", action="store_true", help="Include comment annotations"
@@ -2069,6 +2342,10 @@ def build_parser() -> GdocArgumentParser:
         "--all-tabs", action="store_true", help="Read all tabs"
     )
     cat_p.add_argument(
+        "--range",
+        help="A1 range to read, e.g. B2:D10 (spreadsheets only)",
+    )
+    cat_p.add_argument(
         "--max-bytes", type=int, default=0,
         help="Truncate output at N bytes (0 = unlimited)",
     )
@@ -2082,12 +2359,49 @@ def build_parser() -> GdocArgumentParser:
     cat_p.set_defaults(func=cmd_cat)
 
     # tabs
-    tabs_p = sub.add_parser("tabs", parents=[output_parent], help="List tabs in a doc")
+    tabs_p = sub.add_parser(
+        "tabs", parents=[output_parent],
+        help="List tabs in a doc (or worksheets in a spreadsheet)",
+    )
     tabs_p.add_argument("doc", help="Document ID or URL")
     tabs_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     tabs_p.set_defaults(func=cmd_tabs)
+
+    # cells
+    cells_p = sub.add_parser(
+        "cells", parents=[output_parent],
+        help="Write values into a spreadsheet range",
+    )
+    cells_p.add_argument("doc", help="Spreadsheet ID or URL")
+    cells_p.add_argument(
+        "range",
+        help="A1 range to write, e.g. B2 or 'Sheet1'!B2:C4",
+    )
+    cells_values_group = cells_p.add_mutually_exclusive_group()
+    cells_values_group.add_argument(
+        "-v", "--value", action="append",
+        help="Cell value; repeat for multiple cells in one row",
+    )
+    cells_values_group.add_argument(
+        "--file", help="Read rows from a local file (.csv, or TSV otherwise)"
+    )
+    cells_values_group.add_argument(
+        "--stdin", action="store_true", help="Read TSV rows from stdin"
+    )
+    cells_p.add_argument(
+        "--append", action="store_true",
+        help="Append rows after the table containing the range",
+    )
+    cells_p.add_argument(
+        "--user-entered", action="store_true",
+        help="Parse values as if typed in the UI (formulas, numbers, dates)",
+    )
+    cells_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    cells_p.set_defaults(func=cmd_cells)
 
     # toc
     toc_p = sub.add_parser(

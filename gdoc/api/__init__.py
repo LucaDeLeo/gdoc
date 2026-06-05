@@ -17,3 +17,16 @@ def get_drive_service():
 
     creds = get_credentials()
     return build("drive", "v3", credentials=creds)
+
+
+@lru_cache(maxsize=1)
+def get_sheets_service():
+    """Build and cache a Sheets API v4 service object.
+
+    The existing ``drive`` OAuth scope covers the Sheets API, so no
+    re-authentication is needed.
+    """
+    from gdoc.auth import get_credentials
+
+    creds = get_credentials()
+    return build("sheets", "v4", credentials=creds)

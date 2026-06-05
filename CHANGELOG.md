@@ -4,6 +4,21 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-06-05
+
+### Added
+- **Google Sheets support.** `cat`, `tabs`, and `info` now detect
+  spreadsheets and read cell values via the Sheets API: `cat` prints a
+  markdown table (`--plain` for TSV, `--json` for raw rows), `--tab` selects
+  a worksheet by title or sheet id, and `--range A1:C10` reads a slice.
+  `tabs` lists worksheets with their dimensions; `info` shows them instead
+  of a word count.
+- **`gdoc cells SHEET RANGE`** — write values into a spreadsheet range from
+  `-v` flags, a CSV/TSV file (`--file`), or TSV on stdin (`--stdin`).
+  `--append` inserts rows below the existing table; `--user-entered` parses
+  values as if typed in the UI (formulas, dates, numbers). Uses the existing
+  OAuth scope — no re-authentication needed.
+
 ## [0.7.6] — 2026-06-02
 
 ### Added

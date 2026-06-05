@@ -97,9 +97,19 @@ gdoc images DOC_ID
 
 # Download images to a local directory
 gdoc images --download /tmp/imgs DOC_ID
+
+# Read a spreadsheet (markdown table; --plain for TSV)
+gdoc cat SHEET_ID
+
+# Read a specific worksheet / range
+gdoc cat --tab "Data" --range B2:D10 SHEET_ID
+
+# Write cell values to a spreadsheet
+gdoc cells SHEET_ID B2 -v "Yes"
+gdoc cells SHEET_ID A1 --file rows.csv
 ```
 
-All commands accept a full Google Docs URL or a bare document ID:
+All commands accept a full Google Docs/Sheets URL or a bare document ID:
 
 ```bash
 gdoc cat https://docs.google.com/document/d/1aBcDeFg.../edit
@@ -116,8 +126,9 @@ gdoc cat 1aBcDeFg...
 | `cat --tab NAME DOC` | Read a specific tab by title or ID |
 | `cat --all-tabs DOC` | Read all tabs with headers |
 | `cat --comments DOC` | Line-numbered content with inline comment annotations |
-| `tabs DOC` | List all tabs in a document |
-| `info DOC` | Show title, owner, modified date, word count |
+| `cat SHEET` | Print a spreadsheet as a markdown table (`--plain` for TSV, `--range A1:C10` for a slice; `--tab`/`--all-tabs` select worksheets) |
+| `tabs DOC` | List all tabs in a document (or worksheets in a spreadsheet) |
+| `info DOC` | Show title, owner, modified date, word count (tab list for spreadsheets) |
 | `ls [FOLDER]` | List files in Drive root or a folder (`--type docs\|sheets\|all`) |
 | `images DOC` | List images, charts, and drawings (`--download DIR` to save locally) |
 | `find QUERY` | Search files by name or content |
@@ -129,6 +140,7 @@ gdoc cat 1aBcDeFg...
 | `edit DOC OLD NEW` | Find and replace text with Markdown formatting, including text inside tables (`--all` for all; `--normalize` to match through smart quotes/dashes; `-` reads an argument from stdin) |
 | `edit DOC --cell ADDR NEW` | Replace a table cell by label or `ROW,COL` coordinates (`--col`, `--table`) |
 | `write DOC FILE` | Overwrite document from a local markdown file |
+| `cells SHEET RANGE` | Write values into a spreadsheet range (`-v VALUE` per cell, `--file rows.csv`, `--stdin` for TSV; `--append` adds rows, `--user-entered` parses formulas/dates) |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
 | `cp DOC TITLE` | Duplicate a document |
 
@@ -202,6 +214,36 @@ gdoc write DOC draft.md    # OK written
 ```
 
 Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight checks entirely (saves 2 API calls).
+
+## Spreadsheets
+
+`cat`, `tabs`, and `info` detect Google Sheets automatically — point them at a
+spreadsheet URL and they read cell values instead of exporting markdown.
+`cat` prints a markdown table by default, TSV with `--plain`, and raw rows
+with `--json`; `--tab` selects a worksheet by title or numeric sheet id
+(the `gid` in the URL), and `--range` limits output to an A1 range.
+Reading defaults to the first worksheet — a stderr hint tells you when more
+tabs exist.
+
+Writes go through `gdoc cells`:
+
+```bash
+# One row of values, starting at B2
+gdoc cells SHEET_ID B2:C2 -v "Y" -v "quote here"
+
+# Bulk rows from a CSV (or TSV) file
+gdoc cells SHEET_ID A2 --file rows.csv
+
+# Pipe TSV from another tool
+grep done report.tsv | gdoc cells SHEET_ID A2 --stdin
+
+# Append below the existing table; parse values like the UI would
+gdoc cells SHEET_ID A1 --append --user-entered -v "=SUM(B:B)"
+```
+
+Values are written literally by default (`RAW`); use `--user-entered` for
+formulas, dates, and number parsing. The existing OAuth scope already covers
+the Sheets API, so no re-authentication is needed.
 
 ## Annotated view
 

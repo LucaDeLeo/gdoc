@@ -175,7 +175,8 @@ def update_doc_content(doc_id: str, content: str) -> int:
 def get_file_version(doc_id: str) -> dict:
     """Get lightweight version metadata for pre-flight checks.
 
-    Returns dict with keys: modifiedTime, version (int), lastModifyingUser.
+    Returns dict with keys: modifiedTime, version (int), lastModifyingUser,
+    mimeType.
     """
     try:
         service = get_drive_service()
@@ -183,7 +184,8 @@ def get_file_version(doc_id: str) -> dict:
             service.files()
             .get(
                 fileId=doc_id,
-                fields="modifiedTime, version, lastModifyingUser(displayName, emailAddress)",
+                fields="modifiedTime, version, mimeType, "
+                "lastModifyingUser(displayName, emailAddress)",
                 supportsAllDrives=True,
             )
             .execute()

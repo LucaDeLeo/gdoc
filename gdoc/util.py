@@ -28,6 +28,8 @@ if _OLD_CONFIG_DIR.is_dir() and not CONFIG_DIR.exists():
     CONFIG_DIR.parent.mkdir(parents=True, exist_ok=True)
     _OLD_CONFIG_DIR.rename(CONFIG_DIR)
 
+SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet"
+
 TOKEN_PATH = CONFIG_DIR / "token.json"
 CREDS_PATH = CONFIG_DIR / "credentials.json"
 STATE_DIR = CONFIG_DIR / "state"

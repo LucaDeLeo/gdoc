@@ -31,6 +31,11 @@ def _make_args(**overrides):
     return SimpleNamespace(**defaults)
 
 
+
+@pytest.fixture(autouse=True)
+def _doc_mime(doc_mime):
+    """Keep spreadsheet detection on the Docs path for this module."""
+
 class TestCatMarkdown:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
