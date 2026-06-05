@@ -362,6 +362,23 @@ class TestCells:
             cmd_cells(_cells_args(value=["x"]))
 
     @patch("gdoc.state.update_state_after_command")
+    @patch(
+        "gdoc.notify.pre_flight",
+        return_value=ChangeInfo(
+            mime_type=SHEET_MIME, current_version=5, last_read_version=3
+        ),
+    )
+    @patch("gdoc.api.sheets.write_values")
+    def test_conflict_warns_but_writes(self, mock_update, _pf, _state, capsys):
+        mock_update.return_value = {"range": "Sheet1!B2", "rows": 1, "cells": 1}
+        rc = cmd_cells(_cells_args(value=["Y"]))
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "WARN: doc changed since last read" in captured.err
+        assert "Updated" in captured.out
+        mock_update.assert_called_once()
+
+    @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.sheets.write_values")
     def test_records_post_write_version(self, mock_update, _pf, mock_state):

@@ -31,8 +31,9 @@ def _mock_service():
 class TestTranslateHttpError:
     def test_401_raises_auth_error(self):
         err = _make_http_error(401)
-        with pytest.raises(AuthError, match="Authentication expired"):
+        with pytest.raises(AuthError, match="Authentication expired") as exc_info:
             _translate_http_error(err, "abc123")
+        assert exc_info.value.exit_code == 2
 
     def test_403_raises_gdoc_error(self):
         err = _make_http_error(403, reason="forbidden")
@@ -46,8 +47,9 @@ class TestTranslateHttpError:
 
     def test_400_bad_range(self):
         err = _make_http_error(400, reason="Unable to parse range: 'Nope'!ZZ")
-        with pytest.raises(GdocError, match="Invalid range"):
+        with pytest.raises(GdocError, match="Invalid range") as exc_info:
             _translate_http_error(err, "abc123")
+        assert exc_info.value.exit_code == 3
 
     def test_400_other(self):
         err = _make_http_error(400, reason="something else")

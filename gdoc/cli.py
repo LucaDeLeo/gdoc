@@ -624,7 +624,7 @@ def _read_cell_rows(args) -> list[list[str]]:
                     return list(csv.reader(f))
                 return [line.rstrip("\n").split("\t") for line in f]
         except OSError as e:
-            raise GdocError(f"cannot read {file_path}: {e}", exit_code=3)
+            raise GdocError(f"cannot read {file_path}: {e}", exit_code=3) from e
 
     rows = [line.rstrip("\n").split("\t") for line in sys.stdin]
     if not rows:
@@ -650,6 +650,11 @@ def cmd_cells(args) -> int:
         SPREADSHEET_MIME,
     ):
         raise GdocError(f"not a spreadsheet: {doc_id}", exit_code=3)
+
+    # Conflict warning (warn but don't block, matching `edit` semantics for
+    # surgical writes; only full-document overwrites hard-block).
+    if change_info and change_info.has_conflict:
+        print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.sheets import write_values
 

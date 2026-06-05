@@ -104,7 +104,7 @@ def batch_get_values(spreadsheet_id: str, ranges: list[str]) -> list[dict]:
         value_ranges = result.get("valueRanges", [])
         return [
             {"range": vr.get("range", rng), "values": vr.get("values", [])}
-            for vr, rng in zip(value_ranges, ranges)
+            for vr, rng in zip(value_ranges, ranges, strict=True)
         ]
     except HttpError as e:
         _translate_http_error(e, spreadsheet_id)
