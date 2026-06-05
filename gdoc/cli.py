@@ -663,6 +663,12 @@ def cmd_cells(args) -> int:
     )
     verb = "Appended" if append else "Updated"
 
+    # Record the post-write version so the next pre-flight doesn't report
+    # this command's own write as an external edit.
+    from gdoc.api.drive import get_file_version
+
+    command_version = get_file_version(doc_id).get("version")
+
     from gdoc.format import format_json, get_output_mode
 
     mode = get_output_mode(args)
@@ -676,7 +682,10 @@ def cmd_cells(args) -> int:
 
     from gdoc.state import update_state_after_command
 
-    update_state_after_command(doc_id, change_info, command="cells", quiet=quiet)
+    update_state_after_command(
+        doc_id, change_info, command="cells",
+        quiet=quiet, command_version=command_version,
+    )
     return 0
 
 

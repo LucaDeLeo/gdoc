@@ -27,6 +27,11 @@ def _sheet_mime(monkeypatch):
     monkeypatch.setattr(
         "gdoc.cli._file_mime", lambda doc_id, change_info: SHEET_MIME
     )
+    # cmd_cells re-fetches the version after writing
+    monkeypatch.setattr(
+        "gdoc.api.drive.get_file_version",
+        lambda doc_id: {"mimeType": SHEET_MIME, "version": 7, "modifiedTime": ""},
+    )
 
 
 def _make_args(**overrides):
@@ -355,6 +360,14 @@ class TestCells:
     def test_not_a_spreadsheet(self, _pf, _state):
         with pytest.raises(GdocError, match="not a spreadsheet"):
             cmd_cells(_cells_args(value=["x"]))
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.sheets.write_values")
+    def test_records_post_write_version(self, mock_update, _pf, mock_state):
+        mock_update.return_value = {"range": "Sheet1!B2", "rows": 1, "cells": 1}
+        cmd_cells(_cells_args(value=["Y"]))
+        assert mock_state.call_args.kwargs["command_version"] == 7
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
