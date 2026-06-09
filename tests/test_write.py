@@ -179,10 +179,11 @@ class TestWriteFileErrors:
 class TestWriteConflictNormal:
     """Not quiet, not force."""
 
+    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
     @patch("gdoc.api.drive.update_doc_content")
     @patch("gdoc.notify.pre_flight")
     def test_write_blocked_on_conflict(
-        self, mock_pf, mock_update_doc, tmp_path,
+        self, mock_pf, mock_update_doc, _export, tmp_path,
     ):
         f = tmp_path / "test.md"
         f.write_text("content")
@@ -197,10 +198,11 @@ class TestWriteConflictNormal:
         assert "doc changed since last read" in str(exc.value)
         mock_update_doc.assert_not_called()
 
+    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
     @patch("gdoc.api.drive.update_doc_content")
     @patch("gdoc.notify.pre_flight")
     def test_write_blocked_no_prior_read(
-        self, mock_pf, mock_update_doc, tmp_path,
+        self, mock_pf, mock_update_doc, _export, tmp_path,
     ):
         f = tmp_path / "test.md"
         f.write_text("content")
@@ -214,10 +216,11 @@ class TestWriteConflictNormal:
         assert exc.value.exit_code == 3
         mock_update_doc.assert_not_called()
 
+    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
     @patch("gdoc.api.drive.update_doc_content")
     @patch("gdoc.notify.pre_flight")
     def test_write_blocked_no_prior_read_correct_message(
-        self, mock_pf, mock_update_doc, tmp_path,
+        self, mock_pf, mock_update_doc, _export, tmp_path,
     ):
         f = tmp_path / "test.md"
         f.write_text("content")
@@ -247,10 +250,11 @@ class TestWriteConflictNormal:
         assert rc == 0
         mock_update_doc.assert_called_once()
 
+    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
     @patch("gdoc.api.drive.update_doc_content")
     @patch("gdoc.notify.pre_flight")
     def test_write_conflict_error_message(
-        self, mock_pf, mock_update_doc, tmp_path,
+        self, mock_pf, mock_update_doc, _export, tmp_path,
     ):
         f = tmp_path / "test.md"
         f.write_text("content")
@@ -264,6 +268,46 @@ class TestWriteConflictNormal:
         msg = str(exc.value)
         assert "doc changed since last read" in msg
         assert "--force" in msg
+
+
+class TestWriteInSync:
+    """Version drifted but content already matches — skip the upload."""
+
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 12})
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.export_doc", return_value="content")
+    @patch("gdoc.api.drive.update_doc_content")
+    @patch("gdoc.notify.pre_flight")
+    def test_write_noop_when_doc_matches(
+        self, mock_pf, mock_update_doc, _export, mock_state, _ver,
+        tmp_path, capsys,
+    ):
+        f = tmp_path / "test.md"
+        f.write_text("content")
+        mock_pf.return_value = ChangeInfo(current_version=12, last_read_version=5)
+        args = _make_args(file=str(f))
+        rc = cmd_write(args)
+        assert rc == 0
+        mock_update_doc.assert_not_called()
+        assert "already in sync" in capsys.readouterr().out
+        assert mock_state.call_args.kwargs["command_version"] == 12
+        assert mock_state.call_args.kwargs["command"] == "write"
+
+    @patch("gdoc.api.drive.export_doc", return_value="content")
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.notify.pre_flight")
+    def test_write_tab_conflict_not_rescued_by_content_match(
+        self, mock_pf, mock_insert, mock_export, tmp_path,
+    ):
+        """Tab writes never compare content — a tab body isn't the full doc."""
+        f = tmp_path / "test.md"
+        f.write_text("content")
+        mock_pf.return_value = ChangeInfo(current_version=12, last_read_version=5)
+        args = _make_args(file=str(f), tab="Notes")
+        with pytest.raises(GdocError, match="doc changed since last read"):
+            cmd_write(args)
+        mock_export.assert_not_called()
+        mock_insert.assert_not_called()
 
 
 class TestWriteConflictForce:

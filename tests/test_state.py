@@ -146,6 +146,43 @@ class TestUpdateStateAfterCommand:
             assert state.last_version == 20
             assert state.last_read_version == 20
 
+    def test_push_advances_read_baseline(self, tmp_path):
+        """A full-content write doubles as a read: the doc now contains
+        exactly what we sent, so the conflict baseline must advance."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_version=10, last_read_version=10))
+            update_state_after_command(
+                "doc1", None, command="push",
+                quiet=True, command_version=11,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 11
+            assert state.last_read_version == 11
+
+    def test_write_advances_read_baseline(self, tmp_path):
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=10)
+            update_state_after_command(
+                "doc1", info, command="write",
+                quiet=False, command_version=11,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 11
+            assert state.last_read_version == 11
+
+    def test_edit_does_not_advance_read_baseline(self, tmp_path):
+        """Partial mutations (find/replace) don't establish full-content
+        knowledge — the baseline stays at the last actual read."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_version=10, last_read_version=10))
+            update_state_after_command(
+                "doc1", None, command="edit",
+                quiet=True, command_version=11,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 11
+            assert state.last_read_version == 10
+
     def test_quiet_does_not_advance_comment_check(self, tmp_path):
         """Decision #6: --quiet does not advance last_comment_check."""
         with patch("gdoc.state.STATE_DIR", tmp_path):

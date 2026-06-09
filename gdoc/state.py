@@ -108,6 +108,11 @@ def update_state_after_command(
     # (the pre-flight version is from BEFORE the mutation; this is from AFTER)
     if command_version is not None and command not in ("cat", "info"):
         state.last_version = command_version
+        # A successful full-content write doubles as a read: the doc now
+        # contains exactly what we sent, so advance the conflict baseline.
+        # Without this, a later push false-conflicts against our own write.
+        if command in ("push", "write"):
+            state.last_read_version = command_version
 
     # Apply comment mutation patch (both quiet and non-quiet)
     # Per CONTEXT.md Decision #10

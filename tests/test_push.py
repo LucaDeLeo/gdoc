@@ -118,10 +118,11 @@ class TestPushBasic:
 
 
 class TestPushConflict:
+    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
     @patch("gdoc.api.drive.update_doc_content")
     @patch("gdoc.notify.pre_flight")
     def test_push_blocked_on_conflict(
-        self, mock_pf, mock_update_doc, tmp_path,
+        self, mock_pf, mock_update_doc, _export, tmp_path,
     ):
         f = tmp_path / "test.md"
         f.write_text(FRONTMATTER + "Body")
@@ -134,10 +135,11 @@ class TestPushConflict:
         assert "doc changed since last read" in str(exc.value)
         mock_update_doc.assert_not_called()
 
+    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
     @patch("gdoc.api.drive.update_doc_content")
     @patch("gdoc.notify.pre_flight")
     def test_push_blocked_no_prior_read(
-        self, mock_pf, mock_update_doc, tmp_path,
+        self, mock_pf, mock_update_doc, _export, tmp_path,
     ):
         f = tmp_path / "test.md"
         f.write_text(FRONTMATTER + "Body")
@@ -147,6 +149,64 @@ class TestPushConflict:
         with pytest.raises(GdocError, match="no read baseline"):
             cmd_push(args)
         mock_update_doc.assert_not_called()
+
+
+class TestPushInSync:
+    """Version drifted but content already matches — skip the upload."""
+
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 12})
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.export_doc", return_value="Body")
+    @patch("gdoc.api.drive.update_doc_content")
+    @patch("gdoc.notify.pre_flight")
+    def test_push_noop_when_doc_matches(
+        self, mock_pf, mock_update_doc, mock_export, mock_state, _ver,
+        tmp_path, capsys,
+    ):
+        f = tmp_path / "test.md"
+        f.write_text(FRONTMATTER + "Body")
+        mock_pf.return_value = ChangeInfo(current_version=12, last_read_version=5)
+        args = _make_args(file=str(f))
+        rc = cmd_push(args)
+        assert rc == 0
+        mock_update_doc.assert_not_called()
+        assert "already in sync" in capsys.readouterr().out
+        assert mock_state.call_args.kwargs["command_version"] == 12
+        assert mock_state.call_args.kwargs["command"] == "push"
+
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 12})
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.export_doc", return_value="Body")
+    @patch("gdoc.api.drive.update_doc_content")
+    @patch("gdoc.notify.pre_flight")
+    def test_push_noop_without_baseline_when_doc_matches(
+        self, mock_pf, mock_update_doc, _export, _state, _ver, tmp_path,
+    ):
+        f = tmp_path / "test.md"
+        f.write_text(FRONTMATTER + "Body")
+        mock_pf.return_value = ChangeInfo(current_version=12, last_read_version=None)
+        args = _make_args(file=str(f))
+        assert cmd_push(args) == 0
+        mock_update_doc.assert_not_called()
+
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 12})
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.export_doc", return_value="Body")
+    @patch("gdoc.api.drive.update_doc_content")
+    @patch("gdoc.notify.pre_flight")
+    def test_push_noop_json_output(
+        self, mock_pf, mock_update_doc, _export, _state, _ver,
+        tmp_path, capsys,
+    ):
+        f = tmp_path / "test.md"
+        f.write_text(FRONTMATTER + "Body")
+        mock_pf.return_value = ChangeInfo(current_version=12, last_read_version=5)
+        args = _make_args(file=str(f), json=True)
+        assert cmd_push(args) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert data["in_sync"] is True
+        assert data["version"] == 12
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_drive_service")
