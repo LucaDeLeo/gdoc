@@ -6,6 +6,16 @@ A token-efficient CLI for AI agents to read, write, and collaborate on Google Do
 
 ## Install
 
+`gdoc` is installed via [uv](https://github.com/astral-sh/uv). If you don't have it:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+See the [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/) for other options (Homebrew, pipx, Windows PowerShell).
+
+Then install `gdoc`:
+
 ```bash
 uv tool install git+https://github.com/LucaDeLeo/gdoc.git
 ```
@@ -17,6 +27,16 @@ git clone https://github.com/LucaDeLeo/gdoc.git
 cd gdoc
 uv tool install .
 ```
+
+## Updating
+
+```bash
+gdoc update
+```
+
+`gdoc` also keeps itself fresh: running bare `gdoc`, `gdoc --help`, or `gdoc -h` upgrades to the latest release before printing help, so agents inspecting the CLI surface always see current help text. This only applies to `uv tool` installs, checks at most once per hour, and silently skips on any failure (offline, install error). Set `GDOC_AUTO_UPDATE=0` to disable it.
+
+Other commands never auto-update — they print a notice to stderr (at most once per day) when a newer version is available.
 
 ## Setup
 
@@ -162,6 +182,7 @@ gdoc cat 1aBcDeFg...
 |---------|-------------|
 | `auth` | Authenticate with Google (`--no-browser` for headless) |
 | `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`) |
+| `update` | Update gdoc to the latest release |
 
 ## Output modes
 
@@ -412,6 +433,7 @@ All files are stored under `~/.config/gdoc/`:
 | `accounts/<ACCOUNT>/token.json` | OAuth token for a named account |
 | `config.json` | Default account preference and other local configuration |
 | `state/<DOC_ID>.json` | Per-document state for change detection |
+| `update_check.json` | Cached result of the last update check |
 
 ## Development
 
