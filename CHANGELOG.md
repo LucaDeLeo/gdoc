@@ -4,6 +4,22 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] — 2026-06-09
+
+### Fixed
+- **False write conflicts against your own pushes.** A successful `push` or
+  `write` (including the `_sync-hook` path) now advances the conflict
+  baseline (`last_read_version`) — the doc contains exactly what was sent,
+  so the write doubles as a read. Previously only `cat`/`info`/`pull`
+  advanced it, so a second push after your own write failed with
+  "doc changed since last read".
+- **Content-aware conflict detection.** When the version check fails for a
+  full-doc `push`/`write`, gdoc now exports the doc and compares it to the
+  content being written. If they match (own earlier write, cosmetic Docs
+  version bump), the command succeeds as a no-op — "OK already in sync" —
+  and heals the baseline instead of erroring. Tab writes are excluded
+  (a tab body never equals the whole-doc export).
+
 ## [0.10.0] — 2026-06-09
 
 ### Added
