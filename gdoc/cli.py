@@ -2738,8 +2738,20 @@ def build_parser() -> GdocArgumentParser:
     return parser
 
 
+def _is_top_level_help_invocation(argv: list[str]) -> bool:
+    """True for `gdoc`, `gdoc --help`, `gdoc -h` — but not subcommand help."""
+    rest = argv[1:]
+    if not rest:
+        return True
+    return rest[0] in ("--help", "-h")
+
+
 def main() -> int:
     """Entry point for the gdoc CLI."""
+    if _is_top_level_help_invocation(sys.argv):
+        from gdoc.update import auto_update_for_help
+        auto_update_for_help()
+
     parser = build_parser()
     args = parser.parse_args()
 

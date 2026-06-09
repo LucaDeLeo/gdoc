@@ -4,6 +4,18 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-06-09
+
+### Added
+- **Auto-update on help.** Bare `gdoc`, `gdoc --help`, and `gdoc -h` now
+  upgrade to the latest release before printing help, so agents inspecting
+  the CLI surface always see current help text. Only applies to `uv tool`
+  installs, checks at most once per hour, and silently falls back to the
+  current version on any failure (offline, install error). Opt out with
+  `GDOC_AUTO_UPDATE=0`.
+- README: documented installing `uv` itself, the `gdoc update` command,
+  and the new auto-update behavior.
+
 ## [0.8.1] — 2026-06-05
 
 ### Fixed
