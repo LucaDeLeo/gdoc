@@ -4,6 +4,24 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-06-09
+
+### Added
+- **Org-friendly auth.** The OAuth client config can now come from
+  `GDOC_CLIENT_ID`/`GDOC_CLIENT_SECRET` env vars, a `GDOC_CLIENT_CREDENTIALS`
+  file path, or the existing `~/.config/gdoc/credentials.json` (in that
+  order), so companies can distribute one shared Internal OAuth client via
+  MDM/dotfiles instead of every user creating a Cloud project.
+- `gdoc auth --setup-url <url>` fetches the org's OAuth client file from an
+  internal URL, validates it, and stores it at
+  `~/.config/gdoc/credentials.json` (0600) before running the flow. With
+  `GDOC_SETUP_URL` set, plain `gdoc auth` does this automatically when no
+  client config exists yet.
+- `gdoc auth --domain <domain>` (or `GDOC_AUTH_DOMAIN`) passes an `hd` hint
+  to the Google account chooser so it pre-filters to the Workspace domain;
+  named accounts that look like emails are passed as `login_hint`.
+- README: documented org-wide setup with a shared Internal OAuth client.
+
 ## [0.9.0] — 2026-06-09
 
 ### Added

@@ -1,5 +1,6 @@
 """Tests for gdoc.auth: OAuth2 flow, token management, and credential storage."""
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -51,7 +52,7 @@ class TestAuthenticate:
             patch("gdoc.util.TOKEN_PATH", fake_token),
             patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
             patch(
-                "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
+                "gdoc.auth.InstalledAppFlow.from_client_config",
                 return_value=mock_flow,
             ),
         ):
@@ -81,7 +82,7 @@ class TestAuthenticate:
             patch("gdoc.util.TOKEN_PATH", fake_token),
             patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
             patch(
-                "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
+                "gdoc.auth.InstalledAppFlow.from_client_config",
                 return_value=mock_flow,
             ),
             patch(
@@ -117,7 +118,7 @@ class TestAuthenticate:
             patch("gdoc.util.TOKEN_PATH", fake_token),
             patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
             patch(
-                "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
+                "gdoc.auth.InstalledAppFlow.from_client_config",
                 return_value=mock_flow,
             ),
             patch(
@@ -145,7 +146,7 @@ class TestAuthenticate:
             patch("gdoc.util.CONFIG_DIR", tmp_path),
             patch("gdoc.util.CONFIG_PATH", fake_config),
             patch(
-                "gdoc.auth.InstalledAppFlow.from_client_secrets_file",
+                "gdoc.auth.InstalledAppFlow.from_client_config",
                 return_value=mock_flow,
             ),
         ):
@@ -157,6 +158,195 @@ class TestAuthenticate:
                 set_active_account(None)
 
         assert (tmp_path / "accounts" / "pete@example.com" / "token.json").exists()
+        mock_flow.run_local_server.assert_called_once_with(
+            port=0, login_hint="pete@example.com"
+        )
+
+
+CLIENT_FILE_JSON = (
+    '{"installed": {"client_id": "abc.apps.googleusercontent.com",'
+    ' "client_secret": "xyz",'
+    ' "auth_uri": "https://accounts.google.com/o/oauth2/auth",'
+    ' "token_uri": "https://oauth2.googleapis.com/token"}}'
+)
+
+
+class _FakeResponse:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+@contextlib.contextmanager
+def _flow_patches(tmp_path, mock_flow):
+    """Patch config paths and the OAuth flow; yields the from_client_config mock."""
+    with contextlib.ExitStack() as stack:
+        for p in (
+            patch("gdoc.auth.CREDS_PATH", tmp_path / "credentials.json"),
+            patch("gdoc.auth.TOKEN_PATH", tmp_path / "token.json"),
+            patch("gdoc.auth.CONFIG_DIR", tmp_path),
+            patch("gdoc.util.TOKEN_PATH", tmp_path / "token.json"),
+            patch("gdoc.util.CONFIG_PATH", tmp_path / "config.json"),
+        ):
+            stack.enter_context(p)
+        mock_factory = stack.enter_context(
+            patch(
+                "gdoc.auth.InstalledAppFlow.from_client_config",
+                return_value=mock_flow,
+            )
+        )
+        yield mock_factory
+
+
+def _mock_flow():
+    mock_flow = MagicMock()
+    mock_creds = MagicMock()
+    mock_creds.to_json.return_value = '{"token": "test"}'
+    mock_flow.run_local_server.return_value = mock_creds
+    return mock_flow
+
+
+class TestClientConfigSources:
+    def test_env_pair_builds_config(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GDOC_CLIENT_ID", "env-id")
+        monkeypatch.setenv("GDOC_CLIENT_SECRET", "env-secret")
+        mock_flow = _mock_flow()
+
+        with _flow_patches(tmp_path, mock_flow) as mock_factory:
+            authenticate()
+            config = mock_factory.call_args[0][0]
+
+        assert config["installed"]["client_id"] == "env-id"
+        assert config["installed"]["client_secret"] == "env-secret"
+
+    def test_env_credentials_path(self, tmp_path, monkeypatch):
+        client_file = tmp_path / "org-client.json"
+        client_file.write_text(CLIENT_FILE_JSON)
+        monkeypatch.setenv("GDOC_CLIENT_CREDENTIALS", str(client_file))
+        mock_flow = _mock_flow()
+
+        with _flow_patches(tmp_path, mock_flow) as mock_factory:
+            authenticate()
+            config = mock_factory.call_args[0][0]
+
+        assert config["installed"]["client_id"] == "abc.apps.googleusercontent.com"
+
+    def test_env_credentials_path_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GDOC_CLIENT_CREDENTIALS", str(tmp_path / "nope.json"))
+
+        with patch("gdoc.auth.CREDS_PATH", tmp_path / "credentials.json"):
+            with pytest.raises(AuthError, match="does not exist"):
+                authenticate()
+
+    def test_setup_url_fetches_and_saves(self, tmp_path, monkeypatch):
+        mock_flow = _mock_flow()
+        fake_creds = tmp_path / "credentials.json"
+
+        with (
+            _flow_patches(tmp_path, mock_flow),
+            patch(
+                "urllib.request.urlopen",
+                return_value=_FakeResponse(CLIENT_FILE_JSON.encode()),
+            ) as mock_urlopen,
+        ):
+            authenticate(setup_url="https://internal.example.com/gdoc.json")
+
+        mock_urlopen.assert_called_once()
+        assert fake_creds.exists()
+        assert oct(os.stat(fake_creds).st_mode & 0o777) == "0o600"
+
+    def test_setup_url_rejects_non_client_json(self, tmp_path):
+        with (
+            patch("gdoc.auth.CREDS_PATH", tmp_path / "credentials.json"),
+            patch(
+                "urllib.request.urlopen",
+                return_value=_FakeResponse(b'{"foo": 1}'),
+            ),
+        ):
+            with pytest.raises(AuthError, match="does not look like"):
+                authenticate(setup_url="https://internal.example.com/gdoc.json")
+
+    def test_setup_url_fetch_error(self, tmp_path):
+        with (
+            patch("gdoc.auth.CREDS_PATH", tmp_path / "credentials.json"),
+            patch("urllib.request.urlopen", side_effect=OSError("conn refused")),
+        ):
+            with pytest.raises(AuthError, match="Failed to fetch"):
+                authenticate(setup_url="https://internal.example.com/gdoc.json")
+
+    def test_env_setup_url_used_when_no_creds(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GDOC_SETUP_URL", "https://internal.example.com/gdoc.json")
+        mock_flow = _mock_flow()
+
+        with (
+            _flow_patches(tmp_path, mock_flow),
+            patch(
+                "urllib.request.urlopen",
+                return_value=_FakeResponse(CLIENT_FILE_JSON.encode()),
+            ) as mock_urlopen,
+        ):
+            authenticate()
+
+        mock_urlopen.assert_called_once()
+        assert (tmp_path / "credentials.json").exists()
+
+    def test_env_setup_url_ignored_when_creds_exist(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GDOC_SETUP_URL", "https://internal.example.com/gdoc.json")
+        (tmp_path / "credentials.json").write_text(CLIENT_FILE_JSON)
+        mock_flow = _mock_flow()
+
+        with (
+            _flow_patches(tmp_path, mock_flow),
+            patch("urllib.request.urlopen") as mock_urlopen,
+        ):
+            authenticate()
+
+        mock_urlopen.assert_not_called()
+
+
+class TestAuthHints:
+    def test_domain_flag_passes_hd(self, tmp_path):
+        (tmp_path / "credentials.json").write_text(CLIENT_FILE_JSON)
+        mock_flow = _mock_flow()
+
+        with _flow_patches(tmp_path, mock_flow):
+            authenticate(domain="company.com")
+
+        mock_flow.run_local_server.assert_called_once_with(port=0, hd="company.com")
+
+    def test_domain_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GDOC_AUTH_DOMAIN", "company.com")
+        (tmp_path / "credentials.json").write_text(CLIENT_FILE_JSON)
+        mock_flow = _mock_flow()
+
+        with _flow_patches(tmp_path, mock_flow):
+            authenticate()
+
+        mock_flow.run_local_server.assert_called_once_with(port=0, hd="company.com")
+
+    def test_headless_flow_includes_hints(self, tmp_path):
+        (tmp_path / "credentials.json").write_text(CLIENT_FILE_JSON)
+        mock_flow = _mock_flow()
+        mock_flow.authorization_url.return_value = ("https://auth", "state")
+        mock_flow.credentials = mock_flow.run_local_server.return_value
+
+        with (
+            _flow_patches(tmp_path, mock_flow),
+            patch("builtins.input", return_value="http://localhost:1/?code=c&scope=s"),
+        ):
+            authenticate(no_browser=True, domain="company.com")
+
+        mock_flow.authorization_url.assert_called_once_with(
+            prompt="consent", hd="company.com"
+        )
 
 
 class TestGetCredentials:
@@ -342,6 +532,13 @@ class TestCmdAuthIntegration:
     def test_exit_code_2_on_missing_creds(self, tmp_path):
         env = os.environ.copy()
         env["HOME"] = str(tmp_path)
+        for var in (
+            "GDOC_CLIENT_ID",
+            "GDOC_CLIENT_SECRET",
+            "GDOC_CLIENT_CREDENTIALS",
+            "GDOC_SETUP_URL",
+        ):
+            env.pop(var, None)
 
         result = subprocess.run(
             [sys.executable, "-m", "gdoc", "auth"],

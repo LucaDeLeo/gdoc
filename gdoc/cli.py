@@ -1965,7 +1965,11 @@ def cmd_auth(args) -> int:
         return 0
 
     from gdoc.auth import authenticate
-    authenticate(no_browser=getattr(args, "no_browser", False))
+    authenticate(
+        no_browser=getattr(args, "no_browser", False),
+        setup_url=getattr(args, "setup_url", None),
+        domain=getattr(args, "domain", None),
+    )
     return 0
 
 
@@ -2315,6 +2319,16 @@ def build_parser() -> GdocArgumentParser:
         "--force", "-y",
         action="store_true",
         help="Skip confirmation for --remove",
+    )
+    auth_p.add_argument(
+        "--setup-url",
+        metavar="URL",
+        help="Fetch your org's OAuth client file from URL before authenticating",
+    )
+    auth_p.add_argument(
+        "--domain",
+        metavar="DOMAIN",
+        help="Workspace domain hint for the Google account chooser (e.g. company.com)",
     )
     auth_p.set_defaults(func=cmd_auth)
 

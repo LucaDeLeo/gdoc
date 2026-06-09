@@ -67,6 +67,33 @@ The first named account you authenticate becomes the default for bare
 gdoc auth --set-default pete@example.com
 ```
 
+### Org-wide setup (shared OAuth client)
+
+For company rollouts, an admin creates **one** Google Cloud project with an
+**Internal** OAuth consent screen and a Desktop-app OAuth client, then
+distributes that client file so users never touch the Cloud Console. Each
+user authenticates with one command. `gdoc` accepts the client config from
+any of these sources (first match wins):
+
+1. `GDOC_CLIENT_ID` + `GDOC_CLIENT_SECRET` — env vars (set via MDM/dotfiles)
+2. `GDOC_CLIENT_CREDENTIALS` — path to an OAuth client JSON file
+3. `~/.config/gdoc/credentials.json` — the default location
+
+To fetch the client file from an internal URL and authenticate in one step:
+
+```bash
+gdoc auth --setup-url https://internal.example.com/gdoc-credentials.json
+```
+
+If `GDOC_SETUP_URL` is set, plain `gdoc auth` fetches from it automatically
+when no client config is present yet — so with env vars pre-set, onboarding
+is just `uv tool install gdoc && gdoc auth`.
+
+Pass `--domain company.com` (or set `GDOC_AUTH_DOMAIN`) to pre-filter the
+Google account chooser to your Workspace domain so users don't accidentally
+pick a personal account. This is a UI hint only — domain enforcement comes
+from the Internal consent screen.
+
 ## Quick start
 
 ```bash

@@ -25,6 +25,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/documents",
 ]
 
+GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
 
 def get_credentials() -> Credentials:
     """Load or refresh credentials. Returns valid Credentials or raises AuthError."""
@@ -54,19 +57,121 @@ def get_credentials() -> Credentials:
     )
 
 
-def authenticate(no_browser: bool = False) -> Credentials:
-    """Run the full OAuth2 flow. Called by `gdoc auth`."""
-    if not CREDS_PATH.exists():
+def _read_client_file(path: Path) -> dict:
+    """Parse an OAuth client file, translating failures into AuthError."""
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        raise AuthError(f"Could not read OAuth client file {path}: {e}") from e
+
+
+def _load_client_config() -> dict | None:
+    """Resolve the OAuth client config from env vars or credentials.json.
+
+    Order: GDOC_CLIENT_ID/GDOC_CLIENT_SECRET pair, GDOC_CLIENT_CREDENTIALS
+    file path, then CREDS_PATH. Returns None when no source is configured.
+    """
+    client_id = os.environ.get("GDOC_CLIENT_ID")
+    client_secret = os.environ.get("GDOC_CLIENT_SECRET")
+    if client_id and client_secret:
+        return {
+            "installed": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": GOOGLE_AUTH_URI,
+                "token_uri": GOOGLE_TOKEN_URI,
+                "redirect_uris": ["http://localhost"],
+            }
+        }
+
+    env_path = os.environ.get("GDOC_CLIENT_CREDENTIALS")
+    if env_path:
+        path = Path(env_path).expanduser()
+        if not path.exists():
+            raise AuthError(
+                f"GDOC_CLIENT_CREDENTIALS points to {path}, which does not exist."
+            )
+        return _read_client_file(path)
+
+    if CREDS_PATH.exists():
+        return _read_client_file(CREDS_PATH)
+
+    return None
+
+
+def _fetch_client_credentials(url: str) -> None:
+    """Download the org's OAuth client file and store it at CREDS_PATH."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            raw = resp.read()
+    except Exception as e:
+        raise AuthError(f"Failed to fetch client credentials from {url}: {e}") from e
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise AuthError(f"Response from {url} is not valid JSON: {e}") from e
+
+    section = parsed.get("installed") or parsed.get("web")
+    if not isinstance(section, dict) or not section.get("client_id"):
         raise AuthError(
-            f"credentials.json not found at {CREDS_PATH}. "
-            "Download it from Google Cloud Console and place it there."
+            f"Response from {url} does not look like a Google OAuth client file "
+            "(expected an 'installed' section with a client_id)."
         )
 
-    flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
+    CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(CREDS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(raw.decode("utf-8"))
+    print(f"OK client credentials saved to {CREDS_PATH}", file=sys.stderr)
+
+
+def _auth_hints(domain: str | None) -> dict:
+    """Build hd/login_hint kwargs for the authorization URL.
+
+    hd pre-filters the Google account chooser to the Workspace domain; it is
+    a UI hint, not enforcement — an Internal consent screen enforces domain.
+    """
+    from gdoc.util import get_active_account
+
+    hints = {}
+    domain = domain or os.environ.get("GDOC_AUTH_DOMAIN")
+    if domain:
+        hints["hd"] = domain
+    account = get_active_account() or get_default_account()
+    if account and "@" in account:
+        hints["login_hint"] = account
+    return hints
+
+
+def authenticate(
+    no_browser: bool = False,
+    setup_url: str | None = None,
+    domain: str | None = None,
+) -> Credentials:
+    """Run the full OAuth2 flow. Called by `gdoc auth`."""
+    if setup_url:
+        _fetch_client_credentials(setup_url)
+
+    client_config = _load_client_config()
+    if client_config is None and os.environ.get("GDOC_SETUP_URL"):
+        _fetch_client_credentials(os.environ["GDOC_SETUP_URL"])
+        client_config = _load_client_config()
+    if client_config is None:
+        raise AuthError(
+            f"credentials.json not found at {CREDS_PATH}. Place your org's "
+            "OAuth client file there, run `gdoc auth --setup-url <url>`, or "
+            "set GDOC_CLIENT_ID and GDOC_CLIENT_SECRET."
+        )
+
+    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+    hints = _auth_hints(domain)
 
     if no_browser:
         flow.redirect_uri = "http://localhost:1"
-        auth_url, _ = flow.authorization_url(prompt="consent")
+        auth_url, _ = flow.authorization_url(prompt="consent", **hints)
         print(
             "Visit this URL to authorize gdoc:\n\n"
             f"{auth_url}\n\n"
@@ -83,7 +188,7 @@ def authenticate(no_browser: bool = False) -> Credentials:
             raise AuthError(f"Failed to exchange authorization code: {e}") from e
         creds = flow.credentials
     else:
-        creds = flow.run_local_server(port=0)
+        creds = flow.run_local_server(port=0, **hints)
 
     token_path = get_token_path()
     token_path.parent.mkdir(parents=True, exist_ok=True)
