@@ -75,7 +75,7 @@ class TestSyncHookBasic:
             cmd_sync_hook(args)
         mock_update.assert_called_once_with(
             "abc123", None, command="push",
-            quiet=True, command_version=42,
+            quiet=True, command_version=42, full_doc_write=True,
         )
 
 

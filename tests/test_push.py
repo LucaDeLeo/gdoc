@@ -173,6 +173,7 @@ class TestPushInSync:
         assert "already in sync" in capsys.readouterr().out
         assert mock_state.call_args.kwargs["command_version"] == 12
         assert mock_state.call_args.kwargs["command"] == "push"
+        assert mock_state.call_args.kwargs["full_doc_write"] is True
 
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 12})
     @patch("gdoc.state.update_state_after_command")
@@ -299,7 +300,7 @@ class TestPushAwareness:
         cmd_push(args)
         mock_update.assert_called_once_with(
             "abc123", change_info, command="push",
-            quiet=False, command_version=42,
+            quiet=False, command_version=42, full_doc_write=True,
         )
 
 

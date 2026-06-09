@@ -121,10 +121,7 @@ def _fetch_client_credentials(url: str) -> None:
             "(expected an 'installed' section with a client_id)."
         )
 
-    CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(CREDS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(raw.decode("utf-8"))
+    _write_private(CREDS_PATH, raw.decode("utf-8"))
     print(f"OK client credentials saved to {CREDS_PATH}", file=sys.stderr)
 
 
@@ -223,14 +220,31 @@ def _load_token(token_path: Path | None = None) -> Credentials | None:
         return None
 
 
+def _write_private(path: Path, content: str) -> None:
+    """Write a secret file with 0600 permissions, replacing any existing file.
+
+    os.open's mode only applies on creation, so writing in place would leave
+    a pre-existing world-readable file world-readable. Write a fresh 0600
+    temp file in the same directory and atomically swap it in instead.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def _save_token(creds: Credentials, token_path: Path | None = None) -> None:
     """Save credentials to token.json with restricted permissions."""
     if token_path is None:
         token_path = get_token_path()
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(creds.to_json())
+    _write_private(token_path, creds.to_json())
 
 
 def list_accounts() -> list[str]:

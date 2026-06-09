@@ -552,7 +552,7 @@ class TestWriteAwareness:
         cmd_write(args)
         mock_update.assert_called_once_with(
             "abc123", change_info, command="write",
-            quiet=False, command_version=42,
+            quiet=False, command_version=42, full_doc_write=True,
         )
 
     @patch("gdoc.state.update_state_after_command")
@@ -599,7 +599,7 @@ class TestWriteAwareness:
         cmd_write(args)
         mock_update.assert_called_once_with(
             "abc123", None, command="write",
-            quiet=True, command_version=42,
+            quiet=True, command_version=42, full_doc_write=True,
         )
 
 
@@ -752,6 +752,28 @@ class TestWriteCollapseSafety:
 
 class TestWriteTabScoped:
     """--tab NAME writes only to that tab via Docs API."""
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.notify.pre_flight")
+    def test_forced_tab_write_does_not_claim_full_read(
+        self, mock_pf, mock_insert, _ver, mock_state, tmp_path,
+    ):
+        """A forced tab write bypasses the conflict check and touches one
+        tab — it must not advance the whole-doc read baseline."""
+        f = tmp_path / "doc.md"
+        f.write_text("body")
+        mock_pf.return_value = ChangeInfo(
+            current_version=10, last_read_version=5,
+        )
+        mock_insert.return_value = {
+            "tab_id": "t.a", "tab_title": "A", "insert_index": 1,
+        }
+        args = _make_args(file=str(f), tab="A", force=True)
+        rc = cmd_write(args)
+        assert rc == 0
+        assert mock_state.call_args.kwargs["full_doc_write"] is False
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})

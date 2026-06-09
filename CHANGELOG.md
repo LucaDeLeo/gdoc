@@ -4,6 +4,21 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] — 2026-06-09
+
+### Fixed
+- **Tab writes no longer claim full-doc knowledge.** 0.10.1's baseline
+  advance applied to `write --tab` too, so a forced tab write after unseen
+  remote changes let the next full-doc `push`/`write` skip conflict
+  detection and overwrite them. The baseline now advances only for actual
+  full-content writes (`push`, full-doc `write`, the sync hook).
+  (Codex review on #24.)
+- **Replacing credential files now enforces 0600.** `os.open`'s mode only
+  applies on creation, so `gdoc auth --setup-url` over an existing
+  world-readable `credentials.json` kept it world-readable. Credential and
+  token files are now written to a fresh 0600 temp file and atomically
+  swapped in. (Codex review on #23.)
+
 ## [0.10.1] — 2026-06-09
 
 ### Fixed

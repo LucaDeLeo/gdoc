@@ -153,7 +153,7 @@ class TestUpdateStateAfterCommand:
             save_state("doc1", DocState(last_version=10, last_read_version=10))
             update_state_after_command(
                 "doc1", None, command="push",
-                quiet=True, command_version=11,
+                quiet=True, command_version=11, full_doc_write=True,
             )
             state = load_state("doc1")
             assert state.last_version == 11
@@ -164,11 +164,24 @@ class TestUpdateStateAfterCommand:
             info = self._make_change_info(current_version=10)
             update_state_after_command(
                 "doc1", info, command="write",
-                quiet=False, command_version=11,
+                quiet=False, command_version=11, full_doc_write=True,
             )
             state = load_state("doc1")
             assert state.last_version == 11
             assert state.last_read_version == 11
+
+    def test_tab_write_does_not_advance_read_baseline(self, tmp_path):
+        """A tab-scoped write replaces one tab only — the rest of the doc
+        may hold unseen changes, so the conflict baseline must not move."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_version=10, last_read_version=5))
+            update_state_after_command(
+                "doc1", None, command="write",
+                quiet=True, command_version=11, full_doc_write=False,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 11
+            assert state.last_read_version == 5
 
     def test_edit_does_not_advance_read_baseline(self, tmp_path):
         """Partial mutations (find/replace) don't establish full-content

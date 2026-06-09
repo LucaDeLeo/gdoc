@@ -263,6 +263,28 @@ class TestClientConfigSources:
         assert fake_creds.exists()
         assert oct(os.stat(fake_creds).st_mode & 0o777) == "0o600"
 
+    def test_setup_url_fixes_loose_permissions_on_overwrite(
+        self, tmp_path, monkeypatch,
+    ):
+        """O_CREAT's mode is ignored for existing files — replacing a
+        world-readable credentials.json must still end up 0600."""
+        mock_flow = _mock_flow()
+        fake_creds = tmp_path / "credentials.json"
+        fake_creds.write_text('{"installed": {"client_id": "old"}}')
+        os.chmod(fake_creds, 0o644)
+
+        with (
+            _flow_patches(tmp_path, mock_flow),
+            patch(
+                "urllib.request.urlopen",
+                return_value=_FakeResponse(CLIENT_FILE_JSON.encode()),
+            ),
+        ):
+            authenticate(setup_url="https://internal.example.com/gdoc.json")
+
+        assert oct(os.stat(fake_creds).st_mode & 0o777) == "0o600"
+        assert "abc.apps.googleusercontent.com" in fake_creds.read_text()
+
     def test_setup_url_rejects_non_client_json(self, tmp_path):
         with (
             patch("gdoc.auth.CREDS_PATH", tmp_path / "credentials.json"),
@@ -508,6 +530,18 @@ class TestSaveToken:
 
         assert fake_token.exists()
         assert oct(os.stat(fake_token).st_mode & 0o777) == "0o600"
+
+    def test_overwrite_fixes_loose_permissions(self, tmp_path):
+        fake_token = tmp_path / "token.json"
+        fake_token.write_text('{"token": "old"}')
+        os.chmod(fake_token, 0o644)
+        mock_creds = MagicMock()
+        mock_creds.to_json.return_value = '{"token": "new"}'
+
+        _save_token(mock_creds, fake_token)
+
+        assert oct(os.stat(fake_token).st_mode & 0o777) == "0o600"
+        assert fake_token.read_text() == '{"token": "new"}'
 
     def test_saves_atomically_with_restricted_permissions(self, tmp_path):
         """Token file is created with 0o600 from the start (no chmod race)."""

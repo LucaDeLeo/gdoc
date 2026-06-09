@@ -62,6 +62,7 @@ def update_state_after_command(
     quiet: bool = False,
     command_version: int | None = None,
     comment_state_patch: dict | None = None,
+    full_doc_write: bool = False,
 ) -> None:
     """Update per-doc state after a successful command.
 
@@ -73,6 +74,8 @@ def update_state_after_command(
         command_version: Version from command's own API response (for info command).
         comment_state_patch: Optional dict with targeted comment state mutations.
             Keys: "add_comment_id", "add_resolved_id", "remove_resolved_id".
+        full_doc_write: True when the command replaced the entire document
+            content, so the write doubles as a read of the whole doc.
     """
     from datetime import datetime, timezone
 
@@ -111,7 +114,9 @@ def update_state_after_command(
         # A successful full-content write doubles as a read: the doc now
         # contains exactly what we sent, so advance the conflict baseline.
         # Without this, a later push false-conflicts against our own write.
-        if command in ("push", "write"):
+        # Partial writes (tab-scoped, find/replace) must NOT advance it —
+        # the rest of the doc may hold changes the writer never saw.
+        if full_doc_write:
             state.last_read_version = command_version
 
     # Apply comment mutation patch (both quiet and non-quiet)

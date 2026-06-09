@@ -1098,6 +1098,7 @@ def _finish_noop_write(
     update_state_after_command(
         doc_id, change_info, command=command,
         quiet=quiet, command_version=command_version,
+        full_doc_write=True,
     )
     return 0
 
@@ -1252,6 +1253,7 @@ def cmd_write(args) -> int:
     update_state_after_command(
         doc_id, change_info, command="write",
         quiet=quiet, command_version=command_version,
+        full_doc_write=not tab_name,
     )
 
     return 0
@@ -1390,6 +1392,7 @@ def cmd_push(args) -> int:
     update_state_after_command(
         doc_id, change_info, command="push",
         quiet=quiet, command_version=command_version,
+        full_doc_write=True,
     )
 
     return 0
@@ -1455,6 +1458,7 @@ def cmd_sync_hook(args) -> int:
         update_state_after_command(
             doc_id, None, command="push",
             quiet=True, command_version=command_version,
+            full_doc_write=True,
         )
 
     except Exception:
