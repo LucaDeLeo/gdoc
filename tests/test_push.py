@@ -327,6 +327,16 @@ class TestPushErrors:
             cmd_push(args)
         assert exc.value.exit_code == 3
 
+    def test_revision_pull_file_rejected_specifically(self, tmp_path):
+        f = tmp_path / "old.md"
+        f.write_text(
+            "---\nsource: abc123\nrevision: 20\ntitle: Foo\n---\nBody"
+        )
+        args = _make_args(file=str(f))
+        with pytest.raises(GdocError, match="past revision") as exc:
+            cmd_push(args)
+        assert exc.value.exit_code == 3
+
     def test_invalid_doc_id_in_frontmatter(self, tmp_path):
         f = tmp_path / "test.md"
         f.write_text("---\ngdoc: !!invalid!!\n---\nBody")

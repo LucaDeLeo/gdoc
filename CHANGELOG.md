@@ -4,6 +4,52 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-06-11
+
+### Added
+- **`gdoc revisions DOC`** (alias `history`) — list the milestone
+  revisions the Drive API retains for a document (Google's rich
+  "Version history" has no public API; Drive milestones are the
+  reconstructable subset). Human table, `--json`, and `--plain` modes;
+  `--limit N`; `[keep]` marker for pinned revisions.
+- **`gdoc cat/pull --revision REV`** — export or download a past
+  revision. REV selector grammar shared with `diff`: bare id,
+  `latest`/`head`, `prev`, `head~N` (by list position — ids are
+  sparse), `@ISO` (last revision at/before a timestamp).
+  `pull --revision` writes `source:`/`revision:` frontmatter instead
+  of `gdoc:` so a stale revision can't be pushed back by accident,
+  and neither command advances the read baseline used by
+  write-conflict checks.
+- **`gdoc diff DOC --rev A..B | --rev REV | --since ISO`** — diff two
+  revisions (or a revision against latest) with a readable
+  **coalescing word-diff**: shared scraps shorter than `--min-common`
+  chars (default 24) are absorbed so a rewritten sentence renders as
+  one removed chunk + one added chunk, not word salad. Colored
+  word-diff on a TTY, plain `[-…-]`/`{+…+}` text when piped, `--json`
+  for a stable documented diff model, and `--format html --out F`
+  for a styled review artifact (GitHub-style colors, collapsed
+  unchanged runs, `--context N`). Existing `diff DOC FILE` behavior
+  is unchanged.
+- **`gdoc diff --with-comments`** — pull the doc's comment threads and
+  anchor each to the diff hunk containing its quoted text (changed
+  hunks preferred); threads whose anchor isn't visible render in an
+  "Other comment threads" appendix. Color-coded by author in html.
+- Richer artifacts (docx, PDF, …) are deliberately not built in —
+  external scripts render them from the `--json` diff model.
+
+### Changed
+- A pruned or unknown revision produces a clear exit-3 error pointing
+  at `gdoc revisions` (Drive prunes non-pinned revisions over time).
+- `comments.list` now also requests reply `createdTime` (used by the
+  diff comment rendering).
+- `requests` is now a declared dependency (it was already pulled in
+  transitively); revision exports use it directly via
+  `google.auth.transport.requests`.
+- `push` on a `pull --revision` file explains that revision pulls are
+  not pushable, instead of "no gdoc frontmatter found".
+- Frontmatter values are flattened to one line on write, so a doc
+  title containing a newline can't inject frontmatter keys.
+
 ## [0.10.2] — 2026-06-09
 
 ### Fixed
