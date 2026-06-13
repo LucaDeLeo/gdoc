@@ -56,14 +56,67 @@ _NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)$")
 _TABLE_ROW_RE = re.compile(r"^\|(.+)\|$")
 _TABLE_SEP_RE = re.compile(r"^\|[\s:]*-{3,}[\s:]*(\|[\s:]*-{3,}[\s:]*)*\|$")
 
+# Characters a backslash may escape (CommonMark ASCII-punctuation set).
+_ESCAPABLE = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+
+# Sentinel used to mask escaped characters so they cannot match (or break)
+# the inline regexes. NUL never appears in real document text.
+_MASK = "\x00"
+
+
+def _unescape(text: str) -> tuple[str, str]:
+    """Process backslash escapes.
+
+    Returns ``(working, masked)``, two equal-length strings. ``working`` is
+    ``text`` with the escaping backslashes removed. ``masked`` is identical
+    except each escaped character is replaced by a sentinel, so the inline
+    regexes (which run against ``masked``) neither match an escaped marker
+    nor are broken by one — span text is still taken from ``working``. A
+    backslash before a non-escapable character (or at end of string) is kept
+    literally, matching CommonMark.
+    """
+    if "\\" not in text:
+        return text, text
+    working: list[str] = []
+    masked: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n and text[i + 1] in _ESCAPABLE:
+            working.append(text[i + 1])
+            masked.append(_MASK)
+            i += 2
+        else:
+            working.append(ch)
+            masked.append(ch)
+            i += 1
+    return "".join(working), "".join(masked)
+
 
 def _parse_inline(text: str) -> tuple[str, list[StyleRange]]:
     """Parse inline formatting from a text string.
 
     Returns (plain_text, style_ranges) where style_ranges have offsets
     relative to the returned plain_text.
+
+    Backslash escapes are resolved first: the escaping backslash is removed
+    and the escaped character is prevented from acting as a markdown marker.
     """
     styles: list[StyleRange] = []
+
+    # Resolve escapes. The regexes run against `masked` (escaped markers
+    # blanked to a sentinel); match offsets index identically into `working`,
+    # from which we take the actual span text.
+    working, masked = _unescape(text)
+
+    def _span(m: re.Match, group: int) -> str:
+        return working[m.start(group):m.end(group)]
+
+    def _overlaps(start: int, end: int) -> bool:
+        """True if [start, end) overlaps an already-recorded segment."""
+        return any(s[0] <= start < s[1] or s[0] < end <= s[1]
+                   for s in segments)
 
     # Process in passes, tracking replacements with placeholders.
     # We process from most specific to least specific to avoid conflicts.
@@ -74,49 +127,48 @@ def _parse_inline(text: str) -> tuple[str, list[StyleRange]]:
     segments: list[tuple[int, int, str, list[dict]]] = []
     # Each segment: (orig_start, orig_end, plain_text, [style_dicts])
 
-    # Find all inline formatting matches
+    # Find all inline formatting matches (against `masked`; inner text taken
+    # from `working` so escaped characters appear as their literal selves).
     # Bold+italic: ***text***
-    for m in _BOLD_ITALIC_RE.finditer(text):
+    for m in _BOLD_ITALIC_RE.finditer(masked):
         segments.append((
-            m.start(), m.end(), m.group(1),
+            m.start(), m.end(), _span(m, 1),
             [{"bold": True}, {"italic": True}],
         ))
 
     # Bold: **text** or __text__
-    for m in _BOLD_RE.finditer(text):
-        inner = m.group(1) or m.group(2)
+    for m in _BOLD_RE.finditer(masked):
+        group = 1 if m.group(1) is not None else 2
         # Skip if overlaps with bold+italic
-        if any(s[0] <= m.start() < s[1] or s[0] < m.end() <= s[1]
-               for s in segments):
+        if _overlaps(m.start(), m.end()):
             continue
-        segments.append((m.start(), m.end(), inner, [{"bold": True}]))
+        segments.append((m.start(), m.end(), _span(m, group), [{"bold": True}]))
 
     # Italic: *text* or _text_
-    for m in _ITALIC_RE.finditer(text):
-        inner = m.group(1) or m.group(2)
-        if any(s[0] <= m.start() < s[1] or s[0] < m.end() <= s[1]
-               for s in segments):
-            continue
-        segments.append((m.start(), m.end(), inner, [{"italic": True}]))
-
-    # Code: `text`
-    for m in _CODE_RE.finditer(text):
-        if any(s[0] <= m.start() < s[1] or s[0] < m.end() <= s[1]
-               for s in segments):
+    for m in _ITALIC_RE.finditer(masked):
+        group = 1 if m.group(1) is not None else 2
+        if _overlaps(m.start(), m.end()):
             continue
         segments.append((
-            m.start(), m.end(), m.group(1),
+            m.start(), m.end(), _span(m, group), [{"italic": True}],
+        ))
+
+    # Code: `text`
+    for m in _CODE_RE.finditer(masked):
+        if _overlaps(m.start(), m.end()):
+            continue
+        segments.append((
+            m.start(), m.end(), _span(m, 1),
             [{"weightedFontFamily": {"fontFamily": "Courier New"}}],
         ))
 
     # Links: [text](url)
-    for m in _LINK_RE.finditer(text):
-        if any(s[0] <= m.start() < s[1] or s[0] < m.end() <= s[1]
-               for s in segments):
+    for m in _LINK_RE.finditer(masked):
+        if _overlaps(m.start(), m.end()):
             continue
         segments.append((
-            m.start(), m.end(), m.group(1),
-            [{"link": {"url": m.group(2)}}],
+            m.start(), m.end(), _span(m, 1),
+            [{"link": {"url": _span(m, 2)}}],
         ))
 
     # Sort segments by original start position
@@ -130,7 +182,7 @@ def _parse_inline(text: str) -> tuple[str, list[StyleRange]]:
     for orig_start, orig_end, seg_text, seg_styles in segments:
         # Add any literal text before this segment
         if orig_start > prev_end:
-            literal = text[prev_end:orig_start]
+            literal = working[prev_end:orig_start]
             plain_parts.append(literal)
             plain_offset += len(literal)
 
@@ -150,8 +202,8 @@ def _parse_inline(text: str) -> tuple[str, list[StyleRange]]:
         prev_end = orig_end
 
     # Add any remaining literal text
-    if prev_end < len(text):
-        plain_parts.append(text[prev_end:])
+    if prev_end < len(working):
+        plain_parts.append(working[prev_end:])
 
     plain_text = "".join(plain_parts)
     return plain_text, styles
@@ -400,23 +452,14 @@ def to_docs_requests(
         }
     })
 
-    # 2. Apply text styles (bold, italic, code, link)
-    for sr in parsed.styles:
-        if sr.type == "text_style":
-            # Build the fields mask from the style keys
-            fields = _text_style_fields(sr.style)
-            requests.append({
-                "updateTextStyle": {
-                    "range": _range(
-                        sr.start + insert_index,
-                        sr.end + insert_index,
-                    ),
-                    "textStyle": sr.style,
-                    "fields": fields,
-                }
-            })
+    # Paragraph-level requests (named styles, bullets) MUST be applied
+    # before character-level (text style) requests. Applying a
+    # `namedStyleType` re-resolves a run's direct character formatting and
+    # clears any bold/italic already set, so text styles must come last to
+    # win. (Links survive a named-style reset, which is why earlier the bug
+    # only manifested for bold/italic.)
 
-    # 3. Apply paragraph styles (headings, NORMAL_TEXT)
+    # 2. Apply paragraph styles (headings, NORMAL_TEXT)
     for sr in parsed.styles:
         if sr.type == "paragraph_style":
             requests.append({
@@ -430,7 +473,7 @@ def to_docs_requests(
                 }
             })
 
-    # 4. Apply bullet styles (after paragraph styles)
+    # 3. Apply bullet styles (after paragraph styles)
     for sr in parsed.styles:
         if sr.type == "bullets":
             requests.append({
@@ -440,6 +483,23 @@ def to_docs_requests(
                         sr.end + insert_index,
                     ),
                     "bulletPreset": sr.style["bulletPreset"],
+                }
+            })
+
+    # 4. Apply text styles last (bold, italic, code, link) so they are not
+    #    clobbered by the paragraph-style requests above.
+    for sr in parsed.styles:
+        if sr.type == "text_style":
+            # Build the fields mask from the style keys
+            fields = _text_style_fields(sr.style)
+            requests.append({
+                "updateTextStyle": {
+                    "range": _range(
+                        sr.start + insert_index,
+                        sr.end + insert_index,
+                    ),
+                    "textStyle": sr.style,
+                    "fields": fields,
                 }
             })
 

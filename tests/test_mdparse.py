@@ -311,15 +311,15 @@ class TestToDocsRequests:
     def test_bold_generates_update_text_style(self):
         parsed = parse_markdown("**bold**")
         reqs = to_docs_requests(parsed, insert_index=5)
-        # insertText + updateTextStyle + updateParagraphStyle (NORMAL_TEXT)
+        # insertText + updateParagraphStyle (NORMAL_TEXT) + updateTextStyle
         assert len(reqs) == 3
         insert = reqs[0]
         assert insert["insertText"]["text"] == "bold\n"
         assert insert["insertText"]["location"]["index"] == 5
 
-        style_req = reqs[1]
-        assert "updateTextStyle" in style_req
-        uts = style_req["updateTextStyle"]
+        style_reqs = [r for r in reqs if "updateTextStyle" in r]
+        assert len(style_reqs) == 1
+        uts = style_reqs[0]["updateTextStyle"]
         assert uts["range"]["startIndex"] == 5
         assert uts["range"]["endIndex"] == 9
         assert uts["textStyle"] == {"bold": True}
@@ -376,7 +376,7 @@ class TestToDocsRequests:
         reqs = to_docs_requests(parsed, insert_index=100)
         insert = reqs[0]
         assert insert["insertText"]["location"]["index"] == 100
-        style = reqs[1]["updateTextStyle"]
+        style = [r for r in reqs if "updateTextStyle" in r][0]["updateTextStyle"]
         assert style["range"]["startIndex"] == 100
         assert style["range"]["endIndex"] == 104
 
@@ -386,7 +386,12 @@ class TestToDocsRequests:
         assert reqs == []
 
     def test_request_ordering(self):
-        """Insert first, text styles, paragraph styles, bullets."""
+        """Insert first, then paragraph styles, then bullets, then text styles.
+
+        Text styles must come last: applying a ``namedStyleType`` (paragraph
+        style) re-resolves a run's direct character formatting, so bold/italic
+        applied before it would be clobbered. See the per-tab formatting bug.
+        """
         parsed = parse_markdown("# **Bold** heading\n- item")
         reqs = to_docs_requests(parsed, insert_index=1)
         types = []
@@ -400,11 +405,12 @@ class TestToDocsRequests:
             elif "createParagraphBullets" in r:
                 types.append("bullets")
         assert types[0] == "insert"
-        # Text styles before paragraph styles before bullets
+        # Paragraph styles and bullets before text styles, so character
+        # formatting survives the named-style reset.
         text_idx = types.index("text_style")
         para_idx = types.index("para_style")
         bullet_idx = types.index("bullets")
-        assert text_idx < para_idx < bullet_idx
+        assert para_idx < bullet_idx < text_idx
 
 
 class TestParseNormalTextEmission:
@@ -492,3 +498,101 @@ class TestToDocsRequestsTabId:
         reqs = to_docs_requests(parsed, insert_index=1)
         style_reqs = [r for r in reqs if "updateTextStyle" in r]
         assert "tabId" not in style_reqs[0]["updateTextStyle"]["range"]
+
+
+class TestParagraphStyleBeforeTextStyle:
+    """Regression: per-tab bold/italic was clobbered by a trailing
+    updateParagraphStyle. Paragraph styles must precede text styles so the
+    named-style reset does not wipe character formatting.
+    """
+
+    def _types(self, reqs):
+        types = []
+        for r in reqs:
+            if "updateTextStyle" in r:
+                types.append("text")
+            elif "updateParagraphStyle" in r:
+                types.append("para")
+        return types
+
+    def test_bold_paragraph_emits_para_before_text(self):
+        parsed = parse_markdown("This has **bold** in it.")
+        reqs = to_docs_requests(parsed, insert_index=1)
+        types = self._types(reqs)
+        assert types == ["para", "text"]
+
+    def test_all_para_styles_precede_all_text_styles(self):
+        md = "This has **bold** and *italic* and a [link](https://x.com)."
+        parsed = parse_markdown(md)
+        reqs = to_docs_requests(parsed, insert_index=1)
+        types = self._types(reqs)
+        last_para = max(i for i, t in enumerate(types) if t == "para")
+        first_text = min(i for i, t in enumerate(types) if t == "text")
+        assert last_para < first_text
+        # Bold, italic, and link all still emitted.
+        assert types.count("text") == 3
+
+
+class TestBackslashEscapes:
+    """Issue 2: backslash escapes must be removed and the escaped marker
+    must not take on its markdown meaning.
+    """
+
+    def test_escaped_asterisks_not_italic(self):
+        result = parse_markdown(r"A literal star \*not italic\* here.")
+        assert result.plain_text == "A literal star *not italic* here.\n"
+        italic = [s for s in result.styles if s.style.get("italic")]
+        assert italic == []
+
+    def test_escaped_brackets_not_link(self):
+        result = parse_markdown(r"Not a link: \[click here\](https://x.com).")
+        assert result.plain_text == "Not a link: [click here](https://x.com).\n"
+        links = [s for s in result.styles if "link" in s.style]
+        assert links == []
+
+    def test_escaped_brackets_only(self):
+        result = parse_markdown(r"\[brackets\]")
+        assert result.plain_text == "[brackets]\n"
+
+    def test_escaped_tilde_backslash_removed(self):
+        result = parse_markdown(r"\~tilde\~")
+        assert result.plain_text == "~tilde~\n"
+
+    def test_escaped_marker_does_not_break_adjacent_real_formatting(self):
+        result = parse_markdown(r"\* and **bold**")
+        assert result.plain_text == "* and bold\n"
+        bold = [s for s in result.styles if s.style.get("bold")]
+        assert len(bold) == 1
+        # Bold applies to "bold", offset past the literal "* and ".
+        assert result.plain_text[bold[0].start:bold[0].end] == "bold"
+
+    def test_real_and_escaped_italic_coexist(self):
+        result = parse_markdown(r"*real* and \*fake\*")
+        assert result.plain_text == "real and *fake*\n"
+        italic = [s for s in result.styles if s.style.get("italic")]
+        assert len(italic) == 1
+        assert result.plain_text[italic[0].start:italic[0].end] == "real"
+
+    def test_escaped_backtick_not_code(self):
+        result = parse_markdown(r"use \`literal\` backticks")
+        assert result.plain_text == "use `literal` backticks\n"
+        code = [s for s in result.styles if "weightedFontFamily" in s.style]
+        assert code == []
+
+    def test_double_backslash_becomes_single(self):
+        result = parse_markdown(r"path C:\\Users")
+        assert result.plain_text == "path C:\\Users\n"
+
+    def test_backslash_before_non_punctuation_kept(self):
+        # \U is not an escapable char, so the backslash stays literal.
+        result = parse_markdown(r"path C:\Users")
+        assert result.plain_text == "path C:\\Users\n"
+
+    def test_escape_in_heading(self):
+        result = parse_markdown(r"# Title with \*literal\* stars")
+        assert result.plain_text == "Title with *literal* stars\n"
+        italic = [s for s in result.styles if s.style.get("italic")]
+        assert italic == []
+        heading = [s for s in result.styles
+                   if s.style.get("namedStyleType") == "HEADING_1"]
+        assert len(heading) == 1

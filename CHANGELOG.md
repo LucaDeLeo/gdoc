@@ -4,6 +4,22 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] — 2026-06-13
+
+### Fixed
+- **Per-tab markdown writes preserve bold/italic.** `write --tab` /
+  `insert --tab` emitted `updateTextStyle` before `updateParagraphStyle`;
+  applying a `namedStyleType` re-resolves a run's direct character
+  formatting and cleared the just-set bold/italic (links survived a
+  named-style reset, so only bold/italic broke). Paragraph-style and bullet
+  requests are now emitted before text styles, so character formatting
+  wins. Whole-doc `write` (Drive's importer) was unaffected.
+- **Per-tab markdown writes honor backslash escapes.** `_parse_inline` had
+  no escape pass, so `\*x\*` kept the backslash *and* still rendered italic.
+  Escapes are now resolved first (CommonMark ASCII-punctuation set): the
+  escaping backslash is stripped and the escaped character can no longer
+  open or close an inline span, so `\*`, `\[`, etc. produce literal text.
+
 ## [0.10.2] — 2026-06-09
 
 ### Fixed

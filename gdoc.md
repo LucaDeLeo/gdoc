@@ -277,6 +277,8 @@ The `write` command does a full overwrite. Strategy:
 
 **Caveat**: This is a full overwrite — it replaces the entire doc body. For surgical edits, use `edit`.
 
+**Note on `--tab` writes**: writing into a specific tab (`write --tab` / `insert --tab`) does not use Drive's importer — it hand-builds Docs API requests from a markdown *subset* (headings, bold/italic, code, links, top-level bullets/numbers, tables). Unsupported syntax (nested lists, blockquotes, strikethrough, images, fenced blocks) passes through as literal text. Backslash escapes follow CommonMark (a `\` before ASCII punctuation is dropped, e.g. `\*` → `*`, `50\%` → `50%`), matching the importer.
+
 ### Comments (Drive API v3)
 
 | Command | API Call | Notes |
