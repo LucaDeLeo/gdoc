@@ -6,3 +6,6 @@ dist/
 build/
 .pytest_cache/
 .DS_Store
+
+# swarm-loop-review run artifacts (not committed)
+.swarm-loop-review/
