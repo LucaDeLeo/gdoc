@@ -4,7 +4,16 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.10.3] — 2026-06-13
+## [0.11.0] — 2026-06-13
+
+### Added
+- **Per-tab markdown writes now render a much larger subset.** `write --tab` /
+  `insert --tab` (the hand-built Docs API path, not Drive's importer) now
+  support: nested emphasis (`**bold _italic_**`), strikethrough (`~~x~~`),
+  blockquotes (indented), horizontal rules, fenced code blocks (monospace),
+  nested bullet/numbered lists (indented), and inline formatting inside table
+  cells. See `gdoc.md` for the supported set and known gaps (images render as
+  `!` + link; nested-list glyphs don't cycle by depth).
 
 ### Fixed
 - **Per-tab markdown writes preserve bold/italic.** `write --tab` /
@@ -16,9 +25,14 @@ All notable changes to `gdoc` are documented here. This project follows
   wins. Whole-doc `write` (Drive's importer) was unaffected.
 - **Per-tab markdown writes honor backslash escapes.** `_parse_inline` had
   no escape pass, so `\*x\*` kept the backslash *and* still rendered italic.
-  Escapes are now resolved first (CommonMark ASCII-punctuation set): the
-  escaping backslash is stripped and the escaped character can no longer
-  open or close an inline span, so `\*`, `\[`, etc. produce literal text.
+  Escapes now follow CommonMark: the escaping backslash is stripped and the
+  escaped character can no longer open or close an inline span, so `\*`,
+  `\[`, etc. produce literal text. Code spans stay literal (a regex like
+  `` `\d+\.\d+` `` keeps its backslashes).
+- **Ordered lists number continuously.** Bullets are created top-to-bottom so
+  Docs attaches each item to the list above it (`1, 2, 3`, not three `1`s).
+- **Horizontal rules survive at end of input.** The trailing-newline trim no
+  longer collapses a final horizontal rule.
 
 ## [0.10.2] — 2026-06-09
 

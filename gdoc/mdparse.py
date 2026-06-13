@@ -24,6 +24,9 @@ class TableData:
     num_rows: int
     num_cols: int
     plain_text_offset: int  # byte offset in plain_text where placeholder sits
+    # Leading list-indent tabs inserted before this table. createParagraphBullets
+    # removes those tabs, shifting the table's real position left by this many.
+    removed_tabs_before: int = 0
 
 
 @dataclass
@@ -33,6 +36,10 @@ class ParsedMarkdown:
     plain_text: str
     styles: list[StyleRange] = field(default_factory=list)
     tables: list[TableData] = field(default_factory=list)
+    # Total leading list-indent tabs in plain_text. createParagraphBullets
+    # removes them at apply time, so the document grows by len(plain_text)
+    # minus this when the requests are applied.
+    removed_tabs: int = 0
 
 
 # Inline patterns — order matters (bold+italic before bold/italic)
@@ -42,15 +49,43 @@ _ITALIC_RE = re.compile(
     r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"
     r"|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)"
 )
+_STRIKE_RE = re.compile(r"~~(.+?)~~")
 _CODE_RE = re.compile(r"`([^`]+)`")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+# Inline patterns in precedence order. Each entry: (regex, kind). On a tie at
+# the same position, the earlier entry wins, so ***x*** beats **x**/*x*.
+_INLINE_PATTERNS = [
+    (_BOLD_ITALIC_RE, "bolditalic"),
+    (_BOLD_RE, "bold"),
+    (_ITALIC_RE, "italic"),
+    (_STRIKE_RE, "strike"),
+    (_CODE_RE, "code"),
+    (_LINK_RE, "link"),
+]
+
+# Text-style dicts applied per emphasis kind (these recurse into their inner
+# content so emphasis can nest, e.g. **bold _and italic_**).
+_STYLES_FOR_KIND = {
+    "bolditalic": [{"bold": True}, {"italic": True}],
+    "bold": [{"bold": True}],
+    "italic": [{"italic": True}],
+    "strike": [{"strikethrough": True}],
+}
+
+_CODE_FONT = {"weightedFontFamily": {"fontFamily": "Courier New"}}
 
 # Heading pattern
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 
-# List item patterns
-_BULLET_RE = re.compile(r"^[-*]\s+(.+)$")
-_NUMBERED_RE = re.compile(r"^\d+\.\s+(.+)$")
+# List item patterns (capture leading indentation for nesting)
+_BULLET_RE = re.compile(r"^([ \t]*)[-*]\s+(.+)$")
+_NUMBERED_RE = re.compile(r"^([ \t]*)\d+\.\s+(.+)$")
+
+# Block patterns
+_BLOCKQUOTE_RE = re.compile(r"^ {0,3}>\s?(.*)$")
+_HR_RE = re.compile(r"^ {0,3}([-*_])[ ]*(?:\1[ ]*){2,}$")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*(\S*)\s*$")
 
 # Table patterns
 _TABLE_ROW_RE = re.compile(r"^\|(.+)\|$")
@@ -63,157 +98,159 @@ _ESCAPABLE = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 # the inline regexes. NUL never appears in real document text.
 _MASK = "\x00"
 
+# Indentation magnitude (PT) used for one level of blockquote indent.
+_QUOTE_INDENT_PT = 36
 
-def _unescape(text: str) -> tuple[str, str]:
-    """Process backslash escapes.
 
-    Returns ``(working, masked)``, two equal-length strings. ``working`` is
-    ``text`` with the escaping backslashes removed. ``masked`` is identical
-    except each escaped character is replaced by a sentinel, so the inline
-    regexes (which run against ``masked``) neither match an escaped marker
-    nor are broken by one — span text is still taken from ``working``. A
-    backslash before a non-escapable character (or at end of string) is kept
-    literally, matching CommonMark.
+def _mask_escapes(text: str) -> str:
+    """Return a same-length copy of ``text`` with each backslash-escaped
+    character blanked to a sentinel, so the inline regexes never match (or are
+    broken by) an escaped marker. The backslash itself is left in place (it
+    isn't a marker). Emitted text is sliced from the original, so the lengths
+    must stay aligned — hence blanking in place rather than removing.
     """
     if "\\" not in text:
-        return text, text
-    working: list[str] = []
-    masked: list[str] = []
+        return text
+    out = list(text)
     i = 0
     n = len(text)
     while i < n:
-        ch = text[i]
-        if ch == "\\" and i + 1 < n and text[i + 1] in _ESCAPABLE:
-            working.append(text[i + 1])
-            masked.append(_MASK)
+        if text[i] == "\\" and i + 1 < n and text[i + 1] in _ESCAPABLE:
+            out[i + 1] = _MASK
             i += 2
         else:
-            working.append(ch)
-            masked.append(ch)
             i += 1
-    return "".join(working), "".join(masked)
+    return "".join(out)
+
+
+def _strip_escapes(s: str) -> str:
+    """Drop escaping backslashes (``\\X`` -> ``X`` for escapable X), matching
+    CommonMark. NOT applied inside code spans, whose content is literal.
+    A backslash before a non-escapable character (or at end) is kept.
+    """
+    if "\\" not in s:
+        return s
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i] == "\\" and i + 1 < n and s[i + 1] in _ESCAPABLE:
+            out.append(s[i + 1])
+            i += 2
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
 
 
 def _parse_inline(text: str) -> tuple[str, list[StyleRange]]:
     """Parse inline formatting from a text string.
 
-    Returns (plain_text, style_ranges) where style_ranges have offsets
-    relative to the returned plain_text.
-
-    Backslash escapes are resolved first: the escaping backslash is removed
-    and the escaped character is prevented from acting as a markdown marker.
+    Returns (plain_text, style_ranges) with offsets relative to plain_text.
+    Emphasis spans nest recursively; backslash escapes are resolved per
+    segment (and left intact inside code spans).
     """
-    styles: list[StyleRange] = []
+    return _scan(text, _mask_escapes(text))
 
-    # Resolve escapes. The regexes run against `masked` (escaped markers
-    # blanked to a sentinel); match offsets index identically into `working`,
-    # from which we take the actual span text.
-    working, masked = _unescape(text)
 
-    def _span(m: re.Match, group: int) -> str:
-        return working[m.start(group):m.end(group)]
+def _scan(text: str, masked: str) -> tuple[str, list[StyleRange]]:
+    """Recursively parse inline formatting.
 
-    def _overlaps(start: int, end: int) -> bool:
-        """True if [start, end) overlaps an already-recorded segment."""
-        return any(s[0] <= start < s[1] or s[0] < end <= s[1]
-                   for s in segments)
-
-    # Process in passes, tracking replacements with placeholders.
-    # We process from most specific to least specific to avoid conflicts.
-
-    # We'll collect all matches first, then process them in order of
-    # their position in the original string to build the plain text.
-
-    segments: list[tuple[int, int, str, list[dict]]] = []
-    # Each segment: (orig_start, orig_end, plain_text, [style_dicts])
-
-    # Find all inline formatting matches (against `masked`; inner text taken
-    # from `working` so escaped characters appear as their literal selves).
-    # Bold+italic: ***text***
-    for m in _BOLD_ITALIC_RE.finditer(masked):
-        segments.append((
-            m.start(), m.end(), _span(m, 1),
-            [{"bold": True}, {"italic": True}],
-        ))
-
-    # Bold: **text** or __text__
-    for m in _BOLD_RE.finditer(masked):
-        group = 1 if m.group(1) is not None else 2
-        # Skip if overlaps with bold+italic
-        if _overlaps(m.start(), m.end()):
-            continue
-        segments.append((m.start(), m.end(), _span(m, group), [{"bold": True}]))
-
-    # Italic: *text* or _text_
-    for m in _ITALIC_RE.finditer(masked):
-        group = 1 if m.group(1) is not None else 2
-        if _overlaps(m.start(), m.end()):
-            continue
-        segments.append((
-            m.start(), m.end(), _span(m, group), [{"italic": True}],
-        ))
-
-    # Code: `text`
-    for m in _CODE_RE.finditer(masked):
-        if _overlaps(m.start(), m.end()):
-            continue
-        segments.append((
-            m.start(), m.end(), _span(m, 1),
-            [{"weightedFontFamily": {"fontFamily": "Courier New"}}],
-        ))
-
-    # Links: [text](url)
-    for m in _LINK_RE.finditer(masked):
-        if _overlaps(m.start(), m.end()):
-            continue
-        segments.append((
-            m.start(), m.end(), _span(m, 1),
-            [{"link": {"url": _span(m, 2)}}],
-        ))
-
-    # Sort segments by original start position
-    segments.sort(key=lambda s: s[0])
-
-    # Build plain text and style ranges
+    ``text`` is the original source; ``masked`` is the same length with escaped
+    markers blanked to a sentinel. The regexes run against ``masked``; emitted
+    text is sliced from ``text``. Escaping backslashes are stripped from normal
+    content but PRESERVED inside code spans (code is literal — CommonMark).
+    Spans recurse so emphasis can nest (e.g. ``**bold _and italic_**``).
+    Returns (plain_text, [StyleRange]) with offsets relative to plain_text.
+    """
     plain_parts: list[str] = []
-    plain_offset = 0
-    prev_end = 0
+    styles: list[StyleRange] = []
+    offset = 0
+    pos = 0
+    n = len(masked)
 
-    for orig_start, orig_end, seg_text, seg_styles in segments:
-        # Add any literal text before this segment
-        if orig_start > prev_end:
-            literal = working[prev_end:orig_start]
-            plain_parts.append(literal)
-            plain_offset += len(literal)
+    while pos < n:
+        # Search the unconsumed tail (a fresh slice), not masked[pos:] via the
+        # pos argument: a lookbehind (`(?<!\*)`) would otherwise read the
+        # just-consumed marker before `pos` and wrongly block a span that abuts
+        # it (e.g. the `*b*` in `**a***b*`). Match offsets are relative to the
+        # slice, so shift them by `pos`.
+        tail = masked[pos:]
+        best: tuple[re.Match, str] | None = None
+        for pat, kind in _INLINE_PATTERNS:
+            m = pat.search(tail)
+            if m is not None and (best is None or m.start() < best[0].start()):
+                best = (m, kind)
+        if best is None:
+            plain_parts.append(_strip_escapes(text[pos:]))
+            break
 
-        # Add the segment's plain text
-        seg_start = plain_offset
-        plain_parts.append(seg_text)
-        plain_offset += len(seg_text)
-        seg_end = plain_offset
+        m, kind = best
+        m_start = pos + m.start()
+        if m_start > pos:
+            lit = _strip_escapes(text[pos:m_start])
+            plain_parts.append(lit)
+            offset += len(lit)
 
-        # Record styles
-        for sd in seg_styles:
+        def _grp(group: int) -> tuple[int, int]:
+            return pos + m.start(group), pos + m.end(group)
+
+        seg_start = offset
+        if kind == "code":
+            # Code spans are literal — content kept verbatim (backslashes too).
+            a, b = _grp(1)
+            inner = text[a:b]
+            plain_parts.append(inner)
+            offset += len(inner)
+            styles.append(StyleRange(seg_start, offset, _CODE_FONT, "text_style"))
+        elif kind == "link":
+            a, b = _grp(1)
+            sub_plain, sub_styles = _scan(text[a:b], masked[a:b])
+            plain_parts.append(sub_plain)
+            offset += len(sub_plain)
+            for s in sub_styles:
+                styles.append(StyleRange(
+                    s.start + seg_start, s.end + seg_start, s.style, s.type,
+                ))
+            ua, ub = _grp(2)
             styles.append(StyleRange(
-                start=seg_start, end=seg_end,
-                style=sd, type="text_style",
+                seg_start, offset,
+                {"link": {"url": _strip_escapes(text[ua:ub])}}, "text_style",
             ))
+        else:
+            # bold / italic alternations capture group 1 or 2; others, group 1.
+            g = 2 if (kind in ("bold", "italic") and m.group(1) is None) else 1
+            a, b = _grp(g)
+            sub_plain, sub_styles = _scan(text[a:b], masked[a:b])
+            plain_parts.append(sub_plain)
+            offset += len(sub_plain)
+            for s in sub_styles:
+                styles.append(StyleRange(
+                    s.start + seg_start, s.end + seg_start, s.style, s.type,
+                ))
+            for sd in _STYLES_FOR_KIND[kind]:
+                styles.append(StyleRange(seg_start, offset, sd, "text_style"))
 
-        prev_end = orig_end
+        pos = pos + m.end()
 
-    # Add any remaining literal text
-    if prev_end < len(working):
-        plain_parts.append(working[prev_end:])
+    return "".join(plain_parts), styles
 
-    plain_text = "".join(plain_parts)
-    return plain_text, styles
+
+def _list_level(indent: str) -> int:
+    """Nesting level from a list item's leading whitespace.
+
+    Two columns (or one tab) per level; capped at 8 (Docs' max).
+    """
+    columns = len(indent.replace("\t", "  "))
+    return min(columns // 2, 8)
 
 
 def parse_markdown(text: str) -> ParsedMarkdown:
     """Parse markdown text into plain text + style annotations.
 
-    Handles: headings (H1-H6), bullet lists, numbered lists,
-    bold, italic, bold+italic, inline code, links.
+    Handles: headings (H1-H6), bullet/numbered lists (nested), bold, italic,
+    bold+italic, strikethrough, inline code, links, blockquotes, horizontal
+    rules, fenced code blocks, and tables.
     """
     if not text:
         return ParsedMarkdown(plain_text="")
@@ -223,33 +260,87 @@ def parse_markdown(text: str) -> ParsedMarkdown:
     all_styles: list[StyleRange] = []
     all_tables: list[TableData] = []
     offset = 0
+    removed_tabs = 0  # running count of leading list-indent tabs (see below)
+
+    def emit_paragraph(
+        content: str,
+        content_styles: list[StyleRange],
+        para_style: dict,
+        bullet_preset: str | None = None,
+        leading_tabs: int = 0,
+    ) -> None:
+        """Append one paragraph (content + newline) and its style ranges.
+
+        ``leading_tabs`` prepends tabs for list nesting; createParagraphBullets
+        counts and removes them at apply time (tracked via ``removed_tabs``).
+        """
+        nonlocal offset, removed_tabs
+        para_start = offset
+        if leading_tabs:
+            plain_parts.append("\t" * leading_tabs)
+            offset += leading_tabs
+            removed_tabs += leading_tabs
+        text_start = offset
+        plain_parts.append(content)
+        offset += len(content)
+        for s in content_styles:
+            all_styles.append(StyleRange(
+                s.start + text_start, s.end + text_start, s.style, s.type,
+            ))
+        plain_parts.append("\n")
+        offset += 1
+        all_styles.append(StyleRange(
+            para_start, offset, para_style, "paragraph_style",
+        ))
+        if bullet_preset is not None:
+            all_styles.append(StyleRange(
+                para_start, offset,
+                {"bulletPreset": bullet_preset}, "bullets",
+            ))
 
     i = 0
     while i < len(lines):
         line = lines[i]
 
-        # Table: detect header row + separator row + data rows
+        # Fenced code block: ``` (or ~~~) ... ```
+        fence_m = _FENCE_RE.match(line)
+        if fence_m:
+            fence = fence_m.group(1)
+            fence_char = fence[0]
+            i += 1
+            while i < len(lines):
+                close = _FENCE_RE.match(lines[i])
+                if close:
+                    close_fence = close.group(1)
+                    if close_fence[0] == fence_char and len(
+                        close_fence
+                    ) >= len(fence):
+                        i += 1
+                        break
+                code_line = lines[i]
+                styles = (
+                    [StyleRange(0, len(code_line), _CODE_FONT, "text_style")]
+                    if code_line else []
+                )
+                emit_paragraph(
+                    code_line, styles, {"namedStyleType": "NORMAL_TEXT"},
+                )
+                i += 1
+            continue
+
+        # Table: header row + separator row + data rows
         if (
             _TABLE_ROW_RE.match(line)
             and i + 1 < len(lines)
             and _TABLE_SEP_RE.match(lines[i + 1])
         ):
-            # Consume all table rows
             table_rows: list[list[str]] = []
-            # Header row
-            header_cells = [
-                c.strip() for c in line.strip("|").split("|")
-            ]
+            header_cells = [c.strip() for c in line.strip("|").split("|")]
             table_rows.append(header_cells)
             num_cols = len(header_cells)
             i += 2  # skip header + separator
-            # Data rows
             while i < len(lines) and _TABLE_ROW_RE.match(lines[i]):
-                cells = [
-                    c.strip()
-                    for c in lines[i].strip("|").split("|")
-                ]
-                # Pad or trim to match column count
+                cells = [c.strip() for c in lines[i].strip("|").split("|")]
                 if len(cells) < num_cols:
                     cells.extend([""] * (num_cols - len(cells)))
                 elif len(cells) > num_cols:
@@ -257,17 +348,16 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 table_rows.append(cells)
                 i += 1
 
-            # Record table with a placeholder newline
             para_start = offset
             all_tables.append(TableData(
                 rows=table_rows,
                 num_rows=len(table_rows),
                 num_cols=num_cols,
                 plain_text_offset=offset,
+                removed_tabs_before=removed_tabs,
             ))
             plain_parts.append("\n")
             offset += 1
-
             all_styles.append(StyleRange(
                 start=para_start, end=offset,
                 style={"namedStyleType": "NORMAL_TEXT"},
@@ -279,135 +369,83 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         heading_m = _HEADING_RE.match(line)
         if heading_m:
             level = len(heading_m.group(1))
-            content = heading_m.group(2)
-            inline_text, inline_styles = _parse_inline(content)
-
-            para_start = offset
-            plain_parts.append(inline_text)
-            offset += len(inline_text)
-
-            # Shift inline styles
-            for s in inline_styles:
-                all_styles.append(StyleRange(
-                    start=s.start + para_start,
-                    end=s.end + para_start,
-                    style=s.style, type=s.type,
-                ))
-
-            # Add newline
-            plain_parts.append("\n")
-            offset += 1
-
-            # Record heading style for this paragraph
-            all_styles.append(StyleRange(
-                start=para_start, end=offset,
-                style={"namedStyleType": f"HEADING_{level}"},
-                type="paragraph_style",
-            ))
-
+            inline_text, inline_styles = _parse_inline(heading_m.group(2))
+            emit_paragraph(
+                inline_text, inline_styles,
+                {"namedStyleType": f"HEADING_{level}"},
+            )
             i += 1
             continue
 
-        # Bullet list item
+        # Horizontal rule (--- / *** / ___) — an empty paragraph with a
+        # bottom border (the Docs API has no direct horizontal-rule insert).
+        if _HR_RE.match(line):
+            emit_paragraph("", [], {
+                "namedStyleType": "NORMAL_TEXT",
+                "borderBottom": {
+                    "color": {"color": {"rgbColor": {
+                        "red": 0.5, "green": 0.5, "blue": 0.5,
+                    }}},
+                    "width": {"magnitude": 1, "unit": "PT"},
+                    "padding": {"magnitude": 1, "unit": "PT"},
+                    "dashStyle": "SOLID",
+                },
+            })
+            i += 1
+            continue
+
+        # Blockquote — render as an indented normal paragraph.
+        quote_m = _BLOCKQUOTE_RE.match(line)
+        if quote_m:
+            inline_text, inline_styles = _parse_inline(quote_m.group(1))
+            indent = {"magnitude": _QUOTE_INDENT_PT, "unit": "PT"}
+            emit_paragraph(inline_text, inline_styles, {
+                "namedStyleType": "NORMAL_TEXT",
+                "indentStart": indent,
+                "indentFirstLine": indent,
+            })
+            i += 1
+            continue
+
+        # Bullet list item (indent-aware)
         bullet_m = _BULLET_RE.match(line)
         if bullet_m:
-            content = bullet_m.group(1)
-            inline_text, inline_styles = _parse_inline(content)
-
-            para_start = offset
-            plain_parts.append(inline_text)
-            offset += len(inline_text)
-
-            for s in inline_styles:
-                all_styles.append(StyleRange(
-                    start=s.start + para_start,
-                    end=s.end + para_start,
-                    style=s.style, type=s.type,
-                ))
-
-            plain_parts.append("\n")
-            offset += 1
-
-            all_styles.append(StyleRange(
-                start=para_start, end=offset,
-                style={"namedStyleType": "NORMAL_TEXT"},
-                type="paragraph_style",
-            ))
-            all_styles.append(StyleRange(
-                start=para_start, end=offset,
-                style={"bulletPreset": "BULLET_DISC_CIRCLE_SQUARE"},
-                type="bullets",
-            ))
-
+            inline_text, inline_styles = _parse_inline(bullet_m.group(2))
+            emit_paragraph(
+                inline_text, inline_styles,
+                {"namedStyleType": "NORMAL_TEXT"},
+                bullet_preset="BULLET_DISC_CIRCLE_SQUARE",
+                leading_tabs=_list_level(bullet_m.group(1)),
+            )
             i += 1
             continue
 
-        # Numbered list item
+        # Numbered list item (indent-aware)
         numbered_m = _NUMBERED_RE.match(line)
         if numbered_m:
-            content = numbered_m.group(1)
-            inline_text, inline_styles = _parse_inline(content)
-
-            para_start = offset
-            plain_parts.append(inline_text)
-            offset += len(inline_text)
-
-            for s in inline_styles:
-                all_styles.append(StyleRange(
-                    start=s.start + para_start,
-                    end=s.end + para_start,
-                    style=s.style, type=s.type,
-                ))
-
-            plain_parts.append("\n")
-            offset += 1
-
-            all_styles.append(StyleRange(
-                start=para_start, end=offset,
-                style={"namedStyleType": "NORMAL_TEXT"},
-                type="paragraph_style",
-            ))
-            all_styles.append(StyleRange(
-                start=para_start, end=offset,
-                style={"bulletPreset": "NUMBERED_DECIMAL_ALPHA_ROMAN"},
-                type="bullets",
-            ))
-
+            inline_text, inline_styles = _parse_inline(numbered_m.group(2))
+            emit_paragraph(
+                inline_text, inline_styles,
+                {"namedStyleType": "NORMAL_TEXT"},
+                bullet_preset="NUMBERED_DECIMAL_ALPHA_ROMAN",
+                leading_tabs=_list_level(numbered_m.group(1)),
+            )
             i += 1
             continue
 
-        # Normal paragraph line
+        # Normal paragraph line. Explicit NORMAL_TEXT so inserted paragraphs
+        # don't inherit the style of the paragraph at the insertion point.
         inline_text, inline_styles = _parse_inline(line)
-
-        para_start = offset
-        plain_parts.append(inline_text)
-        offset += len(inline_text)
-
-        for s in inline_styles:
-            all_styles.append(StyleRange(
-                start=s.start + para_start,
-                end=s.end + para_start,
-                style=s.style, type=s.type,
-            ))
-
-        plain_parts.append("\n")
-        offset += 1
-
-        # Explicit NORMAL_TEXT so inserted paragraphs don't inherit
-        # the style of the paragraph at the insertion point.
-        all_styles.append(StyleRange(
-            start=para_start, end=offset,
-            style={"namedStyleType": "NORMAL_TEXT"},
-            type="paragraph_style",
-        ))
-
+        emit_paragraph(
+            inline_text, inline_styles, {"namedStyleType": "NORMAL_TEXT"},
+        )
         i += 1
 
-    plain_text = "".join(plain_parts)
     return ParsedMarkdown(
-        plain_text=plain_text,
+        plain_text="".join(plain_parts),
         styles=all_styles,
         tables=all_tables,
+        removed_tabs=removed_tabs,
     )
 
 
@@ -431,7 +469,6 @@ def to_docs_requests(
 
     requests: list[dict] = []
 
-    # Helper to build location/range dicts with optional tabId
     def _location(index: int) -> dict:
         loc = {"index": index}
         if tab_id:
@@ -444,7 +481,7 @@ def to_docs_requests(
             r["tabId"] = tab_id
         return r
 
-    # 1. Insert the plain text
+    # 1. Insert the plain text.
     requests.append({
         "insertText": {
             "location": _location(insert_index),
@@ -452,56 +489,61 @@ def to_docs_requests(
         }
     })
 
-    # Paragraph-level requests (named styles, bullets) MUST be applied
-    # before character-level (text style) requests. Applying a
-    # `namedStyleType` re-resolves a run's direct character formatting and
-    # clears any bold/italic already set, so text styles must come last to
-    # win. (Links survive a named-style reset, which is why earlier the bug
-    # only manifested for bold/italic.)
-
-    # 2. Apply paragraph styles (headings, NORMAL_TEXT)
+    # 2. Paragraph styles (named styles, indents, borders). Applied before text
+    #    styles because a `namedStyleType` re-resolves a run's direct character
+    #    formatting and would clear bold/italic set afterwards.
     for sr in parsed.styles:
         if sr.type == "paragraph_style":
             requests.append({
                 "updateParagraphStyle": {
                     "range": _range(
-                        sr.start + insert_index,
-                        sr.end + insert_index,
+                        sr.start + insert_index, sr.end + insert_index,
                     ),
                     "paragraphStyle": sr.style,
-                    "fields": "namedStyleType",
+                    "fields": _paragraph_style_fields(sr.style),
                 }
             })
 
-    # 3. Apply bullet styles (after paragraph styles)
-    for sr in parsed.styles:
-        if sr.type == "bullets":
-            requests.append({
-                "createParagraphBullets": {
-                    "range": _range(
-                        sr.start + insert_index,
-                        sr.end + insert_index,
-                    ),
-                    "bulletPreset": sr.style["bulletPreset"],
-                }
-            })
-
-    # 4. Apply text styles last (bold, italic, code, link) so they are not
-    #    clobbered by the paragraph-style requests above.
+    # 3. Text styles (bold, italic, strikethrough, code, link). After paragraph
+    #    styles so they are not clobbered; before bullets so they are already
+    #    attached to their runs when bullet creation removes leading tabs.
     for sr in parsed.styles:
         if sr.type == "text_style":
-            # Build the fields mask from the style keys
-            fields = _text_style_fields(sr.style)
             requests.append({
                 "updateTextStyle": {
                     "range": _range(
-                        sr.start + insert_index,
-                        sr.end + insert_index,
+                        sr.start + insert_index, sr.end + insert_index,
                     ),
                     "textStyle": sr.style,
-                    "fields": fields,
+                    "fields": _text_style_fields(sr.style),
                 }
             })
+
+    # 4. Bullets last, in FORWARD document order. Two forces:
+    #    - createParagraphBullets counts and REMOVES the leading tabs that
+    #      encode nesting level, shifting all later indices left.
+    #    - ordered lists only number continuously (1, 2, 3) when each item is
+    #      created after the one above it — reverse order makes each item start
+    #      its own list at 1 (and can drop bullets entirely).
+    #    So process top-to-bottom and subtract the tabs that earlier items in
+    #    this same batch have already removed.
+    text = parsed.plain_text
+    removed = 0
+    bullet_ranges = [sr for sr in parsed.styles if sr.type == "bullets"]
+    for sr in sorted(bullet_ranges, key=lambda s: s.start):
+        leading = 0
+        while sr.start + leading < len(text) and text[sr.start + leading] == "\t":
+            leading += 1
+        requests.append({
+            "createParagraphBullets": {
+                "range": _range(
+                    sr.start + insert_index - removed,
+                    sr.end + insert_index - removed,
+                ),
+                "bulletPreset": sr.style["bulletPreset"],
+            }
+        })
+        removed += leading
 
     return requests
 
@@ -514,8 +556,25 @@ def _text_style_fields(style: dict) -> str:
             parts.append("bold")
         elif key == "italic":
             parts.append("italic")
+        elif key == "strikethrough":
+            parts.append("strikethrough")
         elif key == "weightedFontFamily":
             parts.append("weightedFontFamily")
         elif key == "link":
             parts.append("link")
     return ",".join(parts)
+
+
+# ParagraphStyle keys this module emits, each a valid Docs API field name.
+_PARAGRAPH_STYLE_FIELDS = frozenset({
+    "namedStyleType", "indentStart", "indentFirstLine", "borderBottom",
+})
+
+
+def _paragraph_style_fields(style: dict) -> str:
+    """Build the fields mask string for updateParagraphStyle.
+
+    Whitelisted (rather than ``",".join(style.keys())``) so an unexpected key
+    can't produce a malformed field mask — mirrors ``_text_style_fields``.
+    """
+    return ",".join(k for k in style if k in _PARAGRAPH_STYLE_FIELDS)

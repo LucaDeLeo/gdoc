@@ -543,52 +543,67 @@ def _insert_table(
         if not cell_indices:
             return
 
-        # Step 3: Insert text into cells (reverse order)
+        # Parse each cell's markdown to plain text + inline styles, once.
+        from gdoc.mdparse import StyleRange, _parse_inline, _text_style_fields
+
+        parsed_cells: dict[tuple[int, int], tuple[str, list]] = {}
+        for r_idx, row in enumerate(cell_indices):
+            for c_idx in range(len(row)):
+                raw = ""
+                if r_idx < len(table.rows) and c_idx < len(table.rows[r_idx]):
+                    raw = table.rows[r_idx][c_idx]
+                parsed_cells[(r_idx, c_idx)] = (
+                    _parse_inline(raw) if raw else ("", [])
+                )
+
+        # Step 3: Insert cell plain text (reverse order, so the original cell
+        # indices stay valid — inserting at a higher index never shifts a
+        # lower one).
         text_requests: list[dict] = []
         for r_idx in range(len(cell_indices) - 1, -1, -1):
             row = cell_indices[r_idx]
             for c_idx in range(len(row) - 1, -1, -1):
-                cell_text = ""
-                if r_idx < len(table.rows):
-                    row_data = table.rows[r_idx]
-                    if c_idx < len(row_data):
-                        cell_text = row_data[c_idx]
-                if cell_text:
+                plain, _ = parsed_cells[(r_idx, c_idx)]
+                if plain:
                     cell_location = {"index": row[c_idx]}
                     if tab_id:
                         cell_location["tabId"] = tab_id
                     text_requests.append({
                         "insertText": {
                             "location": cell_location,
-                            "text": cell_text,
+                            "text": plain,
                         }
                     })
 
-        # Bold the header row (row 0). Indices must account for
-        # shifts from earlier columns' insertions (processed right-to-
-        # left, so col 0's insert shifts col 1+).
-        if cell_indices and table.rows:
-            row = cell_indices[0]
-            shift = 0
+        # Apply inline styles (plus bold for the whole header row) in forward
+        # index order. Each cell's final position is its original index plus the
+        # total length of all earlier (lower-index) cells already inserted.
+        shift = 0
+        for r_idx in range(len(cell_indices)):
+            row = cell_indices[r_idx]
             for c_idx in range(len(row)):
-                cell_text = ""
-                if c_idx < len(table.rows[0]):
-                    cell_text = table.rows[0][c_idx]
-                if cell_text:
-                    bold_range = {
-                        "startIndex": row[c_idx] + shift,
-                        "endIndex": row[c_idx] + shift + len(cell_text),
+                plain, cell_styles = parsed_cells[(r_idx, c_idx)]
+                cell_styles = list(cell_styles)
+                if r_idx == 0 and plain:
+                    cell_styles.append(StyleRange(
+                        0, len(plain), {"bold": True}, "text_style",
+                    ))
+                base = row[c_idx] + shift
+                for s in cell_styles:
+                    style_range = {
+                        "startIndex": base + s.start,
+                        "endIndex": base + s.end,
                     }
                     if tab_id:
-                        bold_range["tabId"] = tab_id
+                        style_range["tabId"] = tab_id
                     text_requests.append({
                         "updateTextStyle": {
-                            "range": bold_range,
-                            "textStyle": {"bold": True},
-                            "fields": "bold",
+                            "range": style_range,
+                            "textStyle": s.style,
+                            "fields": _text_style_fields(s.style),
                         }
                     })
-                shift += len(cell_text)
+                shift += len(plain)
 
         if text_requests:
             service.documents().batchUpdate(
@@ -931,10 +946,17 @@ def insert_markdown_into_tab(
 
     parsed = parse_markdown(markdown)
 
-    # Strip trailing \n \u2014 the existing paragraph already owns one.
-    # Without this, every insert leaves an extra blank line behind.
-    if parsed.plain_text.endswith("\n"):
-        old_len = len(parsed.plain_text)
+    # Strip trailing \n \u2014 the existing paragraph already owns one. Without
+    # this, every insert leaves an extra blank line behind. But skip the strip
+    # when the last paragraph is a horizontal rule (an intentionally-empty
+    # paragraph whose border is lost if its only character is removed).
+    old_len = len(parsed.plain_text)
+    last_is_hr = any(
+        s.type == "paragraph_style" and s.end == old_len
+        and "borderBottom" in s.style
+        for s in parsed.styles
+    )
+    if parsed.plain_text.endswith("\n") and not last_is_hr:
         parsed.plain_text = parsed.plain_text[:-1]
         for s in parsed.styles:
             if s.end == old_len:
@@ -969,9 +991,12 @@ def insert_markdown_into_tab(
 
     if parsed.tables:
         for table in reversed(parsed.tables):
+            # Subtract leading list-indent tabs that createParagraphBullets
+            # removed before this table, shifting its real position left.
             _insert_table(
                 doc_id,
-                insert_index + table.plain_text_offset,
+                insert_index + table.plain_text_offset
+                - table.removed_tabs_before,
                 table,
                 tab_id=tab_id,
             )
@@ -1010,11 +1035,17 @@ def replace_formatted(
 
     parsed = parse_markdown(new_markdown)
 
-    # Strip trailing \n \u2014 the existing paragraph in the document
-    # already has one.  Without this, every replacement inserts an
-    # extra paragraph break.
-    if parsed.plain_text.endswith("\n"):
-        old_len = len(parsed.plain_text)
+    # Strip trailing \n \u2014 the existing paragraph in the document already has
+    # one.  Without this, every replacement inserts an extra paragraph break.
+    # But skip the strip when the last paragraph is a horizontal rule (an
+    # intentionally-empty paragraph whose border is lost if stripped).
+    old_len = len(parsed.plain_text)
+    last_is_hr = any(
+        s.type == "paragraph_style" and s.end == old_len
+        and "borderBottom" in s.style
+        for s in parsed.styles
+    )
+    if parsed.plain_text.endswith("\n") and not last_is_hr:
         parsed.plain_text = parsed.plain_text[:-1]
         for s in parsed.styles:
             if s.end == old_len:
@@ -1082,7 +1113,11 @@ def replace_formatted(
             sorted_matches[0]["endIndex"] - sorted_matches[0]["startIndex"]
             if sorted_matches else 0
         )
-        delta = len(parsed.plain_text) - match_len
+        # createParagraphBullets removes the nested-list indent tabs during
+        # the main batch, so each match grows the doc by the post-removal
+        # length, not len(plain_text).
+        effective_len = len(parsed.plain_text) - parsed.removed_tabs
+        delta = effective_len - match_len
         # Matches are sorted descending by startIndex; iterate in
         # that same order so higher positions are cleaned first.
         # Within one batchUpdate, deletions at higher indices
@@ -1092,7 +1127,7 @@ def replace_formatted(
             # by `delta` chars during the main replacement.
             adjusted_pos = (
                 match["startIndex"]
-                + len(parsed.plain_text)
+                + effective_len
                 + (n - 1 - j) * delta
             )
             reqs = _build_cleanup_requests(fetch_body, adjusted_pos, tab_id)
@@ -1108,7 +1143,10 @@ def replace_formatted(
             for table in reversed(parsed.tables):
                 for j, match in enumerate(sorted_matches):
                     shift = (n - 1 - j) * delta
-                    idx = match["startIndex"] + table.plain_text_offset + shift
+                    idx = (
+                        match["startIndex"] + table.plain_text_offset
+                        - table.removed_tabs_before + shift
+                    )
                     _insert_table(doc_id, idx, table, tab_id=tab_id)
 
         return len(sorted_matches)
