@@ -5,6 +5,7 @@ import os
 import sys
 
 from gdoc import __version__
+from gdoc.revdiff import DEFAULT_CONTEXT, DEFAULT_MIN_COMMON
 from gdoc.util import SPREADSHEET_MIME, AuthError, GdocError
 
 
@@ -105,6 +106,10 @@ def _cat_sheet(args, doc_id: str, change_info) -> int:
     """Spreadsheet branch of `gdoc cat`: print cell values."""
     if getattr(args, "comments", False):
         raise GdocError("--comments is not supported for spreadsheets", exit_code=3)
+    if getattr(args, "revision", None):
+        raise GdocError(
+            "--revision is not supported for spreadsheets", exit_code=3,
+        )
 
     quiet = getattr(args, "quiet", False)
     tab = getattr(args, "tab", None)
@@ -176,6 +181,81 @@ def _cat_sheet(args, doc_id: str, change_info) -> int:
     return 0
 
 
+def _format_local_time(iso: str) -> str:
+    """Format an RFC3339 UTC timestamp as local 'YYYY-MM-DD HH:MM'."""
+    from datetime import datetime
+
+    try:
+        parsed = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso
+    return parsed.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _resolve_revision(doc_id: str, selector: str) -> dict:
+    """Resolve a REV selector to a revision dict (one revisions.list call)."""
+    from gdoc.api.revisions import list_revisions
+    from gdoc.revdiff import resolve_selector
+
+    return resolve_selector(list_revisions(doc_id), selector)
+
+
+def cmd_revisions(args) -> int:
+    """Handler for `gdoc revisions`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    limit = getattr(args, "limit", 0)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.revisions import list_revisions
+    revisions = list_revisions(doc_id)
+    if limit and limit > 0:
+        revisions = revisions[-limit:]
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        items = [
+            {
+                "id": r.get("id"),
+                "modifiedTime": r.get("modifiedTime", ""),
+                "lastModifyingUser": r.get("lastModifyingUser", {}),
+                "keepForever": r.get("keepForever", False),
+                "exportLinks": r.get("exportLinks", {}),
+            }
+            for r in revisions
+        ]
+        print(format_json(revisions=items))
+    elif mode == "plain":
+        for r in revisions:
+            author = (r.get("lastModifyingUser") or {}).get("displayName", "")
+            keep = "true" if r.get("keepForever") else "false"
+            print(f"{r.get('id')}\t{r.get('modifiedTime', '')}\t{author}\t{keep}")
+    elif not revisions:
+        print("No revisions retained.")
+    else:
+        for r in revisions:
+            author = (r.get("lastModifyingUser") or {}).get("displayName", "?")
+            if mode == "verbose":
+                when = r.get("modifiedTime", "")
+            else:
+                when = _format_local_time(r.get("modifiedTime", ""))
+            keep = "  [keep]" if r.get("keepForever") else ""
+            print(f"{r.get('id', '?'):>6}  {when}  {author}{keep}")
+        if mode == "verbose":
+            print(f"\n({len(revisions)} revisions, oldest first; "
+                  "non-pinned revisions are pruned by Google over time)")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="revisions", quiet=quiet,
+    )
+
+    return 0
+
+
 def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -196,6 +276,14 @@ def cmd_cat(args) -> int:
     max_bytes = getattr(args, "max_bytes", 0)
     no_images = getattr(args, "no_images", False)
 
+    revision = getattr(args, "revision", None)
+    if revision and (tab or all_tabs or getattr(args, "comments", False)):
+        raise GdocError(
+            "--revision cannot be combined with "
+            "--tab/--all-tabs/--comments",
+            exit_code=3,
+        )
+
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
 
@@ -204,6 +292,38 @@ def cmd_cat(args) -> int:
 
     if getattr(args, "range", None):
         raise GdocError("--range is only supported for spreadsheets", exit_code=3)
+
+    if revision:
+        from gdoc.api.revisions import export_revision
+
+        rev = _resolve_revision(doc_id, revision)
+        mime = (
+            "text/plain" if getattr(args, "plain", False)
+            else "text/markdown"
+        )
+        content = export_revision(
+            doc_id, rev["id"], mime_type=mime,
+            export_links=rev.get("exportLinks"),
+        )
+        if no_images:
+            from gdoc.mdimport import strip_images
+            content = strip_images(content)
+        content = _truncate_bytes(content, max_bytes)
+
+        from gdoc.format import format_json, get_output_mode
+        if get_output_mode(args) == "json":
+            print(format_json(revision=rev["id"], content=content))
+        else:
+            print(content, end="")
+
+        # A past revision is not the current content: record the
+        # interaction without advancing the read baseline that the
+        # write-conflict check relies on.
+        from gdoc.state import update_state_after_command
+        update_state_after_command(
+            doc_id, change_info, command="cat-revision", quiet=quiet,
+        )
+        return 0
 
     if tab or all_tabs:
         from gdoc.api.docs import get_document_tabs, get_tab_text
@@ -1264,6 +1384,7 @@ def cmd_pull(args) -> int:
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     file_path = args.file
+    revision = getattr(args, "revision", None)
 
     # Pre-flight awareness check
     from gdoc.notify import pre_flight
@@ -1271,17 +1392,34 @@ def cmd_pull(args) -> int:
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
 
-    # Export doc as markdown
+    # Export doc (or one past revision) as markdown
     from gdoc.api.drive import export_doc, get_file_info
 
-    markdown = export_doc(doc_id, mime_type="text/markdown")
+    rev = None
+    if revision:
+        from gdoc.api.revisions import export_revision
+
+        rev = _resolve_revision(doc_id, revision)
+        markdown = export_revision(
+            doc_id, rev["id"], mime_type="text/markdown",
+            export_links=rev.get("exportLinks"),
+        )
+    else:
+        markdown = export_doc(doc_id, mime_type="text/markdown")
     metadata = get_file_info(doc_id)
     title = metadata.get("name", "")
 
-    # Add frontmatter and write to local file
+    # Add frontmatter and write to local file. Revision pulls
+    # deliberately omit the `gdoc:` key — push and the sync hooks key
+    # off it, and silently pushing a stale revision over the live doc
+    # is a footgun.
     from gdoc.frontmatter import add_frontmatter
 
-    content = add_frontmatter(markdown, {"gdoc": doc_id, "title": title})
+    if rev is not None:
+        front = {"source": doc_id, "revision": rev["id"], "title": title}
+    else:
+        front = {"gdoc": doc_id, "title": title}
+    content = add_frontmatter(markdown, front)
 
     try:
         with open(file_path, "w") as f:
@@ -1292,27 +1430,40 @@ def cmd_pull(args) -> int:
     # Output
     from gdoc.format import get_output_mode, format_json
 
+    rev_label = f" @ rev {rev['id']}" if rev is not None else ""
     mode = get_output_mode(args)
     if mode == "json":
-        print(format_json(pulled=True, title=title, file=file_path))
+        if rev is not None:
+            print(format_json(
+                pulled=True, title=title, file=file_path,
+                revision=rev["id"],
+            ))
+        else:
+            print(format_json(pulled=True, title=title, file=file_path))
     elif mode == "plain":
         print(f"path\t{file_path}")
+        if rev is not None:
+            print(f"revision\t{rev['id']}")
     elif mode == "verbose":
-        print(f'Pulled: "{title}"')
+        print(f'Pulled: "{title}"{rev_label}')
         print(f"File: {file_path}")
         print(f"Doc ID: {doc_id}")
     else:
-        print(f'OK pulled "{title}" -> {file_path}')
+        print(f'OK pulled "{title}"{rev_label} -> {file_path}')
 
-    # Update state (pull is a read command)
+    # Update state (pull is a read command; a revision pull is not a
+    # read of the current content, so it must not advance the read
+    # baseline used by write-conflict checks)
     command_version = metadata.get("version")
     if command_version is not None:
         command_version = int(command_version)
     from gdoc.state import update_state_after_command
 
     update_state_after_command(
-        doc_id, change_info, command="pull",
-        quiet=quiet, command_version=command_version,
+        doc_id, change_info,
+        command="pull" if rev is None else "pull-revision",
+        quiet=quiet,
+        command_version=command_version if rev is None else None,
     )
 
     return 0
@@ -1341,6 +1492,15 @@ def cmd_push(args) -> int:
 
     metadata, body = parse_frontmatter(content)
     if "gdoc" not in metadata:
+        # pull --revision writes both keys; requiring both avoids
+        # false positives on unrelated files with a `source:` key
+        if "revision" in metadata and "source" in metadata:
+            raise GdocError(
+                "this file was pulled from a past revision and is not "
+                "pushable (it would overwrite the live doc with stale "
+                "content). Use 'gdoc pull' for an editable copy.",
+                exit_code=3,
+            )
         raise GdocError(
             "no gdoc frontmatter found. Use 'gdoc pull' first.",
             exit_code=3,
@@ -1543,13 +1703,223 @@ def cmd_pull_hook(args) -> int:
     return 0
 
 
+def _resolve_diff_format(args) -> str:
+    """Resolve the effective renderer for a revision diff."""
+    import sys
+
+    from gdoc.format import get_output_mode
+
+    fmt = getattr(args, "format", "auto")
+    out = getattr(args, "out", None)
+    mode = get_output_mode(args)
+
+    if fmt == "auto" and out:
+        if out.endswith(".html"):
+            fmt = "html"
+        else:
+            raise GdocError(
+                f"cannot infer format from {out!r} (expected .html); "
+                "pass --format",
+                exit_code=3,
+            )
+    # --json composes with the html artifact (JSON write confirmation
+    # on stdout) but not with the terminal formats
+    if mode == "json" and fmt in ("color", "plain"):
+        raise GdocError(
+            f"--json and --format {fmt} are mutually exclusive",
+            exit_code=3,
+        )
+    if mode == "plain" and fmt == "color":
+        raise GdocError(
+            "--plain and --format color are mutually exclusive",
+            exit_code=3,
+        )
+    if out and fmt != "html":
+        raise GdocError(
+            "--out requires --format html "
+            "(redirect stdout for text formats)",
+            exit_code=3,
+        )
+    if fmt == "auto":
+        if mode == "json":
+            return "json"
+        if mode == "plain":
+            return "plain"
+        return "color" if sys.stdout.isatty() else "plain"
+    return fmt
+
+
+def _diff_revisions(args, doc_id: str) -> int:
+    """Revision-vs-revision diff (`gdoc diff --rev` / `--since`)."""
+    quiet = getattr(args, "quiet", False)
+    since = getattr(args, "since", None)
+    min_common = getattr(args, "min_common", DEFAULT_MIN_COMMON)
+    context = getattr(args, "context", DEFAULT_CONTEXT)
+    with_comments = getattr(args, "with_comments", False)
+
+    fmt = _resolve_diff_format(args)
+    if with_comments and fmt in ("color", "plain"):
+        raise GdocError(
+            "--with-comments requires --format html or json "
+            "(the terminal renderer does not show comments)",
+            exit_code=3,
+        )
+
+    from gdoc.revdiff import (
+        build_diff_model,
+        hunk_changed,
+        parse_rev_range,
+        parse_timestamp,
+        resolve_at_timestamp,
+        resolve_selector,
+    )
+
+    # Validate selector syntax before any API call
+    if since:
+        parse_timestamp(since)
+        old_sel = new_sel = None
+    else:
+        old_sel, new_sel = parse_rev_range(args.rev)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.revisions import export_revision, list_revisions
+
+    revisions = list_revisions(doc_id)
+    if since:
+        old_rev = resolve_at_timestamp(revisions, since)
+        new_rev = resolve_selector(revisions, "latest")
+    else:
+        old_rev = resolve_selector(revisions, old_sel)
+        new_rev = resolve_selector(revisions, new_sel)
+
+    from gdoc.api.drive import get_file_info
+    metadata = get_file_info(doc_id)
+    doc_name = metadata.get("name", doc_id)
+
+    old_md = export_revision(
+        doc_id, old_rev["id"], export_links=old_rev.get("exportLinks"),
+    )
+    new_md = export_revision(
+        doc_id, new_rev["id"], export_links=new_rev.get("exportLinks"),
+    )
+
+    model = build_diff_model(
+        doc_id, doc_name, old_rev, new_rev, old_md, new_md,
+        min_common=min_common,
+    )
+
+    if with_comments:
+        from gdoc.api.comments import list_comments
+        from gdoc.revdiff import attach_comments
+
+        comments = list_comments(doc_id, include_anchor=True)
+        model["comments"] = attach_comments(model["hunks"], comments)
+
+    changed = sum(1 for h in model["hunks"] if hunk_changed(h))
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+
+    if fmt == "json":
+        print(format_json(identical=changed == 0, **model))
+    elif fmt == "html":
+        out_path = getattr(args, "out", None) or "gdoc-diff.html"
+        from gdoc.diffrender import render_html
+        try:
+            with open(out_path, "w") as f:
+                f.write(render_html(model, context=context))
+        except OSError as e:
+            raise GdocError(f"cannot write file: {e}", exit_code=3) from e
+
+        inline = None
+        anchored = ""
+        if "comments" in model:
+            inline = sum(
+                1 for c in model["comments"] if c["hunk"] is not None
+            )
+            anchored = f", {inline}/{len(model['comments'])} comments anchored"
+        if mode == "json":
+            confirmation = {
+                "path": out_path,
+                "format": fmt,
+                "changed": changed,
+                "identical": changed == 0,
+            }
+            if inline is not None:
+                confirmation["comments"] = len(model["comments"])
+                confirmation["comments_anchored"] = inline
+            print(format_json(**confirmation))
+        elif mode == "plain":
+            print(f"path\t{out_path}")
+            print(f"changed\t{changed}")
+        elif mode == "verbose":
+            print(f"Wrote: {out_path}")
+            print(f"Revisions: {old_rev['id']} -> {new_rev['id']}")
+            print(f"Changed hunks: {changed}{anchored}")
+        else:
+            print(f"OK wrote {out_path} ({changed} changed hunks{anchored})")
+    elif changed == 0:
+        print(f"OK identical (rev {old_rev['id']} -> rev {new_rev['id']})")
+    else:
+        from gdoc.diffrender import render_terminal
+        print(
+            render_terminal(model, color=fmt == "color", context=context),
+            end="",
+        )
+
+    # Update state (version already fetched via get_file_info above)
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="diff", quiet=quiet,
+        command_version=metadata.get("version"),
+    )
+
+    return 1 if changed else 0
+
+
 def cmd_diff(args) -> int:
     """Handler for `gdoc diff`."""
     import difflib
     import os
 
     doc_id = _resolve_doc_id(args.doc)
-    file_path = args.file
+    file_path = getattr(args, "file", None)
+    rev = getattr(args, "rev", None)
+    since = getattr(args, "since", None)
+
+    if rev and since:
+        raise GdocError(
+            "--rev and --since are mutually exclusive", exit_code=3,
+        )
+    if file_path and (rev or since):
+        raise GdocError(
+            "FILE and --rev/--since are mutually exclusive (a file diff "
+            "always compares against the current document)",
+            exit_code=3,
+        )
+    if rev or since:
+        return _diff_revisions(args, doc_id)
+    if not file_path:
+        raise GdocError(
+            "nothing to compare: pass a local FILE, or --rev/--since "
+            "to diff revisions",
+            exit_code=3,
+        )
+    if (
+        getattr(args, "format", "auto") != "auto"
+        or getattr(args, "out", None)
+        or getattr(args, "with_comments", False)
+    ):
+        raise GdocError(
+            "--format/--out/--with-comments apply to revision diffs "
+            "(--rev/--since), not file diffs",
+            exit_code=3,
+        )
+
     quiet = getattr(args, "quiet", False)
     use_plain = getattr(args, "plain", False)
 
@@ -2445,9 +2815,35 @@ def build_parser() -> GdocArgumentParser:
         help="Strip image references from output",
     )
     cat_p.add_argument(
+        "--revision", metavar="REV",
+        help="Export a past revision (id, latest, head, prev, head~N, "
+             "or @ISO; see `gdoc revisions`)",
+    )
+    cat_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     cat_p.set_defaults(func=cmd_cat)
+
+    # revisions
+    revisions_p = sub.add_parser(
+        "revisions", parents=[output_parent], aliases=["history"],
+        help="List retained revisions (milestones) of a doc",
+        description=(
+            "List the milestone revisions the Drive API retains for a "
+            "document, oldest first. Revision ids are sparse, and "
+            "non-pinned revisions are pruned by Google over time. "
+            "Revision ids feed `cat/pull --revision` and `diff --rev`."
+        ),
+    )
+    revisions_p.add_argument("doc", help="Document ID or URL")
+    revisions_p.add_argument(
+        "--limit", type=int, default=0, metavar="N",
+        help="Show only the N most recent revisions",
+    )
+    revisions_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    revisions_p.set_defaults(func=cmd_revisions)
 
     # tabs
     tabs_p = sub.add_parser(
@@ -2574,9 +2970,59 @@ def build_parser() -> GdocArgumentParser:
     edit_p.set_defaults(func=cmd_edit)
 
     # diff
-    diff_p = sub.add_parser("diff", parents=[output_parent], help="Compare doc with local file")
+    diff_p = sub.add_parser(
+        "diff", parents=[output_parent],
+        help="Compare doc with a local file, or between revisions",
+        description=(
+            "With FILE, compare the current document against a local "
+            "file (unified diff). With --rev or --since, compare two "
+            "retained revisions with a readable coalesced word-diff. "
+            "REV selectors: a revision id, latest/head, prev, head~N "
+            "(by list position), or @ISO (last revision at/before the "
+            "timestamp)."
+        ),
+    )
     diff_p.add_argument("doc", help="Document ID or URL")
-    diff_p.add_argument("file", help="Local file to compare against")
+    diff_p.add_argument(
+        "file", nargs="?",
+        help="Local file to compare against (current doc vs file)",
+    )
+    diff_p.add_argument(
+        "--rev", metavar="REV[..REV]",
+        help="Diff revisions: A..B compares two; a single selector "
+             "compares it against the latest",
+    )
+    diff_p.add_argument(
+        "--since", metavar="ISO",
+        help="Diff the last revision at/before this timestamp against "
+             "the latest (what changed since I last read it)",
+    )
+    diff_p.add_argument(
+        "--format",
+        choices=["auto", "color", "plain", "json", "html"],
+        default="auto",
+        help="Revision-diff renderer (default: color on a TTY, else "
+             "plain; html writes a styled artifact)",
+    )
+    diff_p.add_argument(
+        "--out", metavar="PATH",
+        help="Output path for --format html (default: gdoc-diff.html)",
+    )
+    diff_p.add_argument(
+        "--with-comments", action="store_true",
+        help="Anchor the doc's comment threads into html/json "
+             "revision diffs",
+    )
+    diff_p.add_argument(
+        "--min-common", type=int, default=DEFAULT_MIN_COMMON, metavar="N",
+        help="Coalescing threshold for word-diff chunks "
+             f"(higher = chunkier; default {DEFAULT_MIN_COMMON})",
+    )
+    diff_p.add_argument(
+        "--context", type=int, default=DEFAULT_CONTEXT, metavar="N",
+        help="Unchanged blocks kept around each change "
+             f"(default {DEFAULT_CONTEXT})",
+    )
     diff_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
@@ -2646,6 +3092,12 @@ def build_parser() -> GdocArgumentParser:
     pull_p = sub.add_parser("pull", parents=[output_parent], help="Download doc as local markdown")
     pull_p.add_argument("doc", help="Document ID or URL")
     pull_p.add_argument("file", help="Local file to write")
+    pull_p.add_argument(
+        "--revision", metavar="REV",
+        help="Download a past revision (id, latest, head, prev, head~N, "
+             "or @ISO); the file gets `source:`/`revision:` frontmatter "
+             "instead of `gdoc:` so it cannot be pushed back by accident",
+    )
     pull_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
