@@ -1,8 +1,5 @@
 """Tests for markdown image extraction."""
 
-import os
-from unittest.mock import patch
-
 import pytest
 
 from gdoc.mdimport import extract_images, strip_images
@@ -135,3 +132,17 @@ class TestStripImages:
         url = "https://lh7-us.googleusercontent.com/docs/ABC123_very_long_token_here"
         content = f"Before\n\n![screenshot]({url})\n\nAfter"
         assert strip_images(content) == "Before\n\nAfter"
+
+    def test_strips_reference_style_refs_and_defs(self):
+        # The Drive markdown export emits reference-style images
+        content = (
+            "Intro ![][image1] text\n"
+            "\n"
+            "[image1]: <data:image/png;base64,AAAA>\n"
+            "\n"
+            "After\n"
+        )
+        result = strip_images(content)
+        assert "![][image1]" not in result
+        assert "[image1]:" not in result
+        assert "Intro" in result and "After" in result

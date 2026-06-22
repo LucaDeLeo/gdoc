@@ -39,6 +39,15 @@ gdoc info DOC_ID                             # Title, owner, last modified, word
 gdoc share DOC_ID EMAIL [--role reader|writer|commenter]
 gdoc new "Document Title" [--folder FOLDER_ID]  # Create blank doc
 gdoc cp DOC_ID "Copy Title"                  # Duplicate a doc
+
+gdoc revisions DOC_ID                        # List retained revisions (alias: history)
+gdoc cat DOC_ID --revision REV               # Export a past revision
+gdoc pull DOC_ID FILE --revision REV         # Download a past revision (not pushable)
+gdoc diff DOC_ID --rev prev                  # Word-diff the most recent edit
+gdoc diff DOC_ID --rev 69..190               # Word-diff two revisions
+gdoc diff DOC_ID --since 2026-06-10T19:00Z   # What changed since a timestamp
+gdoc diff DOC_ID --rev A..B --format html --with-comments --out review.html
+# REV selectors: id | latest | head | prev | head~N | @ISO
 ```
 
 ### `cat --comments` (Annotated View)
@@ -332,13 +341,15 @@ ERR: multiple matches (3 found). Use --all to replace all occurrences.
 ```
 
 Exit codes: 0=success, 1=API error, 2=auth error, 3=usage error
+(`diff` is the exception: exit 1 means the contents differ, like `diff(1)`)
 
 ## Dependencies
 
-```
+```text
 google-api-python-client    # Drive + Docs API
 google-auth-oauthlib        # OAuth2 flow
 google-auth-httplib2        # HTTP transport
+requests                    # revision exportLinks downloads
 ```
 
 No other dependencies. Intentionally minimal.

@@ -1,5 +1,7 @@
 """Tests for the frontmatter parser."""
 
+import pytest
+
 from gdoc.frontmatter import add_frontmatter, parse_frontmatter
 
 
@@ -108,6 +110,29 @@ class TestAddFrontmatter:
     def test_empty_metadata(self):
         result = add_frontmatter("Body", {})
         assert result == "---\n---\nBody"
+
+    def test_newlines_in_values_flattened(self):
+        # A newline in a value (e.g. a doc title) must not be able to
+        # inject extra frontmatter keys like `gdoc:`.
+        result = add_frontmatter(
+            "Body", {"title": "Line one\ngdoc: evil-id"},
+        )
+        metadata, _ = parse_frontmatter(result)
+        assert "gdoc" not in metadata
+        assert metadata["title"] == "Line one gdoc: evil-id"
+
+    @pytest.mark.parametrize(
+        "sep",
+        ["\n", "\r\n", "\r", "\x0b", "\x0c", "\x85", "\u2028", "\u2029"],
+    )
+    def test_every_line_separator_flattened(self, sep):
+        # parse_frontmatter uses splitlines(), so every separator it
+        # honors must be neutralized on write, not just \r and \n
+        result = add_frontmatter(
+            "Body", {"title": f"Line one{sep}gdoc: evil-id"},
+        )
+        metadata, _ = parse_frontmatter(result)
+        assert "gdoc" not in metadata
 
     def test_roundtrip(self):
         original_body = "# Document\n\nContent here.\n"
