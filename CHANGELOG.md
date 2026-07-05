@@ -24,6 +24,13 @@ All notable changes to `gdoc` are documented here. This project follows
   `set_page_mode` Docs API helper
   (`updateDocumentStyle` → `documentFormat.documentMode`).
 
+### Fixed
+- **`new --file` with images seeded a stale version baseline.** Image inserts
+  advance the doc's Drive version after creation, but state was seeded with
+  the create-time version, so the next command reported a spurious
+  "doc edited" change. The version is now re-read (best-effort) after image
+  insertion, matching the page-mode write's baseline handling.
+
 ## [0.12.0] — 2026-06-22
 
 ### Added

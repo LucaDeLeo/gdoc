@@ -138,6 +138,7 @@ class TestNewFromFile:
 
 
 class TestNewFromFileWithImages:
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 7})
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.docs.get_docs_service")
     @patch("gdoc.api.drive.delete_file")
@@ -155,6 +156,7 @@ class TestNewFromFileWithImages:
         mock_delete,
         mock_docs_svc,
         _update,
+        _version,
         tmp_path,
         capsys,
     ):
@@ -194,6 +196,7 @@ class TestNewFromFileWithImages:
         # Verify temp image cleanup
         mock_delete.assert_called_once_with("temp123")
 
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 7})
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.docs.get_docs_service")
     @patch("gdoc.api.docs.get_document")
@@ -207,6 +210,7 @@ class TestNewFromFileWithImages:
         mock_get_doc,
         mock_docs_svc,
         _update,
+        _version,
         tmp_path,
         capsys,
     ):
@@ -248,3 +252,108 @@ class TestNewFromFileWithImages:
                     assert uri == "https://example.com/img.png"
                     found_insert = True
         assert found_insert
+
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 9})
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document")
+    @patch(
+        "gdoc.api.drive.create_doc_from_markdown",
+        return_value=API_RESULT,
+    )
+    def test_state_seeded_with_post_image_version(
+        self,
+        mock_create,
+        mock_get_doc,
+        mock_docs_svc,
+        mock_update,
+        mock_version,
+        tmp_path,
+        capsys,
+    ):
+        """Image inserts bump the Drive version; state must be seeded with
+        the post-insert version, not the create-time one, or the next
+        command reports a spurious "doc edited" change."""
+        md = tmp_path / "doc.md"
+        md.write_text("![alt](https://example.com/img.png)\n")
+
+        mock_get_doc.return_value = {
+            "body": {
+                "content": [{
+                    "paragraph": {
+                        "elements": [{
+                            "startIndex": 1,
+                            "textRun": {
+                                "content": "<<IMG_0>>\n",
+                            },
+                        }],
+                    },
+                }],
+            },
+        }
+        mock_svc = MagicMock()
+        mock_docs_svc.return_value = mock_svc
+        mock_svc.documents().batchUpdate().execute.return_value = {}
+
+        args = _make_args(file_path=str(md))
+        rc = cmd_new(args)
+        assert rc == 0
+
+        mock_version.assert_called_once_with("new_doc_123")
+        mock_update.assert_called_once_with(
+            "new_doc_123", None, command="new",
+            quiet=False, command_version=9,
+        )
+
+    @patch(
+        "gdoc.api.drive.get_file_version",
+        side_effect=RuntimeError("boom"),
+    )
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document")
+    @patch(
+        "gdoc.api.drive.create_doc_from_markdown",
+        return_value=API_RESULT,
+    )
+    def test_image_version_refresh_failure_is_nonfatal(
+        self,
+        mock_create,
+        mock_get_doc,
+        mock_docs_svc,
+        mock_update,
+        _version,
+        tmp_path,
+        capsys,
+    ):
+        """A failed post-image version re-read falls back to the create-time
+        version instead of aborting — the doc already exists."""
+        md = tmp_path / "doc.md"
+        md.write_text("![alt](https://example.com/img.png)\n")
+
+        mock_get_doc.return_value = {
+            "body": {
+                "content": [{
+                    "paragraph": {
+                        "elements": [{
+                            "startIndex": 1,
+                            "textRun": {
+                                "content": "<<IMG_0>>\n",
+                            },
+                        }],
+                    },
+                }],
+            },
+        }
+        mock_svc = MagicMock()
+        mock_docs_svc.return_value = mock_svc
+        mock_svc.documents().batchUpdate().execute.return_value = {}
+
+        args = _make_args(file_path=str(md))
+        rc = cmd_new(args)
+        assert rc == 0
+
+        mock_update.assert_called_once_with(
+            "new_doc_123", None, command="new",
+            quiet=False, command_version=1,
+        )

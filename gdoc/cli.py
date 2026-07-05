@@ -2449,6 +2449,17 @@ def _cmd_new_from_file(args) -> int:
         _insert_images(new_id, images)
 
     new_version = _apply_page_mode(args, new_id)
+    if new_version is None and images:
+        # Image inserts advanced the Drive version past the create-time value
+        # (a page-mode write already folds in a refresh); re-read it
+        # best-effort so state isn't seeded with a stale baseline that makes
+        # the next command report a spurious "doc edited" change.
+        from gdoc.api.drive import get_file_version
+
+        try:
+            new_version = get_file_version(new_id).get("version")
+        except Exception:
+            new_version = None
     if new_version is not None:
         version = new_version
 
