@@ -4,6 +4,26 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-07-04
+
+### Added
+- **Configurable page mode for `gdoc new`.** New docs can be created pageless
+  or paged. Drive's markdown importer always produces *paged* docs (it ignores
+  the account's pageless default), so docs made via `new --file` came out
+  paged regardless of preference. `gdoc new` now applies an explicit page mode
+  after creating the doc: a `--pageless` / `--paged` flag overrides a persisted
+  default set with `gdoc config --page-mode {pageless,paged}` (stored in
+  `~/.config/gdoc/config.json`). With **no flag and no configured default**,
+  the doc is left exactly as the create path produced it — a blank `gdoc new`
+  still inherits the account's pageless/paged default, and markdown imports
+  stay paged — so the feature never silently overrides an account preference.
+  Applying the mode is best-effort — a failure (of any kind) warns on stderr
+  but does not fail the creation, and the write's version bump is folded into
+  the doc's state baseline so it doesn't surface as a spurious change. Adds a
+  `config` subcommand (honors `--json`/`--verbose`/`--plain`) and the
+  `set_page_mode` Docs API helper
+  (`updateDocumentStyle` → `documentFormat.documentMode`).
+
 ## [0.12.0] — 2026-06-22
 
 ### Added

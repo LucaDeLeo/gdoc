@@ -78,6 +78,39 @@ def replace_all_text(
         _translate_http_error(e, doc_id)
 
 
+def set_page_mode(doc_id: str, pageless: bool) -> None:
+    """Set a document's page mode (pageless vs paged).
+
+    Writes ``documentStyle.documentFormat.documentMode`` via updateDocumentStyle.
+    Blank docs inherit the account's page-mode default, while markdown-imported
+    docs are always created paged; this makes the mode explicit either way.
+
+    Args:
+        doc_id: The document ID.
+        pageless: If True, set PAGELESS; otherwise PAGES (paged).
+    """
+    mode = "PAGELESS" if pageless else "PAGES"
+    try:
+        service = get_docs_service()
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "updateDocumentStyle": {
+                            "documentStyle": {
+                                "documentFormat": {"documentMode": mode},
+                            },
+                            "fields": "documentFormat.documentMode",
+                        }
+                    }
+                ]
+            },
+        ).execute()
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
 def _extract_paragraphs_text(content: list[dict]) -> str:
     """Extract concatenated text from body content paragraph elements."""
     parts = []

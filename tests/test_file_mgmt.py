@@ -11,6 +11,14 @@ from gdoc.notify import ChangeInfo
 from gdoc.util import AuthError, GdocError
 
 
+@pytest.fixture(autouse=True)
+def _stub_apply_page_mode(monkeypatch):
+    """cmd_new applies a page mode via a Docs API call; stub it here so these
+    behavior tests don't touch auth/network. Page-mode behavior is covered in
+    test_page_mode.py."""
+    monkeypatch.setattr("gdoc.cli._apply_page_mode", lambda *a, **k: None)
+
+
 def _make_args(command, **overrides):
     """Build a SimpleNamespace mimicking parsed args."""
     defaults = {

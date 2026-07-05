@@ -2448,6 +2448,10 @@ def _cmd_new_from_file(args) -> int:
     if images:
         _insert_images(new_id, images)
 
+    new_version = _apply_page_mode(args, new_id)
+    if new_version is not None:
+        version = new_version
+
     # Output
     from gdoc.format import format_json, get_output_mode
 
@@ -2540,6 +2544,77 @@ def _insert_images(doc_id: str, images) -> None:
                 pass
 
 
+def cmd_config(args) -> int:
+    """Handler for `gdoc config`."""
+    from gdoc.format import format_json, get_output_mode
+    from gdoc.util import get_default_page_mode, set_default_page_mode
+
+    mode = get_output_mode(args)
+    page_mode = getattr(args, "page_mode", None)
+    if page_mode:
+        set_default_page_mode(page_mode)
+        # Human confirmation to stderr; the value itself is echoed to stdout
+        # below (same as the GET path) so a script can capture what it set.
+        print(f"OK page_mode set to: {page_mode}", file=sys.stderr)
+        current = page_mode
+    else:
+        current = get_default_page_mode()
+
+    if mode == "json":
+        print(format_json(page_mode=current))
+    else:
+        # None = unset; the doc's mode is left to the create path.
+        print(f"page_mode\t{current or 'unset'}")
+    return 0
+
+
+def _apply_page_mode(args, doc_id: str) -> int | None:
+    """Set the page mode on a freshly created doc (best-effort).
+
+    Resolution order: --pageless/--paged flag, then the configured default
+    (`gdoc config --page-mode`). With no flag and no configured default the
+    doc is left exactly as the create path produced it — blank docs inherit
+    the account's page-mode default, markdown imports stay paged — and no API
+    call is made.
+
+    Returns the doc's post-update Drive version when a mode was actually
+    written (the write advances the version, so the caller must refresh its
+    state baseline or the next command reports a spurious "doc edited"
+    change), else None. A failure here is non-fatal — the doc already
+    exists — so it warns and returns None.
+    """
+    if getattr(args, "pageless", False):
+        pageless = True
+    elif getattr(args, "paged", False):
+        pageless = False
+    else:
+        from gdoc.util import get_default_page_mode
+
+        mode = get_default_page_mode()
+        if mode is None:
+            return None  # no explicit preference — leave the doc untouched
+        pageless = mode == "pageless"
+
+    from gdoc.api.docs import set_page_mode
+
+    try:
+        set_page_mode(doc_id, pageless)
+    except Exception as e:  # best-effort: the doc is already created
+        print(f"WARN: could not set page mode: {e}", file=sys.stderr)
+        return None
+
+    # The updateDocumentStyle write bumped the Drive version; re-read it so the
+    # caller seeds state with the post-write baseline. Best-effort: a failed
+    # refresh just falls back to the create-time version (a stale banner is
+    # better than aborting after the doc exists).
+    from gdoc.api.drive import get_file_version
+
+    try:
+        return get_file_version(doc_id).get("version")
+    except Exception:
+        return None
+
+
 def cmd_new(args) -> int:
     """Handler for `gdoc new`."""
     if getattr(args, "file_path", None):
@@ -2556,6 +2631,10 @@ def cmd_new(args) -> int:
     new_id = result["id"]
     version = result.get("version")
     url = result.get("webViewLink", "")
+
+    new_version = _apply_page_mode(args, new_id)
+    if new_version is not None:
+        version = new_version
 
     from gdoc.format import get_output_mode, format_json
 
@@ -2764,6 +2843,18 @@ def build_parser() -> GdocArgumentParser:
         help="Workspace domain hint for the Google account chooser (e.g. company.com)",
     )
     auth_p.set_defaults(func=cmd_auth)
+
+    # config
+    config_p = sub.add_parser(
+        "config", parents=[output_parent],
+        help="Get or set gdoc configuration",
+    )
+    config_p.add_argument(
+        "--page-mode", choices=["pageless", "paged"],
+        help="Default page mode for docs created by `gdoc new` "
+        "(unset = inherit the account default; markdown imports stay paged)",
+    )
+    config_p.set_defaults(func=cmd_config)
 
     # ls
     ls_p = sub.add_parser("ls", parents=[output_parent], help="List files in Drive")
@@ -3252,6 +3343,15 @@ def build_parser() -> GdocArgumentParser:
     new_p.add_argument(
         "--file", dest="file_path",
         help="Create doc from a local markdown file",
+    )
+    new_mode = new_p.add_mutually_exclusive_group()
+    new_mode.add_argument(
+        "--pageless", action="store_true",
+        help="Create pageless (overrides the configured default)",
+    )
+    new_mode.add_argument(
+        "--paged", action="store_true",
+        help="Create paged (overrides the configured default)",
     )
     new_p.set_defaults(func=cmd_new)
 

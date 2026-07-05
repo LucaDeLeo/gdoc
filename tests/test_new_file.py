@@ -10,6 +10,14 @@ from gdoc.cli import cmd_new
 from gdoc.util import GdocError
 
 
+@pytest.fixture(autouse=True)
+def _stub_apply_page_mode(monkeypatch):
+    """cmd_new applies a page mode via a Docs API call; stub it here so these
+    behavior tests don't touch auth/network. Page-mode behavior is covered in
+    test_page_mode.py."""
+    monkeypatch.setattr("gdoc.cli._apply_page_mode", lambda *a, **k: None)
+
+
 API_RESULT = {
     "id": "new_doc_123",
     "name": "From File",
