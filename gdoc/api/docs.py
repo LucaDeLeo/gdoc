@@ -135,17 +135,36 @@ def count_document_tabs(doc_id: str) -> int:
     return len(flatten_tabs(doc.get("tabs", [])))
 
 
-def get_tab_text(tab: dict) -> str:
-    """Extract plain text from a tab's body content.
+def get_tab_text(tab: dict, markdown: bool = False) -> str:
+    """Extract text from a tab's body content.
 
-    Handles paragraphs and tables (tab-joined cells per row).
+    Handles paragraphs and tables (tab-joined cells per row). When
+    *markdown* is True, heading paragraphs are prefixed with the matching
+    number of ``#`` marks so a per-tab export round-trips through
+    ``insert``/``edit`` without silently demoting headings to plain
+    paragraphs. The whole-doc Drive export already emits ``#`` headings;
+    this brings the per-tab path (which builds markdown by hand) into
+    line. With *markdown* False (the ``--plain`` path) text is returned
+    verbatim -- the matchable form ``gdoc edit`` searches against.
     """
     body = tab.get("body", {})
     content = body.get("content", [])
     parts = []
     for element in content:
         if "paragraph" in element:
-            parts.append(_extract_paragraphs_text([element]))
+            text = _extract_paragraphs_text([element])
+            if markdown and text.strip():
+                named_style = (
+                    element["paragraph"]
+                    .get("paragraphStyle", {})
+                    .get("namedStyleType", "")
+                )
+                level = _HEADING_LEVELS.get(named_style)
+                if level:
+                    # lstrip leading spaces/tabs so the "# " prefix can't
+                    # stack a widening gap across read->write round-trips.
+                    text = "#" * level + " " + text.lstrip(" \t")
+            parts.append(text)
         elif "table" in element:
             table = element["table"]
             for row in table.get("tableRows", []):
