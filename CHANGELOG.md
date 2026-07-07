@@ -4,6 +4,19 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Per-tab `cat` now preserves headings.** `cat --tab` / `cat --all-tabs`
+  built their output from a plain-text extractor that ignored
+  `paragraphStyle`, so headings came back as plain paragraphs (the whole-doc
+  Drive export already emitted `#` headings). A read-modify-write cycle
+  through `cat --tab` → `edit`/`insert` therefore silently demoted the
+  previous heading to body text. `get_tab_text(..., markdown=True)` now
+  prefixes heading paragraphs with the matching number of `#` marks, and
+  default `cat --tab`/`--all-tabs` request it. `cat --plain --tab` is
+  unchanged — it still returns the verbatim text `edit` matches against.
+
 ## [0.12.0] — 2026-06-22
 
 ### Added

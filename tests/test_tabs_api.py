@@ -260,6 +260,42 @@ class TestGetTabText:
         ]}}
         assert get_tab_text(tab) == ""
 
+    def _heading(self, text, style):
+        return {"paragraph": {
+            "paragraphStyle": {"namedStyleType": style},
+            "elements": [{"textRun": {"content": text}}],
+        }}
+
+    def test_heading_plain_by_default(self):
+        # Default (markdown=False) is the matchable form gdoc edit uses:
+        # no "#" prefix, so a heading reads back as its bare text.
+        tab = {"body": {"content": [self._heading("Title\n", "HEADING_1")]}}
+        assert get_tab_text(tab) == "Title\n"
+
+    def test_heading_markdown_prefix_levels(self):
+        tab = {"body": {"content": [
+            self._heading("One\n", "HEADING_1"),
+            self._heading("Two\n", "HEADING_2"),
+            self._heading("Six\n", "HEADING_6"),
+        ]}}
+        assert get_tab_text(tab, markdown=True) == "# One\n## Two\n###### Six\n"
+
+    def test_heading_markdown_leaves_normal_text(self):
+        tab = {"body": {"content": [
+            self._heading("Body\n", "NORMAL_TEXT"),
+        ]}}
+        assert get_tab_text(tab, markdown=True) == "Body\n"
+
+    def test_heading_markdown_collapses_leading_space(self):
+        # A stored leading space must not stack into "##  Two"; lstrip
+        # keeps the round-trip stable.
+        tab = {"body": {"content": [self._heading(" Two\n", "HEADING_2")]}}
+        assert get_tab_text(tab, markdown=True) == "## Two\n"
+
+    def test_heading_markdown_ignores_blank_heading(self):
+        tab = {"body": {"content": [self._heading("\n", "HEADING_1")]}}
+        assert get_tab_text(tab, markdown=True) == "\n"
+
 
 class TestResolveTab:
     def _tabs(self):
