@@ -16,6 +16,15 @@ All notable changes to `gdoc` are documented here. This project follows
   prefixes heading paragraphs with the matching number of `#` marks, and
   default `cat --tab`/`--all-tabs` request it. `cat --plain --tab` is
   unchanged — it still returns the verbatim text `edit` matches against.
+- **Per-tab `cat` now renders inline formatting and lists.** Extending the
+  markdown export above, `cat --tab` / `cat --all-tabs` now emit `**bold**`,
+  `*italic*`, `~~strikethrough~~`, `[text](url)` links, and bullet/numbered
+  lists (nested, two spaces per level, ordered items counted 1, 2, 3 —
+  ordered vs bullet read from the tab's list glyph map). Previously these all
+  flattened to plain text on read even though `insert`/`write --tab` could
+  produce them. `cat --plain --tab` remains verbatim. Not yet rendered:
+  inline code, blockquotes, and markdown tables (tables still export as
+  tab-separated cells).
 
 ## [0.12.0] — 2026-06-22
 
