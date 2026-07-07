@@ -105,6 +105,9 @@ def flatten_tabs(tabs: list[dict], _level: int = 0) -> list[dict]:
             "index": props.get("index", 0),
             "nesting_level": _level,
             "body": doc_tab.get("body", {}),
+            # listId -> list definition; needed to tell ordered from bullet
+            # lists when rendering a tab as markdown.
+            "lists": doc_tab.get("lists", {}),
         })
         for child in tab.get("childTabs", []):
             result.extend(flatten_tabs([child], _level=_level + 1))
@@ -135,37 +138,139 @@ def count_document_tabs(doc_id: str) -> int:
     return len(flatten_tabs(doc.get("tabs", [])))
 
 
+def _list_is_ordered(lists: dict, list_id: str, level: int) -> bool:
+    """Whether a list level is ordered (numbered) rather than a bullet.
+
+    A Docs list level carries a ``glyphType`` (DECIMAL/ALPHA/ROMAN/...) when
+    ordered and a ``glyphSymbol`` (a bullet character) when not.
+    """
+    levels = (
+        lists.get(list_id, {})
+        .get("listProperties", {})
+        .get("nestingLevels", [])
+    )
+    if 0 <= level < len(levels):
+        glyph_type = levels[level].get("glyphType", "")
+        return bool(glyph_type) and glyph_type != "GLYPH_TYPE_UNSPECIFIED"
+    return False
+
+
+def _style_run_markdown(content: str, style: dict) -> str:
+    """Wrap one text run's content in markdown emphasis / link syntax.
+
+    Surrounding spaces and the trailing paragraph newline are kept outside
+    the markers (``** bold **`` is not valid markdown), so only the visible
+    core is wrapped. Emphasis nests as ``***bold italic***`` and
+    ``~~struck~~``; a link becomes ``[text](url)``.
+    """
+    newline = ""
+    text = content
+    if text.endswith("\n"):
+        text, newline = text[:-1], "\n"
+    if not text.strip():
+        return content
+    lead = text[: len(text) - len(text.lstrip(" "))]
+    trail = text[len(text.rstrip(" ")):]
+    core = text.strip(" ")
+
+    link = (style.get("link") or {}).get("url")
+    if link:
+        core = f"[{core}]({link})"
+    else:
+        if style.get("bold") and style.get("italic"):
+            core = f"***{core}***"
+        elif style.get("bold"):
+            core = f"**{core}**"
+        elif style.get("italic"):
+            core = f"*{core}*"
+        if style.get("strikethrough"):
+            core = f"~~{core}~~"
+    return f"{lead}{core}{trail}{newline}"
+
+
+def _runs_markdown(elements: list[dict]) -> str:
+    """Join a paragraph's text runs, styling each as markdown."""
+    parts = []
+    for pe in elements:
+        text_run = pe.get("textRun")
+        if text_run is None:
+            continue
+        content = text_run.get("content", "")
+        if content:
+            parts.append(
+                _style_run_markdown(content, text_run.get("textStyle", {}))
+            )
+    return "".join(parts)
+
+
+def _paragraph_markdown(
+    paragraph: dict, lists: dict, ordered_counters: dict
+) -> str:
+    """Render one paragraph as markdown: headings, list items, inline styles.
+
+    ``ordered_counters`` (nesting level -> running ordinal) is carried across
+    paragraphs by the caller so numbered lists count 1, 2, 3.
+    """
+    text = _runs_markdown(paragraph.get("elements", []))
+    newline = ""
+    if text.endswith("\n"):
+        text, newline = text[:-1], "\n"
+
+    bullet = paragraph.get("bullet")
+    if bullet is not None and text.strip():
+        level = bullet.get("nestingLevel", 0)
+        # A shallower item ends any deeper numbering.
+        for deeper in [lvl for lvl in ordered_counters if lvl > level]:
+            del ordered_counters[deeper]
+        indent = "  " * level  # 2 columns per level (matches the md parser)
+        if _list_is_ordered(lists, bullet.get("listId", ""), level):
+            ordered_counters[level] = ordered_counters.get(level, 0) + 1
+            marker = f"{ordered_counters[level]}."
+        else:
+            ordered_counters.pop(level, None)
+            marker = "-"
+        item = text.lstrip(" \t")
+        return f"{indent}{marker} {item}{newline}"
+
+    # Not a list item: numbering restarts at the next list.
+    ordered_counters.clear()
+
+    named_style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
+    level = _HEADING_LEVELS.get(named_style)
+    if level and text.strip():
+        # lstrip leading spaces/tabs so the "# " prefix can't stack a
+        # widening gap across read->write round-trips.
+        return "#" * level + " " + text.lstrip(" \t") + newline
+    return text + newline
+
+
 def get_tab_text(tab: dict, markdown: bool = False) -> str:
     """Extract text from a tab's body content.
 
     Handles paragraphs and tables (tab-joined cells per row). When
-    *markdown* is True, heading paragraphs are prefixed with the matching
-    number of ``#`` marks so a per-tab export round-trips through
-    ``insert``/``edit`` without silently demoting headings to plain
-    paragraphs. The whole-doc Drive export already emits ``#`` headings;
-    this brings the per-tab path (which builds markdown by hand) into
-    line. With *markdown* False (the ``--plain`` path) text is returned
-    verbatim -- the matchable form ``gdoc edit`` searches against.
+    *markdown* is True, the per-tab export (which builds markdown by hand,
+    unlike the whole-doc Drive export) renders headings (``#``), bullet and
+    numbered lists (nested, 2 spaces per level), and inline emphasis
+    (``**bold**``, ``*italic*``, ``~~strike~~``) and ``[links](url)``, so a
+    tab round-trips through ``insert``/``edit`` without losing structure.
+    With *markdown* False (the ``--plain`` path) text is returned verbatim
+    -- the matchable form ``gdoc edit`` searches against.
     """
     body = tab.get("body", {})
     content = body.get("content", [])
+    lists = tab.get("lists", {}) if markdown else {}
     parts = []
+    ordered_counters: dict = {}
     for element in content:
         if "paragraph" in element:
-            text = _extract_paragraphs_text([element])
-            if markdown and text.strip():
-                named_style = (
-                    element["paragraph"]
-                    .get("paragraphStyle", {})
-                    .get("namedStyleType", "")
-                )
-                level = _HEADING_LEVELS.get(named_style)
-                if level:
-                    # lstrip leading spaces/tabs so the "# " prefix can't
-                    # stack a widening gap across read->write round-trips.
-                    text = "#" * level + " " + text.lstrip(" \t")
-            parts.append(text)
+            if not markdown:
+                parts.append(_extract_paragraphs_text([element]))
+                continue
+            parts.append(
+                _paragraph_markdown(element["paragraph"], lists, ordered_counters)
+            )
         elif "table" in element:
+            ordered_counters.clear()
             table = element["table"]
             for row in table.get("tableRows", []):
                 cells = []

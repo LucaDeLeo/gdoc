@@ -60,7 +60,7 @@ class TestFlattenTabs:
         assert len(result) == 1
         assert result[0] == {
             "id": "t1", "title": "Tab 1", "index": 0,
-            "nesting_level": 0, "body": {"content": []},
+            "nesting_level": 0, "body": {"content": []}, "lists": {},
         }
 
     def test_multiple_tabs(self):
@@ -295,6 +295,109 @@ class TestGetTabText:
     def test_heading_markdown_ignores_blank_heading(self):
         tab = {"body": {"content": [self._heading("\n", "HEADING_1")]}}
         assert get_tab_text(tab, markdown=True) == "\n"
+
+
+def _run(text, **style):
+    return {"textRun": {"content": text, "textStyle": style}}
+
+
+def _para(*runs, style="NORMAL_TEXT", bullet=None):
+    p = {
+        "paragraphStyle": {"namedStyleType": style},
+        "elements": list(runs),
+    }
+    if bullet is not None:
+        p["bullet"] = bullet
+    return {"paragraph": p}
+
+
+class TestGetTabTextInlineMarkdown:
+    def test_bold(self):
+        tab = {"body": {"content": [_para(_run("hi "), _run("there\n", bold=True))]}}
+        assert get_tab_text(tab, markdown=True) == "hi **there**\n"
+
+    def test_italic(self):
+        tab = {"body": {"content": [_para(_run("a "), _run("b\n", italic=True))]}}
+        assert get_tab_text(tab, markdown=True) == "a *b*\n"
+
+    def test_bold_italic(self):
+        tab = {"body": {"content": [_para(_run("x\n", bold=True, italic=True))]}}
+        assert get_tab_text(tab, markdown=True) == "***x***\n"
+
+    def test_strikethrough(self):
+        tab = {"body": {"content": [_para(_run("gone\n", strikethrough=True))]}}
+        assert get_tab_text(tab, markdown=True) == "~~gone~~\n"
+
+    def test_link_uses_url_not_underline(self):
+        # Docs auto-underlines links; the underline flag must not leak out.
+        run = _run("site\n", underline=True, link={"url": "https://e.com"})
+        tab = {"body": {"content": [_para(run)]}}
+        assert get_tab_text(tab, markdown=True) == "[site](https://e.com)\n"
+
+    def test_spaces_kept_outside_markers(self):
+        tab = {"body": {"content": [_para(_run(" b \n", bold=True))]}}
+        assert get_tab_text(tab, markdown=True) == " **b** \n"
+
+    def test_plain_mode_ignores_styles(self):
+        tab = {"body": {"content": [_para(_run("x\n", bold=True))]}}
+        assert get_tab_text(tab) == "x\n"
+
+
+class TestGetTabTextListMarkdown:
+    _BULLETS = {"L1": {"listProperties": {"nestingLevels": [
+        {"glyphSymbol": "●"}, {"glyphSymbol": "○"},
+    ]}}}
+    _ORDERED = {"L2": {"listProperties": {"nestingLevels": [
+        {"glyphType": "DECIMAL"}, {"glyphType": "ALPHA"},
+    ]}}}
+
+    def test_bullet_list(self):
+        tab = {"lists": self._BULLETS, "body": {"content": [
+            _para(_run("one\n"), bullet={"listId": "L1"}),
+            _para(_run("two\n"), bullet={"listId": "L1"}),
+        ]}}
+        assert get_tab_text(tab, markdown=True) == "- one\n- two\n"
+
+    def test_ordered_list_counts(self):
+        tab = {"lists": self._ORDERED, "body": {"content": [
+            _para(_run("a\n"), bullet={"listId": "L2"}),
+            _para(_run("b\n"), bullet={"listId": "L2"}),
+            _para(_run("c\n"), bullet={"listId": "L2"}),
+        ]}}
+        assert get_tab_text(tab, markdown=True) == "1. a\n2. b\n3. c\n"
+
+    def test_nested_bullet_indented(self):
+        tab = {"lists": self._BULLETS, "body": {"content": [
+            _para(_run("top\n"), bullet={"listId": "L1", "nestingLevel": 0}),
+            _para(_run("sub\n"), bullet={"listId": "L1", "nestingLevel": 1}),
+        ]}}
+        assert get_tab_text(tab, markdown=True) == "- top\n  - sub\n"
+
+    def test_ordered_numbering_resets_after_break(self):
+        tab = {"lists": self._ORDERED, "body": {"content": [
+            _para(_run("a\n"), bullet={"listId": "L2"}),
+            _para(_run("b\n"), bullet={"listId": "L2"}),
+            _para(_run("\n")),  # blank paragraph ends the list
+            _para(_run("a\n"), bullet={"listId": "L2"}),
+        ]}}
+        assert get_tab_text(tab, markdown=True) == "1. a\n2. b\n\n1. a\n"
+
+    def test_nested_ordered_counters_independent(self):
+        tab = {"lists": self._ORDERED, "body": {"content": [
+            _para(_run("one\n"), bullet={"listId": "L2", "nestingLevel": 0}),
+            _para(_run("a\n"), bullet={"listId": "L2", "nestingLevel": 1}),
+            _para(_run("b\n"), bullet={"listId": "L2", "nestingLevel": 1}),
+            _para(_run("two\n"), bullet={"listId": "L2", "nestingLevel": 0}),
+        ]}}
+        assert get_tab_text(tab, markdown=True) == (
+            "1. one\n  1. a\n  2. b\n2. two\n"
+        )
+
+    def test_lists_ignored_in_plain_mode(self):
+        tab = {"lists": self._BULLETS, "body": {"content": [
+            _para(_run("one\n"), bullet={"listId": "L1"}),
+        ]}}
+        assert get_tab_text(tab) == "one\n"
 
 
 class TestResolveTab:
