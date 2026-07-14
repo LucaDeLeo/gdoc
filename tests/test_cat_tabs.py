@@ -145,6 +145,32 @@ class TestCatTab:
             mock_export.assert_not_called()
         mock_tabs.assert_called_once_with("abc123")
 
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text", return_value="text\n")
+    @patch("gdoc.api.docs.get_document_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_tab_default_requests_markdown(
+        self, _svc, mock_tabs, mock_text, _pf, _update,
+    ):
+        """Default --tab renders markdown so headings survive round-trips."""
+        mock_tabs.return_value = [_tab("t1", "Notes")]
+        cmd_cat(_make_args(tab="Notes"))
+        assert mock_text.call_args.kwargs.get("markdown") is True
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text", return_value="text\n")
+    @patch("gdoc.api.docs.get_document_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_tab_plain_requests_verbatim(
+        self, _svc, mock_tabs, mock_text, _pf, _update,
+    ):
+        """--plain --tab returns the verbatim, matchable text (no '#')."""
+        mock_tabs.return_value = [_tab("t1", "Notes")]
+        cmd_cat(_make_args(tab="Notes", plain=True))
+        assert mock_text.call_args.kwargs.get("markdown") is False
+
 
 class TestCatAllTabs:
     @patch("gdoc.state.update_state_after_command")

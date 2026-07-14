@@ -4,7 +4,7 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.13.0] — 2026-07-04
+## [0.13.0] — 2026-07-14
 
 ### Added
 - **Configurable page mode for `gdoc new`.** New docs can be created pageless
@@ -30,6 +30,28 @@ All notable changes to `gdoc` are documented here. This project follows
   the create-time version, so the next command reported a spurious
   "doc edited" change. The version is now re-read (best-effort) after image
   insertion, matching the page-mode write's baseline handling.
+
+## [0.12.1] — 2026-07-07
+
+### Fixed
+- **Per-tab `cat` now preserves headings.** `cat --tab` / `cat --all-tabs`
+  built their output from a plain-text extractor that ignored
+  `paragraphStyle`, so headings came back as plain paragraphs (the whole-doc
+  Drive export already emitted `#` headings). A read-modify-write cycle
+  through `cat --tab` → `edit`/`insert` therefore silently demoted the
+  previous heading to body text. `get_tab_text(..., markdown=True)` now
+  prefixes heading paragraphs with the matching number of `#` marks, and
+  default `cat --tab`/`--all-tabs` request it. `cat --plain --tab` is
+  unchanged — it still returns the verbatim text `edit` matches against.
+- **Per-tab `cat` now renders inline formatting and lists.** Extending the
+  markdown export above, `cat --tab` / `cat --all-tabs` now emit `**bold**`,
+  `*italic*`, `~~strikethrough~~`, `[text](url)` links, and bullet/numbered
+  lists (nested, two spaces per level, ordered items counted 1, 2, 3 —
+  ordered vs bullet read from the tab's list glyph map). Previously these all
+  flattened to plain text on read even though `insert`/`write --tab` could
+  produce them. `cat --plain --tab` remains verbatim. Not yet rendered:
+  inline code, blockquotes, and markdown tables (tables still export as
+  tab-separated cells).
 
 ## [0.12.0] — 2026-06-22
 

@@ -330,6 +330,10 @@ def cmd_cat(args) -> int:
 
         tabs = get_document_tabs(doc_id)
 
+        # Default view renders markdown (headings survive round-trips);
+        # --plain returns the verbatim text gdoc edit matches against.
+        want_md = not getattr(args, "plain", False)
+
         if tab:
             # Match by title (case-insensitive) first, then by ID
             match = None
@@ -344,7 +348,7 @@ def cmd_cat(args) -> int:
                         break
             if match is None:
                 raise GdocError(f"tab not found: {tab}", exit_code=3)
-            content = get_tab_text(match)
+            content = get_tab_text(match, markdown=want_md)
             if no_images:
                 from gdoc.mdimport import strip_images
                 content = strip_images(content)
@@ -361,7 +365,7 @@ def cmd_cat(args) -> int:
             parts = []
             for t in tabs:
                 parts.append(f"=== Tab: {t['title']} ===\n")
-                parts.append(get_tab_text(t))
+                parts.append(get_tab_text(t, markdown=want_md))
             content = "".join(parts)
             if no_images:
                 from gdoc.mdimport import strip_images
