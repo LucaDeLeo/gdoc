@@ -2862,12 +2862,13 @@ def build_parser() -> GdocArgumentParser:
     # config
     config_p = sub.add_parser(
         "config", parents=[output_parent],
-        help="Get or set gdoc configuration",
+        help="Get or set gdoc configuration (applies to all accounts)",
     )
     config_p.add_argument(
         "--page-mode", choices=["pageless", "paged"],
         help="Default page mode for docs created by `gdoc new` "
-        "(unset = inherit the account default; markdown imports stay paged)",
+        "(unset = inherit the account default; markdown imports stay paged; "
+        "applies to all accounts)",
     )
     config_p.set_defaults(func=cmd_config)
 
