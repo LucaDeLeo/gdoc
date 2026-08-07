@@ -1048,6 +1048,59 @@ def get_document_with_tabs(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
+def get_document_structure(
+    doc_id: str,
+    fields: str | None = None,
+    suggestions_view_mode: str | None = None,
+) -> dict:
+    """Fetch the raw documents.get JSON for native structure inspection.
+
+    Always requests includeTabsContent=True so every tab's body is
+    present. A fields mask is passed verbatim when given — note Google
+    rejects masks that recursively expand childTabs (repo issue #14).
+
+    Args:
+        doc_id: The document ID.
+        fields: Optional Docs API field mask.
+        suggestions_view_mode: Optional SuggestionsViewMode enum value
+            (e.g. PREVIEW_SUGGESTIONS_ACCEPTED). Changes returned content
+            and indexes.
+    """
+    kwargs: dict = {"documentId": doc_id, "includeTabsContent": True}
+    if fields:
+        kwargs["fields"] = fields
+    if suggestions_view_mode:
+        kwargs["suggestionsViewMode"] = suggestions_view_mode
+    try:
+        service = get_docs_service()
+        return service.documents().get(**kwargs).execute()
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def resolve_raw_tab(tabs: list[dict], tab_name: str) -> dict | None:
+    """Find a raw tab dict by title (case-insensitive) or tab ID.
+
+    Unlike resolve_tab (which returns a flattened summary), this returns
+    the tab's raw API dict — tabProperties, documentTab, childTabs —
+    searching the whole tree. Title matches win over ID matches,
+    mirroring resolve_tab. Returns None when nothing matches.
+    """
+    def walk(ts: list[dict]):
+        for t in ts:
+            yield t
+            yield from walk(t.get("childTabs", []))
+
+    for t in walk(tabs):
+        props = t.get("tabProperties", {})
+        if props.get("title", "").lower() == tab_name.lower():
+            return t
+    for t in walk(tabs):
+        if str(t.get("tabProperties", {}).get("tabId", "")) == tab_name:
+            return t
+    return None
+
+
 def add_tab(doc_id: str, title: str) -> dict:
     """Add a new tab to a document.
 
