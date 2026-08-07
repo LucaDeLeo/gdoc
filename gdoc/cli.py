@@ -2050,32 +2050,43 @@ def cmd_comments(args) -> int:
 def _try_anchored_comment(doc_id: str, text: str, quote: str) -> str:
     """Create a truly anchored comment via the Docs API preview, if possible.
 
-    Finds the first occurrence of *quote* in the document body (retrying
-    with typography folding) and anchors an insertComment request to that
-    range. Returns the new comment ID, or "" when the caller should fall
-    back to the Drive quotedFileContent path: quote text not found, or the
-    preview request unavailable (project not enrolled, comment-only access).
+    Searches every tab for the first occurrence of *quote* (exact match
+    across all tabs first, then retrying with typography folding) and
+    anchors an insertComment request to that range, pinned to the revision
+    that was searched. Returns the new comment ID, or "" when the caller
+    should fall back to the Drive quotedFileContent path: quote text not
+    found, or the preview request unavailable (project not enrolled,
+    comment-only access, or the doc changed since the read).
     """
     from gdoc.api.docs import (
         find_text_in_document,
-        get_document,
+        flatten_tabs,
+        get_document_with_tabs,
         insert_comment,
     )
     from gdoc.util import PreviewUnavailableError
 
-    document = get_document(doc_id)
-    matches = find_text_in_document(document, quote)
-    if not matches:
-        matches = find_text_in_document(document, quote, normalize=True)
-    if not matches:
-        return ""
-    try:
-        return insert_comment(
-            doc_id, text,
-            matches[0]["startIndex"], matches[0]["endIndex"],
-        )
-    except PreviewUnavailableError:
-        return ""
+    document = get_document_with_tabs(doc_id)
+    revision_id = document.get("revisionId", "")
+    tabs = flatten_tabs(document.get("tabs", []))
+    if not tabs:
+        tabs = [{"id": None, "body": document.get("body", {})}]
+    for normalize in (False, True):
+        for tab in tabs:
+            matches = find_text_in_document(
+                None, quote, body=tab["body"], normalize=normalize,
+            )
+            if not matches:
+                continue
+            try:
+                return insert_comment(
+                    doc_id, text,
+                    matches[0]["startIndex"], matches[0]["endIndex"],
+                    tab_id=tab["id"], revision_id=revision_id,
+                )
+            except PreviewUnavailableError:
+                return ""
+    return ""
 
 
 def cmd_comment(args) -> int:

@@ -14,7 +14,7 @@ import httplib2
 import pytest
 from googleapiclient.errors import HttpError
 
-from gdoc.api.docs import insert_comment
+from gdoc.api.docs import find_text_in_document, insert_comment
 from gdoc.cli import _try_anchored_comment, cmd_comment
 from gdoc.util import AuthError, GdocError, PreviewUnavailableError
 
@@ -65,6 +65,35 @@ class TestInsertComment:
                 }
             ]
         }
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_tab_id_and_revision_in_request(self, mock_svc):
+        service = _mock_docs_service(batch_response=_OK_RESPONSE)
+        mock_svc.return_value = service
+
+        insert_comment(
+            "doc1", "hello", 10, 25, tab_id="t2", revision_id="rev9",
+        )
+
+        body = service.documents.return_value.batchUpdate.call_args.kwargs[
+            "body"
+        ]
+        assert body["writeControl"] == {"requiredRevisionId": "rev9"}
+        assert body["requests"][0]["insertComment"]["range"] == {
+            "startIndex": 10, "endIndex": 25, "tabId": "t2",
+        }
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_revision_mismatch_400_raises_preview_unavailable(self, mock_svc):
+        content = (
+            b'{"error": {"code": 400, "message": "The provided revision ID '
+            b'does not match the latest revision of the document."}}'
+        )
+        mock_svc.return_value = _mock_docs_service(
+            batch_error=_http_error(400, content),
+        )
+        with pytest.raises(PreviewUnavailableError):
+            insert_comment("doc1", "hello", 10, 25, revision_id="rev9")
 
     @patch("gdoc.api.docs.get_docs_service")
     def test_unknown_name_400_raises_preview_unavailable(self, mock_svc):
@@ -148,34 +177,67 @@ class TestInsertComment:
             insert_comment("doc1", "hello", 10, 25)
 
 
-_DOC_WITH_TEXT = {
-    "body": {
-        "content": [
-            {
-                "paragraph": {
-                    "elements": [
-                        {
-                            "startIndex": 1,
-                            "textRun": {"content": "The quick brown fox\n"},
+def _tab(tab_id, text, start=1):
+    """Build a Docs API tab dict with one paragraph of text."""
+    return {
+        "tabProperties": {"tabId": tab_id, "title": tab_id, "index": 0},
+        "documentTab": {
+            "body": {
+                "content": [
+                    {
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "startIndex": start,
+                                    "textRun": {"content": text},
+                                }
+                            ]
                         }
-                    ]
-                }
+                    }
+                ]
             }
-        ]
+        },
     }
+
+
+_DOC_WITH_TABS = {
+    "revisionId": "rev1",
+    "tabs": [_tab("t1", "The quick brown fox\n")],
 }
 
 
 class TestTryAnchoredComment:
     @patch("gdoc.api.docs.insert_comment", return_value="c_anchor")
-    @patch("gdoc.api.docs.get_document", return_value=_DOC_WITH_TEXT)
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs", return_value=_DOC_WITH_TABS,
+    )
     def test_anchors_to_first_match(self, _get, mock_insert):
         result = _try_anchored_comment("doc1", "note", "quick brown")
         assert result == "c_anchor"
-        mock_insert.assert_called_once_with("doc1", "note", 5, 16)
+        mock_insert.assert_called_once_with(
+            "doc1", "note", 5, 16, tab_id="t1", revision_id="rev1",
+        )
+
+    @patch("gdoc.api.docs.insert_comment", return_value="c_anchor")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_finds_quote_in_second_tab(self, mock_get, mock_insert):
+        mock_get.return_value = {
+            "revisionId": "rev2",
+            "tabs": [
+                _tab("t1", "Nothing relevant here\n"),
+                _tab("t2", "The quick brown fox\n"),
+            ],
+        }
+        result = _try_anchored_comment("doc1", "note", "quick brown")
+        assert result == "c_anchor"
+        mock_insert.assert_called_once_with(
+            "doc1", "note", 5, 16, tab_id="t2", revision_id="rev2",
+        )
 
     @patch("gdoc.api.docs.insert_comment")
-    @patch("gdoc.api.docs.get_document", return_value=_DOC_WITH_TEXT)
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs", return_value=_DOC_WITH_TABS,
+    )
     def test_quote_not_found_returns_empty(self, _get, mock_insert):
         result = _try_anchored_comment("doc1", "note", "missing text")
         assert result == ""
@@ -185,32 +247,63 @@ class TestTryAnchoredComment:
         "gdoc.api.docs.insert_comment",
         side_effect=PreviewUnavailableError("not enrolled"),
     )
-    @patch("gdoc.api.docs.get_document", return_value=_DOC_WITH_TEXT)
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs", return_value=_DOC_WITH_TABS,
+    )
     def test_preview_unavailable_returns_empty(self, _get, _insert):
         assert _try_anchored_comment("doc1", "note", "quick brown") == ""
 
     @patch("gdoc.api.docs.insert_comment", return_value="c_anchor")
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_smart_quote_fallback_match(self, mock_get, mock_insert):
         # Doc has a curly apostrophe; the quote arg has a straight one.
         mock_get.return_value = {
-            "body": {
-                "content": [
-                    {
-                        "paragraph": {
-                            "elements": [
-                                {
-                                    "startIndex": 1,
-                                    "textRun": {"content": "it’s fine\n"},
-                                }
-                            ]
-                        }
-                    }
-                ]
-            }
+            "revisionId": "rev1",
+            "tabs": [_tab("t1", "it’s fine\n")],
         }
         result = _try_anchored_comment("doc1", "note", "it's fine")
         assert result == "c_anchor"
+
+
+class TestUtf16Offsets:
+    def test_match_after_emoji_uses_utf16_indices(self):
+        # 🚀 is one Python char but two UTF-16 code units — the Docs API
+        # index space. "quick" starts at 1 + 2 (emoji) + 1 (space) = 4.
+        body = {
+            "content": [
+                {
+                    "paragraph": {
+                        "elements": [
+                            {
+                                "startIndex": 1,
+                                "textRun": {"content": "🚀 quick\n"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        matches = find_text_in_document(None, "quick", body=body)
+        assert matches == [{"startIndex": 4, "endIndex": 9}]
+
+    def test_match_ending_in_emoji_widens_end_index(self):
+        body = {
+            "content": [
+                {
+                    "paragraph": {
+                        "elements": [
+                            {
+                                "startIndex": 1,
+                                "textRun": {"content": "go 🚀 now\n"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        matches = find_text_in_document(None, "go 🚀", body=body)
+        # 'g'=1 'o'=2 ' '=3, emoji occupies 4–5 → end index 6.
+        assert matches == [{"startIndex": 1, "endIndex": 6}]
 
 
 def _make_args(**overrides):

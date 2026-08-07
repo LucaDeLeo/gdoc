@@ -216,16 +216,20 @@ gdoc cat 1aBcDeFg...
 | `delete-comment DOC ID` | Delete a comment (`--force` to skip confirmation) |
 
 `comment --quote "some doc text"` anchors the comment to the first occurrence
-of that text. When the OAuth client's Cloud project is enrolled in the
+of that text (all tabs are searched). When the OAuth client's Cloud project is
+enrolled in the
 [Google Workspace Developer Preview Program](https://developers.google.com/workspace/preview),
 this creates a **real anchored comment** via the Docs API `insertComment`
 request — highlighted in the Docs UI exactly like a comment made by hand
 (`OK comment #ID (anchored)`; `"anchored": true` in `--json`). Without preview
 access (or with comment-only permission on the doc, which can't `batchUpdate`),
-it falls back transparently to the Drive API path: the quote is stored as
+or when the quoted text isn't found in the document, it falls back
+transparently to the Drive API path: the comment is created unanchored
+(`anchored: false` in `--json`/`--plain`) with the quote stored as
 `quotedFileContent` metadata, which `cat --comments` matches client-side but
-the Docs UI does not highlight. Same command either way — the fallback is
-automatic and never fails the comment.
+the Docs UI does not highlight. Same command either way — anchoring problems
+never fail the comment (though unrelated API errors, like a missing doc or
+expired auth, still do).
 
 ### Other
 

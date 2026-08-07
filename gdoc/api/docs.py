@@ -88,6 +88,8 @@ def insert_comment(
     content: str,
     start_index: int,
     end_index: int,
+    tab_id: str | None = None,
+    revision_id: str = "",
 ) -> str:
     """Insert a comment anchored to a text range (Docs API insertComment).
 
@@ -97,37 +99,36 @@ def insert_comment(
     enrolled get a 400 for the unknown request type, and comment-only access
     can't batchUpdate at all (403) but can still comment via the Drive API.
     Both are raised as PreviewUnavailableError so callers can fall back to
-    the Drive path.
+    the Drive path — as is a revision mismatch when *revision_id* is given
+    (the doc changed under us, so the range may no longer be right).
 
     Args:
         doc_id: The document ID.
         content: Comment text, plain text (max 2048 UTF-8 code units).
         start_index: Range start (from find_text_in_document).
         end_index: Range end, exclusive.
+        tab_id: Tab the range lives in (omitted → first tab).
+        revision_id: If non-empty, sent as writeControl.requiredRevisionId
+            so the anchor can't land on stale coordinates.
 
     Returns:
         The new comment thread ID (same ID space as Drive API comments).
     """
+    range_: dict = {"startIndex": start_index, "endIndex": end_index}
+    if tab_id:
+        range_["tabId"] = tab_id
+    body: dict = {
+        "requests": [
+            {"insertComment": {"content": content, "range": range_}}
+        ]
+    }
+    if revision_id:
+        body["writeControl"] = {"requiredRevisionId": revision_id}
     try:
         service = get_docs_service()
         result = (
             service.documents()
-            .batchUpdate(
-                documentId=doc_id,
-                body={
-                    "requests": [
-                        {
-                            "insertComment": {
-                                "content": content,
-                                "range": {
-                                    "startIndex": start_index,
-                                    "endIndex": end_index,
-                                },
-                            }
-                        }
-                    ]
-                },
-            )
+            .batchUpdate(documentId=doc_id, body=body)
             .execute()
         )
     except HttpError as e:
@@ -138,14 +139,17 @@ def insert_comment(
         # silently dropped, leaving an empty request union ("No request
         # set" — the observed live behavior). We always set insertComment,
         # so an empty union can only mean the server didn't recognize it.
+        # A revision mismatch means the doc changed between our read and
+        # this write; the caller's unanchored fallback is still correct.
         if status == 400 and (
             "Unknown name" in detail
             or "Cannot find field" in detail
             or "No request set" in detail
+            or "revision" in detail.lower()
         ):
             raise PreviewUnavailableError(
-                "insertComment not available (project not enrolled in "
-                "the Workspace Developer Preview Program)"
+                "insertComment not available or not applicable "
+                "(preview not enabled, or the document changed)"
             )
         if status == 403:
             raise PreviewUnavailableError(
@@ -440,6 +444,11 @@ def get_document(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
+def _utf16_len(ch: str) -> int:
+    """Width of one code point in UTF-16 code units (Docs API indices)."""
+    return 2 if ord(ch) > 0xFFFF else 1
+
+
 def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
     """Group (doc_index, char) pairs into independently-searchable segments.
 
@@ -448,6 +457,9 @@ def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
     means a match can never span a table-cell boundary \u2014 the Docs API can't
     delete a range that crosses cells or removes a cell's final paragraph
     mark, so such a match would produce an invalid edit.
+
+    Doc indices are UTF-16 code units, so a non-BMP character (emoji)
+    advances the index by 2 even though it's one Python char.
     """
     segments: list[list[tuple[int, str]]] = []
     root: list[tuple[int, str]] = []
@@ -460,8 +472,10 @@ def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
                     continue
                 run = text_run.get("content", "")
                 start_idx = pe.get("startIndex", 0)
-                for i, ch in enumerate(run):
-                    root.append((start_idx + i, ch))
+                offset = 0
+                for ch in run:
+                    root.append((start_idx + offset, ch))
+                    offset += _utf16_len(ch)
             continue
         table = element.get("table")
         if table is not None:
@@ -526,7 +540,8 @@ def find_text_in_document(
             end_pos = pos + len(search_text)
             matches.append({
                 "startIndex": doc_indices[pos],
-                "endIndex": doc_indices[end_pos - 1] + 1,
+                "endIndex": doc_indices[end_pos - 1]
+                + _utf16_len(chars[end_pos - 1][1]),
             })
             start = pos + 1
 
