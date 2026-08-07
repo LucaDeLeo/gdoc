@@ -129,11 +129,17 @@ def update_state_after_command(
             and change_info is not None
             and change_info.current_version is not None
             and not change_info.has_conflict
+            and command_version == change_info.current_version + 1
         ):
-            # Content is untouched and the baseline was current going in,
-            # so the version bump is entirely our own metadata change.
-            # With --quiet (change_info None) or a stale baseline, leave
-            # it alone — external edits may hide behind the new version.
+            # Content is untouched, the baseline was current going in,
+            # and the post-op version is exactly one past the pre-flight
+            # read — the bump is attributable solely to our own metadata
+            # change. A bigger jump means a concurrent edit slipped in
+            # between pre-flight and the mutation; with --quiet
+            # (change_info None) or a stale baseline there's no proof
+            # either. In all those cases leave the baseline alone — a
+            # spurious conflict later is recoverable, marking unseen
+            # content as read is not.
             state.last_read_version = command_version
 
     # Apply comment mutation patch (both quiet and non-quiet)

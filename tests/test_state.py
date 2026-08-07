@@ -167,6 +167,23 @@ class TestUpdateStateAfterCommand:
             assert state.last_version == 13
             assert state.last_read_version == 10
 
+    def test_metadata_only_write_concurrent_edit_stays(self, tmp_path):
+        """A version jump bigger than our own bump means someone edited
+        between pre-flight and the mutation — that content is unseen and
+        must not be marked read."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_version=10, last_read_version=10))
+            info = self._make_change_info(
+                current_version=10, has_conflict=False,
+            )
+            update_state_after_command(
+                "doc1", info, command="mv", quiet=False,
+                command_version=12, metadata_only_write=True,
+            )
+            state = load_state("doc1")
+            assert state.last_version == 12
+            assert state.last_read_version == 10
+
     def test_metadata_only_write_quiet_stays(self, tmp_path):
         """--quiet has no pre-flight data, so the baseline can't be
         proven current — leave it alone."""
