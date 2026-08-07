@@ -43,14 +43,22 @@ def export_doc(doc_id: str, mime_type: str = "text/markdown") -> str:
 
     Returns the decoded UTF-8 content string.
     """
+    return export_doc_bytes(doc_id, mime_type).decode("utf-8")
+
+
+def export_doc_bytes(doc_id: str, mime_type: str) -> bytes:
+    """Export a Google Docs document as raw bytes.
+
+    Like export_doc, but without UTF-8 decoding — for binary formats
+    (PDF, DOCX, ODT, EPUB) that must be written to a file as-is.
+    """
     try:
         service = get_drive_service()
-        content = (
+        return (
             service.files()
             .export_media(fileId=doc_id, mimeType=mime_type)
             .execute()
         )
-        return content.decode("utf-8")
     except HttpError as e:
         _translate_http_error(e, doc_id)
 
@@ -299,11 +307,21 @@ def upload_temp_image(file_path: str, mime_type: str) -> dict:
             )
             .execute()
         )
-        # Make publicly readable for inline image insertion
-        service.permissions().create(
-            fileId=result["id"],
-            body={"type": "anyone", "role": "reader"},
-        ).execute()
+        # Make publicly readable for inline image insertion. If that is
+        # blocked (e.g. a Workspace policy forbids anyone-sharing), the
+        # caller never learns the file ID, so delete the orphan here
+        # rather than leaving a gdoc-temp-* file behind on every attempt.
+        try:
+            service.permissions().create(
+                fileId=result["id"],
+                body={"type": "anyone", "role": "reader"},
+            ).execute()
+        except HttpError:
+            try:
+                service.files().delete(fileId=result["id"]).execute()
+            except HttpError:
+                pass
+            raise
         return result
     except HttpError as e:
         _translate_http_error(e, file_path)

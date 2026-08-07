@@ -128,8 +128,56 @@ def _make_body_with_inline_refs(*obj_ids):
 # --- list_inline_objects tests ---
 
 
+class TestListInlineObjectsTabs:
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_objects_found_in_every_tab(self, mock_get_doc):
+        """Objects in tabs beyond the first are listed, tagged with the
+        owning tab ID (they feed replace-image's object lookup)."""
+        def tab(tab_id, obj_id):
+            return {
+                "tabProperties": {"tabId": tab_id, "title": tab_id},
+                "documentTab": {
+                    "body": {
+                        "content": _make_body_with_inline_refs(obj_id),
+                    },
+                    "inlineObjects": _make_inline_image(obj_id),
+                },
+            }
+
+        mock_get_doc.return_value = {
+            "tabs": [tab("t1", "kix.one"), tab("t2", "kix.two")],
+        }
+
+        result = list_inline_objects("doc123")
+
+        assert [(o["id"], o["tab"]) for o in result] == [
+            ("kix.one", "t1"), ("kix.two", "t2"),
+        ]
+
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_child_tab_objects_found(self, mock_get_doc):
+        child = {
+            "tabProperties": {"tabId": "t1c", "title": "child"},
+            "documentTab": {
+                "body": {"content": _make_body_with_inline_refs("kix.kid")},
+                "inlineObjects": _make_inline_image("kix.kid"),
+            },
+        }
+        mock_get_doc.return_value = {
+            "tabs": [{
+                "tabProperties": {"tabId": "t1", "title": "t1"},
+                "documentTab": {"body": {"content": []}},
+                "childTabs": [child],
+            }],
+        }
+
+        result = list_inline_objects("doc123")
+
+        assert [(o["id"], o["tab"]) for o in result] == [("kix.kid", "t1c")]
+
+
 class TestListInlineObjects:
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_image_metadata(self, mock_get_doc):
         inline = _make_inline_image("kix.abc", title="Logo", width=200, height=100)
         body = _make_body_with_inline_refs("kix.abc")
@@ -145,7 +193,7 @@ class TestListInlineObjects:
         assert img["height_pt"] == 100
         assert img["content_uri"] == "https://lh3.google.com/img1"
 
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_drawing_classification(self, mock_get_doc):
         drawing = _make_inline_drawing("kix.draw")
         body = _make_body_with_inline_refs("kix.draw")
@@ -156,7 +204,7 @@ class TestListInlineObjects:
         assert result[0]["type"] == "drawing"
         assert result[0]["content_uri"] is None
 
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_chart_classification(self, mock_get_doc):
         chart = _make_inline_chart("kix.chart", title="Q1 Revenue",
                                    spreadsheet_id="sID", chart_id=99)
@@ -172,7 +220,7 @@ class TestListInlineObjects:
         assert c["chart_id"] == 99
         assert c["content_uri"] == "https://lh3.google.com/chart1"
 
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_mixed_objects(self, mock_get_doc):
         inline = {}
         inline.update(_make_inline_image("kix.img", title="Photo"))
@@ -188,13 +236,13 @@ class TestListInlineObjects:
         assert "drawing" in types
         assert "chart" in types
 
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_empty_doc(self, mock_get_doc):
         mock_get_doc.return_value = _make_doc()
         result = list_inline_objects("doc123")
         assert result == []
 
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_positioned_objects(self, mock_get_doc):
         positioned = {
             "kix.pos": {
@@ -234,7 +282,7 @@ class TestListInlineObjects:
         assert result[0]["type"] == "image"
         assert result[0]["title"] == "Floating"
 
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_dedup_same_id(self, mock_get_doc):
         """Same object ID referenced twice should only appear once."""
         inline = _make_inline_image("kix.dup", title="Dup")
@@ -305,7 +353,7 @@ _SAMPLE_OBJECTS = [
 class TestCmdImages:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     def test_terse_output(self, _doc, _pf, _update, capsys):
         args = _make_args()
         rc = cmd_images(args)
@@ -319,7 +367,7 @@ class TestCmdImages:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     def test_json_output(self, _doc, _pf, _update, capsys):
         args = _make_args(json=True)
         rc = cmd_images(args)
@@ -334,7 +382,7 @@ class TestCmdImages:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     def test_plain_output(self, _doc, _pf, _update, capsys):
         args = _make_args(plain=True)
         rc = cmd_images(args)
@@ -349,7 +397,7 @@ class TestCmdImages:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     def test_verbose_output(self, _doc, _pf, _update, capsys):
         args = _make_args(verbose=True)
         rc = cmd_images(args)
@@ -360,7 +408,7 @@ class TestCmdImages:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document")
+    @patch("gdoc.api.docs.get_document_with_tabs")
     def test_empty_no_images(self, mock_doc, _pf, _update, capsys):
         mock_doc.return_value = _make_doc()
         args = _make_args()
@@ -372,7 +420,7 @@ class TestCmdImages:
 class TestCmdImagesFilter:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     def test_filter_by_id(self, _doc, _pf, _update, capsys):
         args = _make_args(image_id="kix.abc")
         rc = cmd_images(args)
@@ -383,7 +431,7 @@ class TestCmdImagesFilter:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     def test_filter_not_found(self, _doc, _pf, _update):
         args = _make_args(image_id="kix.nonexistent")
         with pytest.raises(GdocError, match="image not found"):
@@ -393,7 +441,7 @@ class TestCmdImagesFilter:
 class TestCmdImagesDownload:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     @patch("gdoc.api.docs.download_image")
     def test_download_images(self, mock_dl, _doc, _pf, _update, capsys, tmp_path):
         download_dir = str(tmp_path / "imgs")
@@ -412,7 +460,7 @@ class TestCmdImagesDownload:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     @patch("gdoc.api.docs.download_image")
     def test_download_creates_dir(self, mock_dl, _doc, _pf, _update, tmp_path):
         download_dir = str(tmp_path / "new" / "nested")
@@ -422,7 +470,7 @@ class TestCmdImagesDownload:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     @patch("gdoc.api.docs.download_image")
     def test_download_specific_image(
         self, mock_dl, _doc, _pf, _update, capsys, tmp_path,
@@ -437,7 +485,7 @@ class TestCmdImagesDownload:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
-    @patch("gdoc.api.docs.get_document", return_value=_SAMPLE_DOC)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_SAMPLE_DOC)
     @patch("gdoc.api.docs.download_image")
     def test_download_skips_no_uri(self, mock_dl, _doc, _pf, _update, capsys, tmp_path):
         """Drawing has no content_uri; should be skipped with warning."""

@@ -878,27 +878,13 @@ def _insert_table(
         _translate_http_error(e, doc_id)
 
 
-def list_inline_objects(doc_id: str) -> list[dict]:
-    """List all inline and positioned objects in a document.
+def _collect_object_refs(body: dict) -> list[tuple[str, int, str]]:
+    """Walk body.content for object references.
 
-    Walks body.content for inlineObjectElement and positionedObjectId
-    references, joins with document.inlineObjects and positionedObjects
-    maps, and classifies each object.
-
-    Returns list of dicts with id, type, title, description, dimensions,
-    content_uri, source_uri, start_index, and chart metadata.
+    Returns (object_id, start_index, source) tuples, where source is
+    "inline" or "positioned".
     """
-    try:
-        doc = get_document(doc_id)
-    except GdocError:
-        raise
-
-    inline_map = doc.get("inlineObjects", {})
-    positioned_map = doc.get("positionedObjects", {})
-
-    # Walk body.content to find references and their startIndex
-    refs: list[tuple[str, int, str]] = []  # (object_id, start_index, source)
-    body = doc.get("body", {})
+    refs: list[tuple[str, int, str]] = []
     for element in body.get("content", []):
         paragraph = element.get("paragraph")
         if paragraph is None:
@@ -914,68 +900,114 @@ def list_inline_objects(doc_id: str) -> list[dict]:
         para_start = element.get("startIndex", 0)
         for pid in positioned_ids:
             refs.append((pid, para_start, "positioned"))
+    return refs
+
+
+def list_inline_objects(doc_id: str) -> list[dict]:
+    """List all inline and positioned objects in a document, every tab.
+
+    Walks each tab's body.content for inlineObjectElement and
+    positionedObjectId references, joins with the tab's inlineObjects
+    and positionedObjects maps, and classifies each object.
+
+    Returns list of dicts with id, tab, type, title, description,
+    dimensions, content_uri, source_uri, start_index, and chart
+    metadata. `tab` is "" for documents fetched without tab content.
+    """
+    doc = get_document_with_tabs(doc_id)
+
+    # (tab_id, body, inline_map, positioned_map) per content segment
+    segments: list[tuple[str, dict, dict, dict]] = []
+    tabs = doc.get("tabs")
+    if tabs:
+        def walk(ts: list[dict]):
+            for t in ts:
+                doc_tab = t.get("documentTab", {})
+                yield (
+                    t.get("tabProperties", {}).get("tabId", ""),
+                    doc_tab.get("body", {}),
+                    doc_tab.get("inlineObjects", {}),
+                    doc_tab.get("positionedObjects", {}),
+                )
+                yield from walk(t.get("childTabs", []))
+
+        segments = list(walk(tabs))
+    else:
+        segments = [(
+            "",
+            doc.get("body", {}),
+            doc.get("inlineObjects", {}),
+            doc.get("positionedObjects", {}),
+        )]
 
     results = []
     seen = set()
 
-    for obj_id, start_index, source in refs:
-        if obj_id in seen:
-            continue
-        seen.add(obj_id)
+    for tab_id, body, inline_map, positioned_map in segments:
+        for obj_id, start_index, source in _collect_object_refs(body):
+            if (tab_id, obj_id) in seen:
+                continue
+            seen.add((tab_id, obj_id))
 
-        if source == "inline":
-            obj_data = inline_map.get(obj_id, {})
-        else:
-            obj_data = positioned_map.get(obj_id, {})
-
-        props = obj_data.get("inlineObjectProperties", {}) or obj_data.get(
-            "positionedObjectProperties", {}
-        )
-        embedded = props.get("embeddedObject", {})
-
-        # Classify type
-        obj_type = "image"
-        spreadsheet_id = None
-        chart_id = None
-        if "embeddedDrawingProperties" in embedded:
-            obj_type = "drawing"
-        elif "linkedContentReference" in embedded:
-            lcr = embedded["linkedContentReference"]
-            if "sheetsChartReference" in lcr:
-                obj_type = "chart"
-                scr = lcr["sheetsChartReference"]
-                spreadsheet_id = scr.get("spreadsheetId")
-                chart_id = scr.get("chartId")
-
-        # Extract dimensions
-        size = embedded.get("size", {})
-        width = size.get("width", {}).get("magnitude", 0)
-        height = size.get("height", {}).get("magnitude", 0)
-
-        # Content URI (None for drawings)
-        content_uri = None
-        if obj_type != "drawing":
-            image_props = embedded.get("imageProperties", {})
-            content_uri = image_props.get("contentUri")
-
-        entry = {
-            "id": obj_id,
-            "type": obj_type,
-            "title": embedded.get("title", ""),
-            "description": embedded.get("description", ""),
-            "width_pt": width,
-            "height_pt": height,
-            "content_uri": content_uri,
-            "source_uri": embedded.get("imageProperties", {}).get("sourceUri"),
-            "start_index": start_index,
-        }
-        if obj_type == "chart":
-            entry["spreadsheet_id"] = spreadsheet_id
-            entry["chart_id"] = chart_id
-
-        results.append(entry)
+            if source == "inline":
+                obj_data = inline_map.get(obj_id, {})
+            else:
+                obj_data = positioned_map.get(obj_id, {})
+            results.append(_classify_object(obj_id, obj_data, start_index, tab_id))
 
     return results
+
+
+def _classify_object(
+    obj_id: str, obj_data: dict, start_index: int, tab_id: str,
+) -> dict:
+    """Build the metadata entry for one inline/positioned object."""
+    props = obj_data.get("inlineObjectProperties", {}) or obj_data.get(
+        "positionedObjectProperties", {}
+    )
+    embedded = props.get("embeddedObject", {})
+
+    # Classify type
+    obj_type = "image"
+    spreadsheet_id = None
+    chart_id = None
+    if "embeddedDrawingProperties" in embedded:
+        obj_type = "drawing"
+    elif "linkedContentReference" in embedded:
+        lcr = embedded["linkedContentReference"]
+        if "sheetsChartReference" in lcr:
+            obj_type = "chart"
+            scr = lcr["sheetsChartReference"]
+            spreadsheet_id = scr.get("spreadsheetId")
+            chart_id = scr.get("chartId")
+
+    # Extract dimensions
+    size = embedded.get("size", {})
+    width = size.get("width", {}).get("magnitude", 0)
+    height = size.get("height", {}).get("magnitude", 0)
+
+    # Content URI (None for drawings)
+    content_uri = None
+    if obj_type != "drawing":
+        image_props = embedded.get("imageProperties", {})
+        content_uri = image_props.get("contentUri")
+
+    entry = {
+        "id": obj_id,
+        "tab": tab_id,
+        "type": obj_type,
+        "title": embedded.get("title", ""),
+        "description": embedded.get("description", ""),
+        "width_pt": width,
+        "height_pt": height,
+        "content_uri": content_uri,
+        "source_uri": embedded.get("imageProperties", {}).get("sourceUri"),
+        "start_index": start_index,
+    }
+    if obj_type == "chart":
+        entry["spreadsheet_id"] = spreadsheet_id
+        entry["chart_id"] = chart_id
+    return entry
 
 
 def download_image(content_uri: str, dest_path: str) -> None:
@@ -986,6 +1018,130 @@ def download_image(content_uri: str, dest_path: str) -> None:
         data = resp.read()
     with open(dest_path, "wb") as f:
         f.write(data)
+
+
+def insert_inline_image(
+    doc_id: str,
+    uri: str,
+    index: int,
+    tab_id: str | None = None,
+    revision_id: str = "",
+    width_pt: float | None = None,
+    height_pt: float | None = None,
+) -> str:
+    """Insert an inline image at a document index via insertInlineImage.
+
+    Args:
+        doc_id: The document ID.
+        uri: Publicly fetchable image URL (Google's servers download it).
+        index: UTF-16 insertion index (from find_text_in_document).
+        tab_id: Tab the index lives in (omitted → first tab).
+        revision_id: If non-empty, sent as writeControl.requiredRevisionId
+            so the insert can't land on stale coordinates.
+        width_pt: Optional display width in points.
+        height_pt: Optional display height in points.
+
+    Returns:
+        The new inline object ID (usable with `gdoc images`/replace_image).
+    """
+    location: dict = {"index": index}
+    if tab_id:
+        location["tabId"] = tab_id
+    request: dict = {"location": location, "uri": uri}
+    size: dict = {}
+    if width_pt:
+        size["width"] = {"magnitude": width_pt, "unit": "PT"}
+    if height_pt:
+        size["height"] = {"magnitude": height_pt, "unit": "PT"}
+    if size:
+        request["objectSize"] = size
+    body: dict = {"requests": [{"insertInlineImage": request}]}
+    if revision_id:
+        body["writeControl"] = {"requiredRevisionId": revision_id}
+    try:
+        service = get_docs_service()
+        result = (
+            service.documents()
+            .batchUpdate(documentId=doc_id, body=body)
+            .execute()
+        )
+    except HttpError as e:
+        _raise_if_stale_revision(e)
+        _translate_http_error(e, doc_id)
+    replies = result.get("replies", [])
+    return (replies[0] if replies else {}).get(
+        "insertInlineImage", {},
+    ).get("objectId", "")
+
+
+def replace_image(
+    doc_id: str,
+    object_id: str,
+    uri: str,
+    tab_id: str | None = None,
+    revision_id: str = "",
+) -> None:
+    """Replace an existing image's content via replaceImage.
+
+    The existing image keeps its size; the new content is scaled and
+    center-cropped to fit (CENTER_CROP is the only supported method).
+
+    Args:
+        doc_id: The document ID.
+        object_id: Inline object ID of the image (see `gdoc images`).
+        uri: Publicly fetchable replacement image URL.
+        tab_id: Tab the image lives in (omitted → first tab).
+        revision_id: If non-empty, sent as writeControl.requiredRevisionId.
+    """
+    request: dict = {
+        "imageObjectId": object_id,
+        "uri": uri,
+        "imageReplaceMethod": "CENTER_CROP",
+    }
+    if tab_id:
+        request["tabId"] = tab_id
+    body: dict = {"requests": [{"replaceImage": request}]}
+    if revision_id:
+        body["writeControl"] = {"requiredRevisionId": revision_id}
+    try:
+        service = get_docs_service()
+        service.documents().batchUpdate(
+            documentId=doc_id, body=body,
+        ).execute()
+    except HttpError as e:
+        _raise_if_stale_revision(e)
+        _translate_http_error(e, doc_id)
+
+
+def _raise_if_stale_revision(e: HttpError) -> None:
+    """Turn a writeControl revision-mismatch 400 into a clear retry hint."""
+    if int(e.resp.status) == 400 and "revision" in str(e).lower():
+        raise GdocError(
+            "document changed while the command was running; re-run it"
+        )
+
+
+def find_object_tab(doc: dict, object_id: str) -> str | None:
+    """Find which tab holds an inline/positioned object ID.
+
+    Walks the tab tree of a documents.get(includeTabsContent=True) response.
+    Returns the tab ID, or None if no tab declares the object (including
+    docs fetched without tab content).
+    """
+    def walk(tabs: list[dict]) -> str | None:
+        for tab in tabs:
+            doc_tab = tab.get("documentTab", {})
+            if (
+                object_id in doc_tab.get("inlineObjects", {})
+                or object_id in doc_tab.get("positionedObjects", {})
+            ):
+                return tab.get("tabProperties", {}).get("tabId")
+            found = walk(tab.get("childTabs", []))
+            if found is not None:
+                return found
+        return None
+
+    return walk(doc.get("tabs", []))
 
 
 _HEADING_LEVELS = {

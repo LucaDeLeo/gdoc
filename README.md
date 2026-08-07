@@ -145,6 +145,15 @@ gdoc images DOC_ID
 # Download images to a local directory
 gdoc images --download /tmp/imgs DOC_ID
 
+# Export a rendered PDF/DOCX/HTML file
+gdoc export DOC_ID --out report.pdf
+
+# Insert an image into an existing doc
+gdoc insert-image DOC_ID diagram.png --after "Architecture"
+
+# Replace an image's content in place (IDs from `gdoc images`)
+gdoc replace-image DOC_ID kix.abc123 diagram-v2.png
+
 # Read a spreadsheet (markdown table; --plain for TSV)
 gdoc cat SHEET_ID
 
@@ -180,6 +189,7 @@ gdoc cat 1aBcDeFg...
 | `images DOC` | List images, charts, and drawings (`--download DIR` to save locally) |
 | `find QUERY` | Search files by name or content (`--raw` to pass a full [Drive query](https://developers.google.com/workspace/drive/api/guides/search-files) verbatim) |
 | `drives` | List shared drives |
+| `export DOC --out FILE` | Render to `pdf`, `docx`, `odt`, `epub`, `html`, `md`, `txt`, or `rtf` (format inferred from the extension, or `--format`; all tabs included) |
 | `structure DOC` | Native document JSON — styles, tables, tab topology, UTF-16 index ranges (`--tab` to narrow, `--fields` for a raw field mask, `--suggestions-view-mode` to pick the suggestions rendering) |
 
 ### Writing
@@ -191,6 +201,8 @@ gdoc cat 1aBcDeFg...
 | `write DOC FILE` | Overwrite document from a local markdown file |
 | `cells SHEET RANGE` | Write values into a spreadsheet range (`-v VALUE` per cell, `--file rows.csv`, `--stdin` for TSV; `--append` adds rows, `--user-entered` parses formulas/dates) |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
+| `insert-image DOC IMG` | Insert a local image or public URL (`--after TEXT`, `--index N`, or `--end`; `--tab` for multi-tab docs; `--width`/`--height` in points) |
+| `replace-image DOC ID IMG` | Swap an image's content in place, keeping its size (IDs from `gdoc images`) |
 | `cp DOC TITLE` | Duplicate a document |
 
 ### Revisions & diffs
@@ -492,6 +504,28 @@ gdoc images --download /tmp/imgs DOC kix.abc
 
 Drawings cannot be exported (the Google API exposes no content for them). Charts are rendered as images via their content URI. Downloaded files can be viewed directly by multimodal AI agents.
 
+## Image editing
+
+Add an image to an existing document, or swap one's content in place:
+
+```bash
+# Insert after anchor text (two matches = error; use a longer anchor)
+gdoc insert-image DOC diagram.png --after "Architecture"
+
+# Append at the end of a tab, with an explicit display size
+gdoc insert-image DOC https://example.org/chart.png --tab Notes --end --width 400
+
+# Replace an image's content, keeping its current size (center-cropped)
+gdoc replace-image DOC kix.abc123 diagram-v2.png
+```
+
+Multi-tab documents require `--tab` so the insert can't land in the wrong
+tab. Local files must be PNG, JPG, or GIF — the Docs API rejects WebP, so
+gdoc refuses it up front (markdown import via `new --file` still accepts
+WebP). Local files are uploaded to Drive as a temporary public-read file
+(Google's servers fetch the image by URL), then deleted immediately after
+the insert — if that cleanup ever fails, gdoc warns with the file ID
+instead of leaving the exposure silent.
 ## Native structure
 
 `cat` is a prose view; `structure` is the editing model. It dumps the raw

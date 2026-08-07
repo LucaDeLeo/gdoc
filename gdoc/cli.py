@@ -2413,6 +2413,7 @@ def cmd_images(args) -> int:
                 print(
                     f"{img['id']}\t{img['type']}\t{img['title']}"
                     f"\t{img['width_pt']}\t{img['height_pt']}"
+                    f"\t{img.get('tab', '')}"
                 )
         elif not images:
             print("No images.")
@@ -2434,6 +2435,394 @@ def cmd_images(args) -> int:
         doc_id, change_info, command="images", quiet=quiet,
     )
 
+    return 0
+
+
+# Rendered/binary formats must go to a file; text formats may hit stdout.
+_EXPORT_MIME = {
+    "pdf": "application/pdf",
+    "docx": (
+        "application/vnd.openxmlformats-officedocument"
+        ".wordprocessingml.document"
+    ),
+    "odt": "application/vnd.oasis.opendocument.text",
+    "epub": "application/epub+zip",
+    "html": "text/html",
+    "md": "text/markdown",
+    "txt": "text/plain",
+    "rtf": "application/rtf",
+}
+_BINARY_FORMATS = {"pdf", "docx", "odt", "epub"}
+_EXT_TO_FORMAT = {
+    ".pdf": "pdf",
+    ".docx": "docx",
+    ".odt": "odt",
+    ".epub": "epub",
+    ".html": "html",
+    ".htm": "html",
+    ".md": "md",
+    ".markdown": "md",
+    ".txt": "txt",
+    ".rtf": "rtf",
+}
+
+
+def cmd_export(args) -> int:
+    """Handler for `gdoc export`: render a doc to PDF/DOCX/HTML/etc."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    fmt = getattr(args, "format", None)
+    out = getattr(args, "out", None)
+
+    if not fmt:
+        ext = os.path.splitext(out or "")[1].lower()
+        fmt = _EXT_TO_FORMAT.get(ext)
+        if not fmt:
+            raise GdocError(
+                "cannot infer format; pass --format or use a known "
+                "--out extension (" + ", ".join(sorted(_EXPORT_MIME)) + ")",
+                exit_code=3,
+            )
+    if fmt in _BINARY_FORMATS and not out:
+        raise GdocError(
+            f"--out is required for binary formats ({fmt})", exit_code=3,
+        )
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.drive import export_doc_bytes
+
+    content = export_doc_bytes(doc_id, _EXPORT_MIME[fmt])
+
+    if out:
+        try:
+            with open(out, "wb") as f:
+                f.write(content)
+        except OSError as e:
+            raise GdocError(f"cannot write {out}: {e}", exit_code=3) from e
+
+        from gdoc.format import format_json, get_output_mode
+
+        mode = get_output_mode(args)
+        if mode == "json":
+            print(format_json(path=out, format=fmt, bytes=len(content)))
+        elif mode == "plain":
+            print(f"path\t{out}")
+            print(f"format\t{fmt}")
+            print(f"bytes\t{len(content)}")
+        elif mode == "verbose":
+            print(f"Exported: {doc_id}")
+            print(f"Format: {fmt}")
+            print(f"Path: {out}")
+            print(f"Bytes: {len(content)}")
+        else:
+            print(f"OK exported {out} ({fmt}, {len(content)} bytes)")
+    else:
+        from gdoc.format import format_json, get_output_mode
+
+        text = content.decode("utf-8")
+        if get_output_mode(args) == "json":
+            print(format_json(format=fmt, bytes=len(content), content=text))
+        else:
+            # terse/plain/verbose: the document content IS the output
+            sys.stdout.write(text)
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="export", quiet=quiet,
+    )
+    return 0
+
+
+# Formats the Docs API insertInlineImage/replaceImage requests accept.
+# Deliberately narrower than markdown import (`new --file` also takes
+# WebP): the API rejects WebP, and failing fast here avoids creating a
+# public-read temp file that the API is guaranteed to refuse
+# (live-verified: 400 "should be ... in supported formats").
+_INSERT_IMAGE_MIMES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+}
+
+
+def _validate_image_source(image: str) -> str | None:
+    """Validate an image argument (URL or local path).
+
+    Returns the local file's MIME type, or None for a remote URL.
+    Raises GdocError (exit 3) for a missing file or unsupported type,
+    so handlers can fail fast before making API calls.
+    """
+    if image.startswith(("http://", "https://")):
+        return None
+
+    if not os.path.isfile(image):
+        raise GdocError(f"image file not found: {image}", exit_code=3)
+
+    ext = os.path.splitext(image)[1].lower()
+    mime = _INSERT_IMAGE_MIMES.get(ext)
+    if not mime:
+        raise GdocError(
+            f"unsupported image type: {ext or image} "
+            "(the Docs API accepts png, jpg, gif)",
+            exit_code=3,
+        )
+    return mime
+
+
+def _resolve_image_source(image: str) -> tuple[str, str | None]:
+    """Turn an image argument (URL or local path) into an insertable URI.
+
+    Local files are uploaded to Drive as a temporary public-read file
+    (Google's servers must be able to fetch the URI); the caller must
+    delete the returned temp file ID when done.
+
+    Returns (uri, temp_file_id) — temp_file_id is None for remote URLs.
+    """
+    mime = _validate_image_source(image)
+    if mime is None:
+        return image, None
+
+    from gdoc.api.drive import upload_temp_image
+
+    result = upload_temp_image(image, mime)
+    uri = result.get("webContentLink")
+    if not uri:
+        # The temp file is already public-read; don't leak it just
+        # because Drive omitted the download link from the response.
+        _cleanup_temp_image(result.get("id"))
+        raise GdocError(
+            "Drive returned no download link for the temporary image "
+            "upload; try again"
+        )
+    return uri, result["id"]
+
+
+def _cleanup_temp_image(temp_file_id: str | None) -> None:
+    """Delete a temp Drive image, warning loudly if the delete fails.
+
+    The temp file is public-read (that's how Docs fetches it), so a failed
+    cleanup is an exposure the user must know about, not a silent leak.
+    """
+    if not temp_file_id:
+        return
+    from gdoc.api.drive import delete_file
+
+    try:
+        delete_file(temp_file_id)
+    except Exception as e:
+        print(
+            f"WARN: could not delete temporary Drive file {temp_file_id} "
+            f"(public-read); delete it manually: {e}",
+            file=sys.stderr,
+        )
+
+
+def _resolve_image_target_tab(doc: dict, tab_name: str | None) -> dict | None:
+    """Pick the tab an image operation targets; None = legacy body.
+
+    A multi-tab document with no --tab is ambiguous — refuse rather than
+    guess, since an insert lands at a raw index.
+    """
+    from gdoc.api.docs import flatten_tabs, resolve_tab
+
+    tabs = flatten_tabs(doc.get("tabs", []))
+    if tab_name:
+        return resolve_tab(tabs, tab_name)
+    if len(tabs) > 1:
+        raise GdocError(
+            f"document has {len(tabs)} tabs; specify --tab", exit_code=3,
+        )
+    return tabs[0] if tabs else None
+
+
+def _resolve_insert_index(
+    body: dict, index: int | None, after: str | None,
+) -> int:
+    """Resolve the UTF-16 insertion index from --index, --after, or --end."""
+    from gdoc.api.docs import find_text_in_document
+
+    if index is not None:
+        if index < 1:
+            raise GdocError("--index must be >= 1", exit_code=3)
+        return index
+    if after is not None:
+        matches = find_text_in_document(None, after, body=body)
+        if not matches:
+            matches = find_text_in_document(
+                None, after, body=body, normalize=True,
+            )
+        if not matches:
+            from gdoc.api.docs import diagnose_no_match
+
+            # normalize=True was already retried above, so don't let the
+            # diagnosis suggest it.
+            reason = diagnose_no_match(
+                None, after, body=body, already_normalized=True,
+            )
+            msg = f"--after anchor not found: {after!r}"
+            if reason:
+                msg += f"; {reason}"
+            raise GdocError(msg, exit_code=3)
+        if len(matches) > 1:
+            raise GdocError(
+                f"--after anchor is ambiguous ({len(matches)} matches); "
+                "use a longer anchor",
+                exit_code=3,
+            )
+        return matches[0]["endIndex"]
+    # --end: last index inside the body's final structural element
+    # (the segment's closing newline — inserting there appends).
+    content = body.get("content", [])
+    return content[-1].get("endIndex", 2) - 1 if content else 1
+
+
+def cmd_insert_image(args) -> int:
+    """Handler for `gdoc insert-image`: add an image to an existing doc."""
+    import math
+
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    for name in ("width", "height"):
+        val = getattr(args, name, None)
+        if val is not None and (not math.isfinite(val) or val <= 0):
+            raise GdocError(
+                f"--{name} must be a positive number of points",
+                exit_code=3,
+            )
+    _validate_image_source(args.image)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+    if change_info and change_info.has_conflict:
+        print("WARN: doc changed since last read", file=sys.stderr)
+
+    from gdoc.api.docs import get_document_with_tabs
+
+    doc = get_document_with_tabs(doc_id)
+    revision_id = doc.get("revisionId", "")
+    tab = _resolve_image_target_tab(doc, getattr(args, "tab", None))
+    tab_id = tab["id"] if tab else None
+    body = tab["body"] if tab else doc.get("body", {})
+
+    insert_at = _resolve_insert_index(
+        body, getattr(args, "index", None), getattr(args, "after", None),
+    )
+
+    uri, temp_file_id = _resolve_image_source(args.image)
+
+    from gdoc.api.docs import insert_inline_image
+
+    try:
+        object_id = insert_inline_image(
+            doc_id, uri, insert_at,
+            tab_id=tab_id,
+            revision_id=revision_id,
+            width_pt=getattr(args, "width", None),
+            height_pt=getattr(args, "height", None),
+        )
+    finally:
+        _cleanup_temp_image(temp_file_id)
+
+    from gdoc.api.drive import get_file_version
+
+    command_version = get_file_version(doc_id).get("version")
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            object_id=object_id, tab=tab_id or "", index=insert_at,
+        ))
+    elif mode == "plain":
+        print(f"object_id\t{object_id}")
+        print(f"index\t{insert_at}")
+    elif mode == "verbose":
+        print(f"Inserted image: {object_id}")
+        print(f"Index: {insert_at}")
+        if tab_id:
+            print(f"Tab: {tab_id}")
+    else:
+        print(f"OK inserted image {object_id}")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="insert-image",
+        quiet=quiet, command_version=command_version,
+    )
+    return 0
+
+
+def cmd_replace_image(args) -> int:
+    """Handler for `gdoc replace-image`: swap an image's content by ID."""
+    doc_id = _resolve_doc_id(args.doc)
+    object_id = args.object_id
+    quiet = getattr(args, "quiet", False)
+    _validate_image_source(args.image)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+    if change_info and change_info.has_conflict:
+        print("WARN: doc changed since last read", file=sys.stderr)
+
+    from gdoc.api.docs import find_object_tab, get_document_with_tabs
+
+    doc = get_document_with_tabs(doc_id)
+    revision_id = doc.get("revisionId", "")
+    tab_id = find_object_tab(doc, object_id)
+    if tab_id is None and object_id not in doc.get("inlineObjects", {}):
+        raise GdocError(
+            f"image object not found: {object_id} (see `gdoc images`)",
+            exit_code=3,
+        )
+
+    uri, temp_file_id = _resolve_image_source(args.image)
+
+    from gdoc.api.docs import replace_image
+
+    try:
+        replace_image(
+            doc_id, object_id, uri,
+            tab_id=tab_id, revision_id=revision_id,
+        )
+    finally:
+        _cleanup_temp_image(temp_file_id)
+
+    from gdoc.api.drive import get_file_version
+
+    command_version = get_file_version(doc_id).get("version")
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(object_id=object_id, status="replaced"))
+    elif mode == "plain":
+        print(f"object_id\t{object_id}")
+        print("status\treplaced")
+    elif mode == "verbose":
+        print(f"Replaced image: {object_id}")
+        print("Method: CENTER_CROP (existing size kept)")
+    else:
+        print(f"OK replaced image {object_id}")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="replace-image",
+        quiet=quiet, command_version=command_version,
+    )
     return 0
 
 
@@ -3639,6 +4028,87 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks",
     )
     images_p.set_defaults(func=cmd_images)
+
+    # export
+    export_p = sub.add_parser(
+        "export", parents=[output_parent],
+        help="Export a doc to PDF, DOCX, HTML, and more",
+        description=(
+            "Render a document to a file via Drive export. Exports cover "
+            "the whole document (all tabs). Binary formats (pdf, docx, "
+            "odt, epub) require --out; text formats print to stdout "
+            "without it."
+        ),
+    )
+    export_p.add_argument("doc", help="Document ID or URL")
+    export_p.add_argument(
+        "--format", choices=sorted(_EXPORT_MIME),
+        help="Export format (default: inferred from --out extension)",
+    )
+    export_p.add_argument(
+        "--out", metavar="FILE", help="Output file path",
+    )
+    export_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    export_p.set_defaults(func=cmd_export)
+
+    # insert-image
+    ii_p = sub.add_parser(
+        "insert-image", parents=[output_parent],
+        help="Insert an image into an existing doc",
+        description=(
+            "Insert a local image file or a public image URL into a doc. "
+            "Local files are uploaded to Drive as a temporary public-read "
+            "file and deleted after the insert."
+        ),
+    )
+    ii_p.add_argument("doc", help="Document ID or URL")
+    ii_p.add_argument("image", help="Local image path or public image URL")
+    ii_p.add_argument(
+        "--tab", help="Tab title or ID (required for multi-tab docs)",
+    )
+    ii_where = ii_p.add_mutually_exclusive_group(required=True)
+    ii_where.add_argument(
+        "--after", metavar="TEXT",
+        help="Insert immediately after this anchor text",
+    )
+    ii_where.add_argument(
+        "--index", type=int, metavar="N",
+        help="Insert at a raw UTF-16 document index (advanced)",
+    )
+    ii_where.add_argument(
+        "--end", action="store_true", help="Append at the end of the tab",
+    )
+    ii_p.add_argument(
+        "--width", type=float, metavar="PT", help="Display width in points",
+    )
+    ii_p.add_argument(
+        "--height", type=float, metavar="PT",
+        help="Display height in points",
+    )
+    ii_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    ii_p.set_defaults(func=cmd_insert_image)
+
+    # replace-image
+    ri_p = sub.add_parser(
+        "replace-image", parents=[output_parent],
+        help="Replace an existing image's content by object ID",
+        description=(
+            "Swap the content of an image in place (object IDs come from "
+            "`gdoc images`). The image keeps its current size; the new "
+            "content is scaled and center-cropped to fit."
+        ),
+    )
+    ri_p.add_argument("doc", help="Document ID or URL")
+    ri_p.add_argument("object_id", help="Image object ID (see `gdoc images`)")
+    ri_p.add_argument("image", help="Local image path or public image URL")
+    ri_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    ri_p.set_defaults(func=cmd_replace_image)
 
     # structure
     structure_p = sub.add_parser(
