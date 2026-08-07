@@ -395,18 +395,35 @@ def move_file(file_id: str, folder_id: str) -> dict:
         service = get_drive_service()
         current = (
             service.files()
-            .get(fileId=file_id, fields="parents", supportsAllDrives=True)
+            .get(
+                fileId=file_id,
+                fields="id, name, parents, version",
+                supportsAllDrives=True,
+            )
             .execute()
         )
-        previous = ",".join(current.get("parents", []))
+        parents = current.get("parents", [])
+        # Never add and remove the destination in the same request: a
+        # re-run mv, or a legacy multi-parent file that already includes
+        # the destination, must keep it.
+        to_remove = [p for p in parents if p != folder_id]
+        kwargs: dict = {}
+        if folder_id not in parents:
+            kwargs["addParents"] = folder_id
+        if to_remove:
+            kwargs["removeParents"] = ",".join(to_remove)
+        if not kwargs:
+            # Already exactly in the destination — nothing to write.
+            if "version" in current:
+                current["version"] = int(current["version"])
+            return current
         result = (
             service.files()
             .update(
                 fileId=file_id,
-                addParents=folder_id,
-                removeParents=previous,
                 fields="id, name, parents, version",
                 supportsAllDrives=True,
+                **kwargs,
             )
             .execute()
         )

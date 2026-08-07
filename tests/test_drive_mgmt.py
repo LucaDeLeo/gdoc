@@ -92,6 +92,40 @@ class TestMoveFileAPI:
         assert result["version"] == 9
 
     @patch("gdoc.api.drive.get_drive_service")
+    def test_already_sole_parent_is_noop(self, mock_svc):
+        service = MagicMock()
+        files = service.files.return_value
+        files.get.return_value.execute.return_value = {
+            "id": "doc1", "name": "Doc", "parents": ["new1"], "version": "5",
+        }
+        mock_svc.return_value = service
+
+        result = move_file("doc1", "new1")
+
+        files.update.assert_not_called()
+        assert result["parents"] == ["new1"]
+        assert result["version"] == 5
+
+    @patch("gdoc.api.drive.get_drive_service")
+    def test_destination_kept_out_of_remove_parents(self, mock_svc):
+        service = MagicMock()
+        files = service.files.return_value
+        files.get.return_value.execute.return_value = {
+            "id": "doc1", "name": "Doc",
+            "parents": ["new1", "old1"], "version": "5",
+        }
+        files.update.return_value.execute.return_value = {
+            "id": "doc1", "name": "Doc", "parents": ["new1"], "version": "6",
+        }
+        mock_svc.return_value = service
+
+        move_file("doc1", "new1")
+
+        kwargs = files.update.call_args.kwargs
+        assert "addParents" not in kwargs  # already a parent
+        assert kwargs["removeParents"] == "old1"
+
+    @patch("gdoc.api.drive.get_drive_service")
     def test_404_raises_gdoc_error(self, mock_svc):
         service = MagicMock()
         files = service.files.return_value
