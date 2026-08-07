@@ -136,6 +136,50 @@ class TestListSharedDrivesAPI:
 
         assert [d["id"] for d in result] == ["d1", "d2"]
         assert drives_list.call_count == 2
+        assert drives_list.call_args_list[1].kwargs["pageToken"] == "tok"
+
+
+class TestListFilesCorpora:
+    def _service(self, response):
+        service = MagicMock()
+        files_list = service.files.return_value.list
+        files_list.return_value.execute.return_value = response
+        return service, files_list
+
+    @patch("gdoc.api.drive.get_drive_service")
+    def test_all_drives_sets_corpora(self, mock_svc):
+        from gdoc.api.drive import list_files
+
+        service, files_list = self._service({"files": []})
+        mock_svc.return_value = service
+
+        list_files("trashed=false", all_drives=True)
+
+        assert files_list.call_args.kwargs["corpora"] == "allDrives"
+
+    @patch("gdoc.api.drive.get_drive_service")
+    def test_default_omits_corpora(self, mock_svc):
+        from gdoc.api.drive import list_files
+
+        service, files_list = self._service({"files": []})
+        mock_svc.return_value = service
+
+        list_files("trashed=false")
+
+        assert "corpora" not in files_list.call_args.kwargs
+
+    @patch("gdoc.api.drive.get_drive_service")
+    def test_incomplete_search_warns(self, mock_svc, capsys):
+        from gdoc.api.drive import list_files
+
+        service, files_list = self._service(
+            {"files": [], "incompleteSearch": True},
+        )
+        mock_svc.return_value = service
+
+        list_files("trashed=false", all_drives=True)
+
+        assert "incomplete search" in capsys.readouterr().err
 
 
 class TestCreatePermissionTargets:
@@ -318,11 +362,13 @@ class TestCmdFindRaw:
     @patch("gdoc.api.drive.list_files", return_value=[
         {"id": "doc1", "name": "Doc", "modifiedTime": "2026-08-07T00:00:00Z"},
     ])
-    def test_raw_query_passed_verbatim(self, mock_list, capsys):
+    def test_raw_query_passed_verbatim_across_all_drives(
+        self, mock_list, capsys,
+    ):
         args = _make_args("find", query=self.RAW_QUERY, raw=True, title=False)
         rc = cmd_find(args)
         assert rc == 0
-        mock_list.assert_called_once_with(self.RAW_QUERY)
+        mock_list.assert_called_once_with(self.RAW_QUERY, all_drives=True)
         assert "doc1" in capsys.readouterr().out
 
     def test_raw_with_title_rejected(self):

@@ -55,31 +55,54 @@ def export_doc(doc_id: str, mime_type: str = "text/markdown") -> str:
         _translate_http_error(e, doc_id)
 
 
-def list_files(query: str) -> list[dict]:
-    """List files matching a Drive API query, auto-paginating."""
+def list_files(query: str, all_drives: bool = False) -> list[dict]:
+    """List files matching a Drive API query, auto-paginating.
+
+    Args:
+        query: Drive API query string.
+        all_drives: Search the allDrives corpus (personal Drive plus
+            every shared drive the user is a member of) instead of the
+            default user corpus, which only covers files created by,
+            opened by, or shared directly with the user. Google may
+            answer broad-corpus queries with incompleteSearch=true; a
+            WARN is printed to stderr when that happens.
+    """
+    import sys
+
     try:
         service = get_drive_service()
         all_files: list[dict] = []
         page_token = None
+        incomplete = False
 
+        extra: dict = {"corpora": "allDrives"} if all_drives else {}
         while True:
             response = (
                 service.files()
                 .list(
                     q=query,
-                    fields="nextPageToken, files(id, name, mimeType, modifiedTime, modifiedByMeTime)",
+                    fields="nextPageToken, incompleteSearch, "
+                    "files(id, name, mimeType, modifiedTime, modifiedByMeTime)",
                     pageSize=100,
                     pageToken=page_token,
                     supportsAllDrives=True,
                     includeItemsFromAllDrives=True,
+                    **extra,
                 )
                 .execute()
             )
             all_files.extend(response.get("files", []))
+            incomplete = incomplete or response.get("incompleteSearch", False)
             page_token = response.get("nextPageToken")
             if page_token is None:
                 break
 
+        if incomplete:
+            print(
+                "WARN: Drive reported an incomplete search; "
+                "results may be partial",
+                file=sys.stderr,
+            )
         return all_files
     except HttpError as e:
         _translate_http_error(e, "")

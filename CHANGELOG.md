@@ -21,7 +21,10 @@ All notable changes to `gdoc` are documented here. This project follows
 - **Raw Drive queries: `find --raw`.** `gdoc find --raw "QUERY"` passes
   the query string to the Drive API verbatim (full query language:
   `mimeType=…`, `'me' in owners`, `modifiedTime > …`), while plain
-  `find QUERY` keeps its simple escaped name/content search. (#39)
+  `find QUERY` keeps its simple escaped name/content search. Raw queries
+  search the `allDrives` corpus — personal Drive plus every shared drive
+  the user is a member of — and warn on stderr if Google reports the
+  search came back incomplete. (#39)
 - **Domain and anyone-with-link sharing.** `gdoc share DOC --domain
   example.org` and `gdoc share DOC --anyone` create link-based
   permissions alongside the existing per-user email shares.

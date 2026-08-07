@@ -990,7 +990,9 @@ def cmd_find(args) -> int:
             )
         from gdoc.api.drive import list_files
 
-        files = list_files(args.query)
+        # Raw queries are the broad-search path: cover shared drives the
+        # user belongs to, not just the default user corpus.
+        files = list_files(args.query, all_drives=True)
     else:
         from gdoc.api.drive import search_files
 
@@ -3188,7 +3190,8 @@ def build_parser() -> GdocArgumentParser:
         "--raw", action="store_true",
         help="Treat QUERY as a raw Drive query, e.g. "
         "\"mimeType='application/vnd.google-apps.document' and "
-        "'me' in owners\"",
+        "'me' in owners\" (searches all drives, including shared "
+        "drives you're a member of)",
     )
     find_p.set_defaults(func=cmd_find)
 
