@@ -288,10 +288,7 @@ class TestCmdShare:
         rc = cmd_share(args)
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
-        assert data == {
-            "ok": True, "type": "user", "email": "alice@co.com",
-            "role": "writer", "status": "shared",
-        }
+        assert data == {"ok": True, "email": "alice@co.com", "role": "writer", "status": "shared"}
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)

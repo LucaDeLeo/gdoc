@@ -385,6 +385,39 @@ class TestCmdShareTargets:
             "role": "writer", "status": "shared", "discoverable": False,
         }
 
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.create_permission", return_value={"id": "perm1"})
+    def test_user_json_schema_unchanged(self, mock_perm, _pf, _update, capsys):
+        # Pre-0.16 consumers destructure exactly {ok,email,role,status}.
+        args = _make_args(
+            "share", doc="doc1", email="a@b.com", domain=None,
+            anyone=False, role="reader", discoverable=False, json=True,
+        )
+        cmd_share(args)
+        data = json.loads(capsys.readouterr().out)
+        assert data == {
+            "ok": True, "email": "a@b.com",
+            "role": "reader", "status": "shared",
+        }
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.create_permission", return_value={"id": "perm1"})
+    def test_domain_plain_reports_discoverable(
+        self, mock_perm, _pf, _update, capsys,
+    ):
+        args = _make_args(
+            "share", doc="doc1", email=None, domain="example.org",
+            anyone=False, role="reader", discoverable=True, plain=True,
+        )
+        cmd_share(args)
+        lines = capsys.readouterr().out.splitlines()
+        assert "target\texample.org" in lines
+        assert "type\tdomain" in lines
+        assert "role\treader" in lines
+        assert "discoverable\ttrue" in lines
+
     def test_no_target_rejected(self):
         args = _make_args(
             "share", doc="doc1", email=None, domain=None,

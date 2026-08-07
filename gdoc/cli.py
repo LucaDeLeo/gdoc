@@ -2832,22 +2832,24 @@ def cmd_share(args) -> int:
 
     mode = get_output_mode(args)
     if mode == "json":
-        # Keep the original user-share keys (email/role/status) stable;
-        # domain/anyone shares add target/type/discoverable.
-        data = {"type": share_type, "role": role, "status": "shared"}
+        # User shares keep the exact pre-0.16 schema; domain/anyone
+        # shares report target/type/discoverable instead.
         if email:
-            data["email"] = email
+            print(format_json(email=email, role=role, status="shared"))
         else:
-            data["target"] = target
-            data["discoverable"] = discoverable
-        print(format_json(**data))
+            print(format_json(
+                type=share_type, target=target, role=role,
+                status="shared", discoverable=discoverable,
+            ))
     elif mode == "plain":
         if email:
             print(f"email\t{email}")
+            print(f"role\t{role}")
         else:
             print(f"target\t{target}")
             print(f"type\t{share_type}")
-        print(f"role\t{role}")
+            print(f"role\t{role}")
+            print(f"discoverable\t{'true' if discoverable else 'false'}")
     else:
         suffix = " (discoverable)" if discoverable else ""
         print(f"OK shared with {target} as {role}{suffix}")
