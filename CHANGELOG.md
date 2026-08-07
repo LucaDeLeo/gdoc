@@ -4,6 +4,25 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-08-07
+
+### Added
+- **Real anchored comments via the Docs API (Developer Preview).**
+  `comment --quote "doc text"` now tries the Docs API `insertComment`
+  batchUpdate request first: the quote is located in the document body
+  (retrying with smart-quote/dash folding) and the comment is anchored to
+  that range, so it shows up highlighted in the Docs UI like a comment made
+  by hand. The request is gated behind the Google Workspace Developer
+  Preview Program; when it's unavailable — project not enrolled (400 for
+  the unknown request type) or comment-only access that can't `batchUpdate`
+  (403) — the command falls back transparently to the existing Drive
+  `quotedFileContent` path, so behavior for non-preview users is unchanged.
+  Terse output gains an `(anchored)` suffix on success; `--json` and
+  `--plain` report `anchored` true/false whenever `--quote` is given. Adds
+  the `insert_comment` Docs API helper and a `PreviewUnavailableError`
+  sentinel (a `GdocError` subclass callers catch to fall back — it never
+  surfaces to the user).
+
 ## [0.13.0] — 2026-07-14
 
 ### Added

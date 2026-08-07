@@ -6,7 +6,12 @@ from functools import lru_cache
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from gdoc.util import AuthError, GdocError, fold_typography
+from gdoc.util import (
+    AuthError,
+    GdocError,
+    PreviewUnavailableError,
+    fold_typography,
+)
 
 
 @lru_cache(maxsize=1)
@@ -76,6 +81,92 @@ def replace_all_text(
         return 0
     except HttpError as e:
         _translate_http_error(e, doc_id)
+
+
+def insert_comment(
+    doc_id: str,
+    content: str,
+    start_index: int,
+    end_index: int,
+) -> str:
+    """Insert a comment anchored to a text range (Docs API insertComment).
+
+    Unlike Drive's quotedFileContent (display metadata only), this creates a
+    real anchored comment — highlighted in the Docs UI like one created by
+    hand. The request is a Workspace Developer Preview feature: projects not
+    enrolled get a 400 for the unknown request type, and comment-only access
+    can't batchUpdate at all (403) but can still comment via the Drive API.
+    Both are raised as PreviewUnavailableError so callers can fall back to
+    the Drive path.
+
+    Args:
+        doc_id: The document ID.
+        content: Comment text, plain text (max 2048 UTF-8 code units).
+        start_index: Range start (from find_text_in_document).
+        end_index: Range end, exclusive.
+
+    Returns:
+        The new comment thread ID (same ID space as Drive API comments).
+    """
+    try:
+        service = get_docs_service()
+        result = (
+            service.documents()
+            .batchUpdate(
+                documentId=doc_id,
+                body={
+                    "requests": [
+                        {
+                            "insertComment": {
+                                "content": content,
+                                "range": {
+                                    "startIndex": start_index,
+                                    "endIndex": end_index,
+                                },
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute()
+        )
+    except HttpError as e:
+        status = int(e.resp.status)
+        detail = str(e)
+        # A non-enrolled project sees insertComment as an unknown field:
+        # either rejected by name ("Unknown name"/"Cannot find field") or
+        # silently dropped, leaving an empty request union ("No request
+        # set" — the observed live behavior). We always set insertComment,
+        # so an empty union can only mean the server didn't recognize it.
+        if status == 400 and (
+            "Unknown name" in detail
+            or "Cannot find field" in detail
+            or "No request set" in detail
+        ):
+            raise PreviewUnavailableError(
+                "insertComment not available (project not enrolled in "
+                "the Workspace Developer Preview Program)"
+            )
+        if status == 403:
+            raise PreviewUnavailableError(
+                "insertComment not permitted for this user"
+            )
+        _translate_http_error(e, doc_id)
+
+    # Comment saves can fail even when the batchUpdate itself returns 200.
+    state = result.get("commentUpdateState", "")
+    if state and state != "ALL_SAVED":
+        raise PreviewUnavailableError(f"comment not saved ({state})")
+    replies = result.get("replies", [])
+    thread = (replies[0] if replies else {}).get(
+        "insertComment", {},
+    ).get("commentThread", {})
+    comment_id = thread.get("commentId", "")
+    if not comment_id:
+        raise PreviewUnavailableError(
+            "no comment thread in insertComment response"
+        )
+    return comment_id
 
 
 def set_page_mode(doc_id: str, pageless: bool) -> None:

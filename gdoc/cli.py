@@ -2047,6 +2047,37 @@ def cmd_comments(args) -> int:
     return 0
 
 
+def _try_anchored_comment(doc_id: str, text: str, quote: str) -> str:
+    """Create a truly anchored comment via the Docs API preview, if possible.
+
+    Finds the first occurrence of *quote* in the document body (retrying
+    with typography folding) and anchors an insertComment request to that
+    range. Returns the new comment ID, or "" when the caller should fall
+    back to the Drive quotedFileContent path: quote text not found, or the
+    preview request unavailable (project not enrolled, comment-only access).
+    """
+    from gdoc.api.docs import (
+        find_text_in_document,
+        get_document,
+        insert_comment,
+    )
+    from gdoc.util import PreviewUnavailableError
+
+    document = get_document(doc_id)
+    matches = find_text_in_document(document, quote)
+    if not matches:
+        matches = find_text_in_document(document, quote, normalize=True)
+    if not matches:
+        return ""
+    try:
+        return insert_comment(
+            doc_id, text,
+            matches[0]["startIndex"], matches[0]["endIndex"],
+        )
+    except PreviewUnavailableError:
+        return ""
+
+
 def cmd_comment(args) -> int:
     """Handler for `gdoc comment`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -2055,10 +2086,15 @@ def cmd_comment(args) -> int:
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
 
-    from gdoc.api.comments import create_comment
     quote = getattr(args, "quote", "") or ""
-    result = create_comment(doc_id, args.text, quote=quote)
-    new_id = result["id"]
+    new_id = ""
+    if quote:
+        new_id = _try_anchored_comment(doc_id, args.text, quote)
+    anchored = bool(new_id)
+    if not anchored:
+        from gdoc.api.comments import create_comment
+        result = create_comment(doc_id, args.text, quote=quote)
+        new_id = result["id"]
 
     from gdoc.api.drive import get_file_version
     command_version = get_file_version(doc_id).get("version")
@@ -2066,11 +2102,15 @@ def cmd_comment(args) -> int:
     from gdoc.format import get_output_mode, format_json
     mode = get_output_mode(args)
     if mode == "json":
-        print(format_json(id=new_id, status="created"))
+        extra = {"anchored": anchored} if quote else {}
+        print(format_json(id=new_id, status="created", **extra))
     elif mode == "plain":
         print(f"id\t{new_id}")
+        if quote:
+            print(f"anchored\t{'true' if anchored else 'false'}")
     else:
-        print(f"OK comment #{new_id}")
+        suffix = " (anchored)" if anchored else ""
+        print(f"OK comment #{new_id}{suffix}")
 
     from gdoc.state import update_state_after_command
     update_state_after_command(
@@ -3249,7 +3289,12 @@ def build_parser() -> GdocArgumentParser:
     comment_p.add_argument("doc", help="Document ID or URL")
     comment_p.add_argument("text", help="Comment text")
     comment_p.add_argument(
-        "--quote", help="Quoted text the comment refers to",
+        "--quote",
+        help=(
+            "Text to anchor the comment to. Creates a real anchored "
+            "comment (Docs API preview) when available; otherwise "
+            "stored as quote metadata for cat --comments"
+        ),
     )
     comment_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"

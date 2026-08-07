@@ -20,6 +20,17 @@ class AuthError(GdocError):
         super().__init__(message, exit_code=2)
 
 
+class PreviewUnavailableError(GdocError):
+    """A Docs API developer-preview feature isn't available to this caller.
+
+    Raised when a preview-gated batchUpdate request (e.g. insertComment) is
+    rejected because the Cloud project isn't enrolled in the Workspace
+    Developer Preview Program, or the user's access level can't batchUpdate.
+    Callers catch this to fall back to a generally-available code path; it
+    should never surface to the user as a failure.
+    """
+
+
 CONFIG_DIR = Path.home() / ".config" / "gdoc"
 _OLD_CONFIG_DIR = Path.home() / ".gdoc"
 

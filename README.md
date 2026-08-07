@@ -208,12 +208,24 @@ gdoc cat 1aBcDeFg...
 | Command | Description |
 |---------|-------------|
 | `comments DOC` | List all open comments (`--all` to include resolved) |
-| `comment DOC TEXT` | Add a comment (`--quote` to anchor to text) |
+| `comment DOC TEXT` | Add a comment (`--quote` to anchor it to text — see below) |
 | `comment-info DOC ID` | Get a single comment with full detail |
 | `reply DOC COMMENT_ID TEXT` | Reply to a comment |
 | `resolve DOC COMMENT_ID` | Resolve a comment (`--message` to include a note) |
 | `reopen DOC COMMENT_ID` | Reopen a resolved comment |
 | `delete-comment DOC ID` | Delete a comment (`--force` to skip confirmation) |
+
+`comment --quote "some doc text"` anchors the comment to the first occurrence
+of that text. When the OAuth client's Cloud project is enrolled in the
+[Google Workspace Developer Preview Program](https://developers.google.com/workspace/preview),
+this creates a **real anchored comment** via the Docs API `insertComment`
+request — highlighted in the Docs UI exactly like a comment made by hand
+(`OK comment #ID (anchored)`; `"anchored": true` in `--json`). Without preview
+access (or with comment-only permission on the doc, which can't `batchUpdate`),
+it falls back transparently to the Drive API path: the quote is stored as
+`quotedFileContent` metadata, which `cat --comments` matches client-side but
+the Docs UI does not highlight. Same command either way — the fallback is
+automatic and never fails the comment.
 
 ### Other
 
