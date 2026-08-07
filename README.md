@@ -178,6 +178,7 @@ gdoc cat 1aBcDeFg...
 | `info DOC` | Show title, owner, modified date, word count (tab list for spreadsheets) |
 | `ls [FOLDER]` | List files in Drive root or a folder (`--type docs\|sheets\|all`) |
 | `images DOC` | List images, charts, and drawings (`--download DIR` to save locally) |
+| `structure DOC` | Native document JSON — styles, tables, tab topology, UTF-16 index ranges (`--tab` to narrow, `--fields` for a raw field mask, `--suggestions-view-mode` to pick the suggestions rendering) |
 | `find QUERY` | Search files by name or content |
 
 ### Writing
@@ -485,6 +486,32 @@ gdoc images --download /tmp/imgs DOC kix.abc
 ```
 
 Drawings cannot be exported (the Google API exposes no content for them). Charts are rendered as images via their content URI. Downloaded files can be viewed directly by multimodal AI agents.
+
+## Native structure
+
+`cat` is a prose view; `structure` is the editing model. It dumps the raw
+Docs API document JSON so an agent can derive exact native mutation
+targets — paragraph styles, table geometry, tab topology, inline objects,
+named ranges, and the UTF-16 `startIndex`/`endIndex` values every
+`batchUpdate` range needs:
+
+```bash
+# Whole document (compact JSON; --verbose to indent)
+gdoc structure DOC
+
+# One tab's subtree, plus documentId/revisionId
+gdoc structure DOC --tab Notes
+
+# Trim the payload with a raw field mask
+gdoc structure DOC --fields 'revisionId,tabs(tabProperties)'
+
+# Render suggestions as accepted/rejected before reading indexes
+gdoc structure DOC --suggestions-view-mode preview_suggestions_accepted
+```
+
+Two index caveats: Docs indices count UTF-16 code units (an emoji is two
+units, a smart chip is one), and the suggestions view mode changes both
+content and indexes — the mode used is echoed in the output.
 
 ## Command allowlist
 

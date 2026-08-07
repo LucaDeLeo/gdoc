@@ -4,6 +4,26 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-08-07
+
+### Added
+- **`gdoc structure` — native document JSON for structure-aware edits.**
+  Dumps the raw `documents.get` response: tab topology, paragraph and
+  text styles, tables, inline objects, named ranges, headers/footers,
+  and the UTF-16 `startIndex`/`endIndex` values needed to derive safe
+  native mutation ranges without parsing Markdown (Docs indices are
+  UTF-16 code units, not Python character offsets — a smart chip
+  occupies one code unit). Tab content is always included; narrow big
+  documents with `--tab TITLE|ID` (returns that tab's raw subtree plus
+  `documentId`/`revisionId`) or `--fields MASK` (passed verbatim;
+  Google rejects masks that recursively expand `childTabs`).
+  `--suggestions-view-mode` selects how suggestions are rendered — it
+  changes content and indexes, so the mode used is echoed in the
+  output. Output is always JSON: compact by default, indented with
+  `--verbose`, wrapped in the standard `ok` envelope with `--json`.
+  Read-only; runs pre-flight and counts as a full read for the
+  awareness baseline (like `cat`). (#33)
+
 ## [0.14.0] — 2026-08-07
 
 ### Added

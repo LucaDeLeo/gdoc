@@ -2423,6 +2423,71 @@ def cmd_images(args) -> int:
     return 0
 
 
+def cmd_structure(args) -> int:
+    """Handler for `gdoc structure`: raw document JSON for native edits."""
+    import json
+
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    tab_name = getattr(args, "tab", None)
+    fields = getattr(args, "fields", None)
+    svm = getattr(args, "suggestions_view_mode", None)
+    svm = svm.upper() if svm else None
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import get_document_structure
+
+    doc = get_document_structure(
+        doc_id, fields=fields, suggestions_view_mode=svm,
+    )
+    # Indexes depend on the suggestions view; when a mode was explicitly
+    # requested but the response doesn't echo it, state it ourselves.
+    if svm and "suggestionsViewMode" not in doc:
+        doc = {**doc, "suggestionsViewMode": svm}
+
+    if tab_name:
+        from gdoc.api.docs import resolve_raw_tab
+
+        tab = resolve_raw_tab(doc.get("tabs", []), tab_name)
+        if tab is None:
+            raise GdocError(
+                f"tab not found: {tab_name} "
+                "(with --fields, the mask must keep tabProperties)",
+                exit_code=3,
+            )
+        out = {
+            "documentId": doc.get("documentId", doc_id),
+            "title": doc.get("title", ""),
+            "revisionId": doc.get("revisionId", ""),
+            "tab": tab,
+        }
+        if doc.get("suggestionsViewMode"):
+            out["suggestionsViewMode"] = doc["suggestionsViewMode"]
+    else:
+        out = doc
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(document=out))
+    elif mode == "verbose":
+        print(json.dumps(out, indent=2))
+    else:
+        print(json.dumps(out, separators=(",", ":")))
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="structure", quiet=quiet,
+    )
+    return 0
+
+
 def cmd_auth(args) -> int:
     """Handler for `gdoc auth`."""
     set_default = getattr(args, "set_default", None)
@@ -3384,6 +3449,49 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks",
     )
     images_p.set_defaults(func=cmd_images)
+
+    # structure
+    structure_p = sub.add_parser(
+        "structure", parents=[output_parent],
+        help="Native document JSON (structure, styles, UTF-16 ranges)",
+        description=(
+            "Dump the raw documents.get response — tab topology, "
+            "paragraph/text styles, tables, inline objects, named "
+            "ranges, headers/footers, and the UTF-16 startIndex/"
+            "endIndex values native mutations need (Docs indices are "
+            "UTF-16 code units, not Python character offsets; a smart "
+            "chip occupies one code unit). Output is always JSON: "
+            "compact by default, indented with --verbose, wrapped in "
+            "the standard envelope with --json. Read-only."
+        ),
+    )
+    structure_p.add_argument("doc", help="Document ID or URL")
+    structure_p.add_argument(
+        "--tab",
+        help="Narrow to one tab by title or ID (returns that tab's raw "
+        "subtree plus documentId/revisionId)",
+    )
+    structure_p.add_argument(
+        "--fields",
+        help="Docs API field mask passed verbatim, e.g. "
+        "'revisionId,tabs(tabProperties)' (Google rejects masks that "
+        "recursively expand childTabs)",
+    )
+    structure_p.add_argument(
+        "--suggestions-view-mode",
+        choices=[
+            "default_for_current_access",
+            "suggestions_inline",
+            "preview_suggestions_accepted",
+            "preview_without_suggestions",
+        ],
+        help="How suggestions are rendered; changes returned content "
+        "and indexes (the used mode is echoed in the output)",
+    )
+    structure_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    structure_p.set_defaults(func=cmd_structure)
 
     # info
     info_p = sub.add_parser("info", parents=[output_parent], help="Show document metadata")

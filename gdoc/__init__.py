@@ -1,3 +1,3 @@
 """gdoc -- Token-efficient CLI for Google Docs & Drive."""
 
-__version__ = "0.14.0"
+__version__ = "0.17.0"
