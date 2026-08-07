@@ -63,6 +63,7 @@ def update_state_after_command(
     command_version: int | None = None,
     comment_state_patch: dict | None = None,
     full_doc_write: bool = False,
+    metadata_only_write: bool = False,
 ) -> None:
     """Update per-doc state after a successful command.
 
@@ -76,6 +77,11 @@ def update_state_after_command(
             Keys: "add_comment_id", "add_resolved_id", "remove_resolved_id".
         full_doc_write: True when the command replaced the entire document
             content, so the write doubles as a read of the whole doc.
+        metadata_only_write: True when the command bumped the version
+            without touching content (mv/rename). If the read baseline was
+            current at pre-flight, it is carried forward past our own
+            version bump so the next content write doesn't see a phantom
+            conflict.
     """
     from datetime import datetime, timezone
 
@@ -117,6 +123,17 @@ def update_state_after_command(
         # Partial writes (tab-scoped, find/replace) must NOT advance it —
         # the rest of the doc may hold changes the writer never saw.
         if full_doc_write:
+            state.last_read_version = command_version
+        elif (
+            metadata_only_write
+            and change_info is not None
+            and change_info.current_version is not None
+            and not change_info.has_conflict
+        ):
+            # Content is untouched and the baseline was current going in,
+            # so the version bump is entirely our own metadata change.
+            # With --quiet (change_info None) or a stale baseline, leave
+            # it alone — external edits may hide behind the new version.
             state.last_read_version = command_version
 
     # Apply comment mutation patch (both quiet and non-quiet)

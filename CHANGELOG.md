@@ -14,7 +14,10 @@ All notable changes to `gdoc` are documented here. This project follows
   final location; `gdoc rename DOC TITLE` retitles a file; `gdoc drives`
   lists shared drives. Moves and renames run the pre-flight awareness
   check and fold their own version bump into the doc's state baseline so
-  the next command doesn't report a spurious edit. (#39)
+  the next command doesn't report a spurious edit; since they never touch
+  content, a read baseline that was current at pre-flight is carried
+  forward too, so a following `edit`/`write`/`push` doesn't see gdoc's
+  own metadata bump as an external conflict. (#39)
 - **Raw Drive queries: `find --raw`.** `gdoc find --raw "QUERY"` passes
   the query string to the Drive API verbatim (full query language:
   `mimeType=…`, `'me' in owners`, `modifiedTime > …`), while plain

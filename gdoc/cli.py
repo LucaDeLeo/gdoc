@@ -2993,6 +2993,7 @@ def cmd_mv(args) -> int:
     update_state_after_command(
         doc_id, change_info, command="mv",
         quiet=quiet, command_version=result.get("version"),
+        metadata_only_write=True,
     )
     return 0
 
@@ -3030,6 +3031,7 @@ def cmd_rename(args) -> int:
     update_state_after_command(
         doc_id, change_info, command="rename",
         quiet=quiet, command_version=result.get("version"),
+        metadata_only_write=True,
     )
     return 0
 

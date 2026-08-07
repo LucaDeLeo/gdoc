@@ -225,6 +225,7 @@ class TestCmdMv:
         assert "OK moved to folder1" in capsys.readouterr().out
         mock_move.assert_called_once_with("doc1", "folder1")
         assert mock_update.call_args.kwargs["command_version"] == 9
+        assert mock_update.call_args.kwargs["metadata_only_write"] is True
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -261,6 +262,7 @@ class TestCmdRename:
         assert "OK renamed to New name" in capsys.readouterr().out
         mock_rename.assert_called_once_with("doc1", "New name")
         assert mock_update.call_args.kwargs["command_version"] == 12
+        assert mock_update.call_args.kwargs["metadata_only_write"] is True
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
