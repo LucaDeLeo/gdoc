@@ -978,11 +978,23 @@ def cmd_ls(args) -> int:
 
 def cmd_find(args) -> int:
     """Handler for `gdoc find`."""
-    from gdoc.api.drive import search_files
     from gdoc.format import get_output_mode
 
     title_only = getattr(args, "title", False)
-    files = search_files(args.query, title_only=title_only)
+    if getattr(args, "raw", False):
+        if title_only:
+            raise GdocError(
+                "--raw and --title are mutually exclusive "
+                "(put name conditions in the raw query)",
+                exit_code=3,
+            )
+        from gdoc.api.drive import list_files
+
+        files = list_files(args.query)
+    else:
+        from gdoc.api.drive import search_files
+
+        files = search_files(args.query, title_only=title_only)
 
     mode = get_output_mode(args)
     output = _format_file_list(files, mode)
@@ -2778,9 +2790,24 @@ def cmd_cp(args) -> int:
 def cmd_share(args) -> int:
     """Handler for `gdoc share`."""
     doc_id = _resolve_doc_id(args.doc)
-    email = args.email
+    email = getattr(args, "email", None)
+    domain = getattr(args, "domain", None)
+    anyone = getattr(args, "anyone", False)
     role = getattr(args, "role", "reader")
+    discoverable = getattr(args, "discoverable", False)
     quiet = getattr(args, "quiet", False)
+
+    targets = sum(1 for t in (email, domain, anyone) if t)
+    if targets != 1:
+        raise GdocError(
+            "provide exactly one share target: EMAIL, --domain, or --anyone",
+            exit_code=3,
+        )
+    if discoverable and email:
+        raise GdocError(
+            "--discoverable applies only to --domain/--anyone shares",
+            exit_code=3,
+        )
 
     # Pre-flight awareness check
     from gdoc.notify import pre_flight
@@ -2789,24 +2816,174 @@ def cmd_share(args) -> int:
 
     from gdoc.api.drive import create_permission
 
-    create_permission(doc_id, email, role)
+    create_permission(
+        doc_id, email=email, role=role,
+        domain=domain, anyone=anyone, discoverable=discoverable,
+    )
+
+    if email:
+        share_type, target = "user", email
+    elif domain:
+        share_type, target = "domain", domain
+    else:
+        share_type, target = "anyone", "anyone with the link"
 
     from gdoc.format import get_output_mode, format_json
 
     mode = get_output_mode(args)
     if mode == "json":
-        print(format_json(email=email, role=role, status="shared"))
+        # Keep the original user-share keys (email/role/status) stable;
+        # domain/anyone shares add target/type/discoverable.
+        data = {"type": share_type, "role": role, "status": "shared"}
+        if email:
+            data["email"] = email
+        else:
+            data["target"] = target
+            data["discoverable"] = discoverable
+        print(format_json(**data))
     elif mode == "plain":
-        print(f"email\t{email}")
+        if email:
+            print(f"email\t{email}")
+        else:
+            print(f"target\t{target}")
+            print(f"type\t{share_type}")
         print(f"role\t{role}")
     else:
-        print(f"OK shared with {email} as {role}")
+        suffix = " (discoverable)" if discoverable else ""
+        print(f"OK shared with {target} as {role}{suffix}")
 
     # Update state for the doc
     from gdoc.state import update_state_after_command
 
     update_state_after_command(doc_id, change_info, command="share", quiet=quiet)
 
+    return 0
+
+
+def cmd_mkdir(args) -> int:
+    """Handler for `gdoc mkdir`: create a Drive folder."""
+    parent_id = None
+    if getattr(args, "parent", None):
+        parent_id = _resolve_doc_id(args.parent)
+
+    from gdoc.api.drive import create_folder
+
+    result = create_folder(args.title, parent_id=parent_id)
+    folder_id = result["id"]
+    url = result.get("webViewLink", "")
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            id=folder_id, name=result.get("name", args.title), url=url,
+        ))
+    elif mode == "plain":
+        print(f"id\t{folder_id}")
+    elif mode == "verbose":
+        print(f"Created folder: {result.get('name', args.title)}")
+        print(f"ID: {folder_id}")
+        print(f"URL: {url}")
+    else:
+        print(folder_id)
+    return 0
+
+
+def cmd_mv(args) -> int:
+    """Handler for `gdoc mv`: move a file into a folder."""
+    doc_id = _resolve_doc_id(args.doc)
+    folder_id = _resolve_doc_id(args.folder)
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.drive import move_file
+
+    result = move_file(doc_id, folder_id)
+    parents = result.get("parents", [])
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            id=doc_id, name=result.get("name", ""), parents=parents,
+        ))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print(f"parents\t{','.join(parents)}")
+    elif mode == "verbose":
+        print(f"Moved: {result.get('name', doc_id)}")
+        print(f"To: {','.join(parents)}")
+    else:
+        print(f"OK moved to {','.join(parents) or folder_id}")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="mv",
+        quiet=quiet, command_version=result.get("version"),
+    )
+    return 0
+
+
+def cmd_rename(args) -> int:
+    """Handler for `gdoc rename`: retitle a file."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.drive import rename_file
+
+    result = rename_file(doc_id, args.title)
+    name = result.get("name", args.title)
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(id=doc_id, name=name))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print(f"name\t{name}")
+    elif mode == "verbose":
+        print(f"Renamed: {doc_id}")
+        print(f"Name: {name}")
+    else:
+        print(f"OK renamed to {name}")
+
+    from gdoc.state import update_state_after_command
+
+    update_state_after_command(
+        doc_id, change_info, command="rename",
+        quiet=quiet, command_version=result.get("version"),
+    )
+    return 0
+
+
+def cmd_drives(args) -> int:
+    """Handler for `gdoc drives`: list shared drives."""
+    from gdoc.api.drive import list_shared_drives
+    from gdoc.format import format_json, get_output_mode
+
+    drives = list_shared_drives()
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(drives=drives))
+    elif mode == "plain":
+        for d in drives:
+            print(f"{d.get('id', '')}\t{d.get('name', '')}")
+    elif not drives:
+        print("No shared drives.")
+    else:
+        for d in drives:
+            print(f"{d.get('id', '')}  {d.get('name', '')}")
     return 0
 
 
@@ -2938,6 +3115,12 @@ def build_parser() -> GdocArgumentParser:
     find_p = sub.add_parser("find", parents=[output_parent], help="Search files by name/content")
     find_p.add_argument("query", help="Search query")
     find_p.add_argument("--title", action="store_true", help="Search title only")
+    find_p.add_argument(
+        "--raw", action="store_true",
+        help="Treat QUERY as a raw Drive query, e.g. "
+        "\"mimeType='application/vnd.google-apps.document' and "
+        "'me' in owners\"",
+    )
     find_p.set_defaults(func=cmd_find)
 
     # cat
@@ -3396,7 +3579,19 @@ def build_parser() -> GdocArgumentParser:
     # share
     share_p = sub.add_parser("share", parents=[output_parent], help="Share a document")
     share_p.add_argument("doc", help="Document ID or URL")
-    share_p.add_argument("email", help="Email to share with")
+    share_p.add_argument(
+        "email", nargs="?",
+        help="Email to share with (or use --domain / --anyone)",
+    )
+    share_target = share_p.add_mutually_exclusive_group()
+    share_target.add_argument(
+        "--domain", metavar="DOMAIN",
+        help="Share with everyone in a Workspace domain (link-based)",
+    )
+    share_target.add_argument(
+        "--anyone", action="store_true",
+        help="Share with anyone who has the link",
+    )
     share_p.add_argument(
         "--role",
         choices=["reader", "writer", "commenter"],
@@ -3404,9 +3599,54 @@ def build_parser() -> GdocArgumentParser:
         help="Permission role",
     )
     share_p.add_argument(
+        "--discoverable", action="store_true",
+        help="Let the file appear in search results "
+        "(--domain/--anyone only; off by default)",
+    )
+    share_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     share_p.set_defaults(func=cmd_share)
+
+    # mkdir
+    mkdir_p = sub.add_parser(
+        "mkdir", parents=[output_parent], help="Create a Drive folder",
+    )
+    mkdir_p.add_argument("title", help="Folder name")
+    mkdir_p.add_argument(
+        "--parent", metavar="FOLDER",
+        help="Parent folder ID or URL (default: My Drive root)",
+    )
+    mkdir_p.set_defaults(func=cmd_mkdir)
+
+    # mv
+    mv_p = sub.add_parser(
+        "mv", parents=[output_parent], aliases=["move"],
+        help="Move a file into a folder",
+    )
+    mv_p.add_argument("doc", help="File ID or URL")
+    mv_p.add_argument("folder", help="Destination folder ID or URL")
+    mv_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    mv_p.set_defaults(func=cmd_mv)
+
+    # rename
+    rename_p = sub.add_parser(
+        "rename", parents=[output_parent], help="Rename a file",
+    )
+    rename_p.add_argument("doc", help="File ID or URL")
+    rename_p.add_argument("title", help="New title")
+    rename_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    rename_p.set_defaults(func=cmd_rename)
+
+    # drives
+    drives_p = sub.add_parser(
+        "drives", parents=[output_parent], help="List shared drives",
+    )
+    drives_p.set_defaults(func=cmd_drives)
 
     # new
     new_p = sub.add_parser("new", parents=[output_parent], help="Create a blank document")

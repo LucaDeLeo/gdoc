@@ -178,7 +178,8 @@ gdoc cat 1aBcDeFg...
 | `info DOC` | Show title, owner, modified date, word count (tab list for spreadsheets) |
 | `ls [FOLDER]` | List files in Drive root or a folder (`--type docs\|sheets\|all`) |
 | `images DOC` | List images, charts, and drawings (`--download DIR` to save locally) |
-| `find QUERY` | Search files by name or content |
+| `find QUERY` | Search files by name or content (`--raw` to pass a full [Drive query](https://developers.google.com/workspace/drive/api/guides/search-files) verbatim) |
+| `drives` | List shared drives |
 
 ### Writing
 
@@ -237,6 +238,10 @@ expired auth, still do).
 |---------|-------------|
 | `auth` | Authenticate with Google (`--no-browser` for headless) |
 | `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`) |
+| `share DOC --domain D` / `--anyone` | Link-based sharing with a Workspace domain or anyone with the link (`--discoverable` to also surface in search) |
+| `mkdir TITLE` | Create a Drive folder (`--parent FOLDER`) |
+| `mv DOC FOLDER` | Move a file into a folder (alias: `move`) |
+| `rename DOC TITLE` | Rename a file |
 | `update` | Update gdoc to the latest release |
 
 ## Output modes

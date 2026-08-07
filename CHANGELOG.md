@@ -4,6 +4,30 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-08-07
+
+### Added
+- **Folder and file management: `mkdir`, `mv`, `rename`, `drives`.**
+  `gdoc mkdir TITLE [--parent FOLDER]` creates a Drive folder;
+  `gdoc mv DOC FOLDER` (alias `move`) moves a file, replacing all its
+  current parents so it lands in exactly one place and reporting the
+  final location; `gdoc rename DOC TITLE` retitles a file; `gdoc drives`
+  lists shared drives. Moves and renames run the pre-flight awareness
+  check and fold their own version bump into the doc's state baseline so
+  the next command doesn't report a spurious edit. (#39)
+- **Raw Drive queries: `find --raw`.** `gdoc find --raw "QUERY"` passes
+  the query string to the Drive API verbatim (full query language:
+  `mimeType=…`, `'me' in owners`, `modifiedTime > …`), while plain
+  `find QUERY` keeps its simple escaped name/content search. (#39)
+- **Domain and anyone-with-link sharing.** `gdoc share DOC --domain
+  example.org` and `gdoc share DOC --anyone` create link-based
+  permissions alongside the existing per-user email shares.
+  Discoverability (`allowFileDiscovery`) is never inferred: it's off
+  unless `--discoverable` is passed, and that flag is rejected for
+  per-user shares. Exactly one share target (email, `--domain`,
+  `--anyone`) is required. User-share output keys are unchanged;
+  domain/anyone shares report `target`, `type`, and `discoverable`. (#39)
+
 ## [0.14.0] — 2026-08-07
 
 ### Added

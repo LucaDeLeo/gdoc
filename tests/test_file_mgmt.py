@@ -288,7 +288,10 @@ class TestCmdShare:
         rc = cmd_share(args)
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
-        assert data == {"ok": True, "email": "alice@co.com", "role": "writer", "status": "shared"}
+        assert data == {
+            "ok": True, "type": "user", "email": "alice@co.com",
+            "role": "writer", "status": "shared",
+        }
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -296,7 +299,10 @@ class TestCmdShare:
     def test_share_default_role_reader(self, mock_perm, _pf, _update, capsys):
         args = _make_args("share", doc="abc123", email="alice@co.com")
         cmd_share(args)
-        mock_perm.assert_called_once_with("abc123", "alice@co.com", "reader")
+        mock_perm.assert_called_once_with(
+            "abc123", email="alice@co.com", role="reader",
+            domain=None, anyone=False, discoverable=False,
+        )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -304,7 +310,10 @@ class TestCmdShare:
     def test_share_writer_role(self, mock_perm, _pf, _update):
         args = _make_args("share", doc="abc123", email="alice@co.com", role="writer", quiet=True)
         cmd_share(args)
-        mock_perm.assert_called_once_with("abc123", "alice@co.com", "writer")
+        mock_perm.assert_called_once_with(
+            "abc123", email="alice@co.com", role="writer",
+            domain=None, anyone=False, discoverable=False,
+        )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -312,7 +321,10 @@ class TestCmdShare:
     def test_share_commenter_role(self, mock_perm, _pf, _update):
         args = _make_args("share", doc="abc123", email="alice@co.com", role="commenter", quiet=True)
         cmd_share(args)
-        mock_perm.assert_called_once_with("abc123", "alice@co.com", "commenter")
+        mock_perm.assert_called_once_with(
+            "abc123", email="alice@co.com", role="commenter",
+            domain=None, anyone=False, discoverable=False,
+        )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
