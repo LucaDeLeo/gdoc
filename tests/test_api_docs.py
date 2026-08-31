@@ -722,9 +722,9 @@ class TestZeroWidthReplace:
 
 
 class TestInsertMarkdownIntoTab:
-    def _tabs_doc(self, body_content=None):
+    def _tabs_doc(self, body_content=None, revision_id="rev-xyz"):
         return {
-            "revisionId": "rev-xyz",
+            "revisionId": revision_id,
             "tabs": [{
                 "tabProperties": {
                     "tabId": "t.todo", "title": "TODO", "index": 0,
@@ -830,3 +830,33 @@ class TestInsertMarkdownIntoTab:
 
         with pytest.raises(GdocError, match="tab not found"):
             insert_markdown_into_tab("doc1", "Not A Real Tab", "hi")
+
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_prefetched_doc_skips_fetch_and_pins_its_revision(
+        self, mock_get, mock_svc,
+    ):
+        """`write --tab`'s fast path passes a pre-fetched doc. The function
+        must NOT fetch again, must resolve the tab from the passed doc, and
+        must pin writeControl to the passed doc's revisionId — that revision
+        is what rejects a concurrent edit between the caller's fetch and this
+        write."""
+        from gdoc.api.docs import insert_markdown_into_tab
+
+        prefetched = self._tabs_doc(
+            body_content=[
+                {"startIndex": 1, "endIndex": 30, "paragraph": {}},
+            ],
+            revision_id="rev-prefetched",
+        )
+        captured = _capture_batch_updates(mock_svc)
+
+        result = insert_markdown_into_tab(
+            "doc1", "TODO", "new content", replace=True, doc=prefetched,
+        )
+
+        mock_get.assert_not_called()
+        assert result["tab_id"] == "t.todo"
+        assert captured[0]["writeControl"] == {
+            "requiredRevisionId": "rev-prefetched",
+        }

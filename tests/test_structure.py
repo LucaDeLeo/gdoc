@@ -199,3 +199,83 @@ class TestCmdStructure:
                 cmd_structure(args)
             assert e.value.exit_code == 3
         mock_get.assert_not_called()
+
+
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
+class TestStructureUrlTab:
+    def test_url_tab_narrows_output(self, mock_get, _update, capsys):
+        args = _make_args(
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t2",
+        )
+        cmd_structure(args)
+        data = json.loads(capsys.readouterr().out)
+        assert data["tab"]["tabProperties"]["tabId"] == "t2"
+        assert "tabs" not in data
+
+    def test_flag_overrides_url_tab(self, mock_get, _update, capsys):
+        args = _make_args(
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t2",
+            tab="Main",
+        )
+        cmd_structure(args)
+        data = json.loads(capsys.readouterr().out)
+        assert data["tab"]["tabProperties"]["tabId"] == "t1"
+
+    def test_t0_url_tab_ignored(self, mock_get, _update, capsys):
+        # Google auto-appends ?tab=t.0 — ambient noise, whole doc returned.
+        args = _make_args(
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t.0",
+        )
+        cmd_structure(args)
+        assert json.loads(capsys.readouterr().out) == _DOC
+
+
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
+class TestStructureTabBaseline:
+    def test_multi_tab_read_stamps_tab_baseline(self, mock_get, mock_update):
+        args = _make_args(tab="Notes")
+        cmd_structure(args)
+        assert mock_update.call_args.kwargs["read_tab_id"] == "t2"
+
+    def test_whole_doc_read_keeps_global_baseline(self, mock_get, mock_update):
+        args = _make_args()
+        cmd_structure(args)
+        assert mock_update.call_args.kwargs["read_tab_id"] is None
+
+    def test_single_tab_read_is_whole_doc(self, mock_get, mock_update):
+        # One tab IS the whole document (same rule as `cat --tab`).
+        mock_get.return_value = {
+            "documentId": "doc123",
+            "tabs": [_tab("t1", "Main")],
+        }
+        args = _make_args(tab="Main")
+        cmd_structure(args)
+        assert mock_update.call_args.kwargs["read_tab_id"] is None
+
+
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
+class TestStructureFieldsBaseline:
+    """F1: a --fields-masked response can't prove a full read, so it must
+    not advance any read baseline (global or per-tab)."""
+
+    def test_fields_read_is_partial(self, mock_get, mock_update):
+        args = _make_args(fields="tabs(tabProperties)")
+        cmd_structure(args)
+        kw = mock_update.call_args.kwargs
+        assert kw["command"] == "structure-partial"
+        assert kw.get("read_tab_id") is None
+
+    def test_fields_with_tab_stamps_nothing(self, mock_get, mock_update):
+        args = _make_args(tab="Notes", fields="tabs(tabProperties),revisionId")
+        cmd_structure(args)
+        kw = mock_update.call_args.kwargs
+        assert kw["command"] == "structure-partial"
+        assert kw.get("read_tab_id") is None
+
+    def test_unmasked_read_still_counts(self, mock_get, mock_update):
+        args = _make_args()
+        cmd_structure(args)
+        assert mock_update.call_args.kwargs["command"] == "structure"

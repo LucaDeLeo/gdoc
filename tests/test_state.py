@@ -18,6 +18,7 @@ class TestDocState:
         assert s.last_comment_check == ""
         assert s.known_comment_ids == []
         assert s.known_resolved_ids == []
+        assert s.tab_read_versions == {}
 
     def test_custom_values(self):
         s = DocState(
@@ -264,6 +265,65 @@ class TestUpdateStateAfterCommand:
             state = load_state("doc1")
             assert state.last_version == 11
             assert state.last_read_version == 5
+
+    def test_tab_read_stamps_tab_version_not_global(self, tmp_path):
+        """cat --tab X stamps that tab's baseline, never last_read_version."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=100)
+            update_state_after_command(
+                "doc1", info, command="cat", quiet=False, read_tab_id="t.x",
+            )
+            state = load_state("doc1")
+            assert state.tab_read_versions == {"t.x": 100}
+            assert state.last_read_version is None  # NOT a whole-doc read
+            assert state.last_version == 100  # we did observe the version
+
+    def test_tab_read_preserves_prior_global_baseline(self, tmp_path):
+        """A tab read must not disturb a global baseline set by an earlier
+        whole-doc cat."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_read_version=50))
+            info = self._make_change_info(current_version=100)
+            update_state_after_command(
+                "doc1", info, command="cat", quiet=False, read_tab_id="t.x",
+            )
+            state = load_state("doc1")
+            assert state.last_read_version == 50  # untouched
+            assert state.tab_read_versions == {"t.x": 100}
+
+    def test_tab_write_stamps_tab_version(self, tmp_path):
+        """write --tab X advances that tab's baseline to the post-write
+        version so a second write to the same tab doesn't false-conflict."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_read_version=5))
+            update_state_after_command(
+                "doc1", None, command="write", quiet=True,
+                command_version=11, full_doc_write=False, written_tab_id="t.x",
+            )
+            state = load_state("doc1")
+            assert state.tab_read_versions == {"t.x": 11}
+            assert state.last_read_version == 5  # global still untouched
+
+    def test_quiet_tab_read_stamps_nothing(self, tmp_path):
+        """A --quiet tab read has no version in hand, so it stamps nothing."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            update_state_after_command(
+                "doc1", None, command="cat", quiet=True, read_tab_id="t.x",
+            )
+            state = load_state("doc1")
+            assert state.tab_read_versions == {}
+
+    def test_old_state_file_loads_with_empty_tab_versions(self, tmp_path):
+        """A state file written before per-tab baselines loads cleanly."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            path = tmp_path / "doc1.json"
+            path.write_text(json.dumps({
+                "last_seen": "2025-01-20T00:00:00Z",
+                "last_read_version": 7,
+            }))
+            state = load_state("doc1")
+            assert state.tab_read_versions == {}
+            assert state.last_read_version == 7
 
     def test_edit_does_not_advance_read_baseline(self, tmp_path):
         """Partial mutations (find/replace) don't establish full-content
@@ -531,3 +591,41 @@ class TestCommentStatePatch:
             )
             state = load_state("doc1")
             assert state.last_comment_check == "2025-01-20T00:00:00Z"
+
+
+class TestMetadataOnlyTabHealing:
+    """Metadata-only bumps (mv/rename) carry per-tab baselines forward
+    when the post-op version is attributable to our own bump."""
+
+    def test_current_tab_entries_heal(self, tmp_path):
+        from gdoc.notify import ChangeInfo
+
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(
+                last_version=100,
+                tab_read_versions={"t.a": 100, "t.b": 90},
+            ))
+            info = ChangeInfo(current_version=100)
+            update_state_after_command(
+                "doc1", info, command="mv", quiet=False,
+                command_version=101, metadata_only_write=True,
+            )
+            st = load_state("doc1")
+            # Entry current at pre-flight heals; the stale one must not.
+            assert st.tab_read_versions == {"t.a": 101, "t.b": 90}
+
+    def test_unattributable_bump_leaves_tab_entries(self, tmp_path):
+        from gdoc.notify import ChangeInfo
+
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(
+                last_version=100, tab_read_versions={"t.a": 100},
+            ))
+            info = ChangeInfo(current_version=100)
+            # +2 jump: a concurrent edit slipped in; nothing heals.
+            update_state_after_command(
+                "doc1", info, command="mv", quiet=False,
+                command_version=102, metadata_only_write=True,
+            )
+            st = load_state("doc1")
+            assert st.tab_read_versions == {"t.a": 100}

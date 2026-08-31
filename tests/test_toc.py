@@ -208,6 +208,43 @@ class TestTocTab:
         with pytest.raises(GdocError, match="tab not found"):
             cmd_toc(_make_args(tab="nope"))
 
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_document_headings")
+    @patch("gdoc.api.docs.resolve_tab")
+    @patch("gdoc.api.docs.get_document_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_url_tab_selects_tab(
+        self, _svc, mock_tabs, mock_resolve, mock_headings, _pf, _update, capsys,
+    ):
+        # A ?tab= in the URL selects that tab, exactly like --tab.
+        tab = {"id": "t.o50waw95wxfc", "title": "Notes", "body": {"content": []}}
+        mock_tabs.return_value = [tab]
+        mock_resolve.return_value = tab
+        mock_headings.return_value = _headings((1, "h.abc", "Title"))
+        rc = cmd_toc(_make_args(doc=f"{BASE_URL}?tab=t.o50waw95wxfc"))
+        assert rc == 0
+        mock_resolve.assert_called_once_with([tab], "t.o50waw95wxfc")
+        mock_headings.assert_called_once_with(DOC_ID, body=tab["body"])
+        out = capsys.readouterr().out
+        assert f"{BASE_URL}?tab=t.o50waw95wxfc#heading=h.abc" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_document_headings")
+    @patch("gdoc.api.docs.get_document_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_url_tab_t0_uses_whole_doc(
+        self, _svc, mock_tabs, mock_headings, _pf, _update, capsys,
+    ):
+        # ?tab=t.0 is ambient noise: fall through to the whole-doc path,
+        # never touching per-tab resolution.
+        mock_headings.return_value = _headings((1, "h.abc", "Title"))
+        rc = cmd_toc(_make_args(doc=f"{BASE_URL}?tab=t.0"))
+        assert rc == 0
+        mock_tabs.assert_not_called()
+        mock_headings.assert_called_once_with(DOC_ID, body=None)
+
 
 class TestTocAwareness:
     @patch("gdoc.state.update_state_after_command")

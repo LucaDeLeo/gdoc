@@ -31,3 +31,29 @@ def doc_mime(monkeypatch):
         "gdoc.api.drive.get_file_version",
         lambda doc_id: {"mimeType": DOC_MIME, "version": 1, "modifiedTime": ""},
     )
+
+
+def doc_with_tabs(*pairs):
+    """A get_document_with_tabs() response for the given (id, title) pairs.
+
+    Shared by the insert/write/baseline test modules: the payload encodes
+    the API contract (tabProperties.tabId, documentTab.body), so its shape
+    lives in one place.
+    """
+    return {
+        "revisionId": "rev1",
+        "tabs": [
+            {
+                "tabProperties": {"tabId": tid, "title": title, "index": i},
+                "documentTab": {"body": {"content": []}},
+            }
+            for i, (tid, title) in enumerate(pairs)
+        ],
+    }
+
+
+def whole_doc_read_state(version=11):
+    """State proving a whole-doc read at `version` (0.22 provenance)."""
+    from gdoc.state import DocState
+
+    return DocState(last_read_version=version, global_read_covers_doc=True)

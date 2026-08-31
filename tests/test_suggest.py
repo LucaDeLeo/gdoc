@@ -1390,6 +1390,42 @@ class TestCmdSuggest:
         assert call.args[1] == [{"startIndex": 5, "endIndex": 10}]
         assert call.kwargs["tab_id"] == "t.draft"
 
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_VERSION)
+    @patch("gdoc.api.docs.suggest_replacement", return_value=_result())
+    @patch("gdoc.api.docs.get_document_structure")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_url_tab_targets_that_tab(
+        self, _pf, mock_doc, mock_sug, _ver, _state,
+    ):
+        # A doc URL's ?tab= drives suggest like --tab does.
+        mock_doc.return_value = _structure(tabs=[
+            ("t.first", "Tab 1", _body(_para(_run("nothing here\n", 1, 14)))),
+            ("t.draft", "Draft", _body(_para(_run("say hello\n", 1, 11)))),
+        ])
+        cmd_suggest(_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.draft",
+        ))
+        call = mock_sug.call_args
+        assert call.args[1] == [{"startIndex": 5, "endIndex": 10}]
+        assert call.kwargs["tab_id"] == "t.draft"
+
+    @patch("gdoc.api.docs._token_identity", return_value=("cid.apps", "rt1"))
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_VERSION)
+    @patch("gdoc.api.docs.suggest_replacement", return_value=_result())
+    @patch("gdoc.api.docs.get_document_structure", return_value=_structure())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_url_t0_is_ambient_noise_targets_first_tab(
+        self, _pf, mock_doc, mock_sug, _ver, _state, _tid,
+    ):
+        # ?tab=t.0 is the editor's ambient default -> first tab, as with
+        # a bare URL.
+        cmd_suggest(_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.0",
+        ))
+        assert mock_sug.call_args.kwargs["tab_id"] == "t.first"
+
     @patch("gdoc.api.docs.suggest_replacement")
     @patch("gdoc.api.docs.get_document_structure", return_value=_structure())
     @patch("gdoc.notify.pre_flight", return_value=None)

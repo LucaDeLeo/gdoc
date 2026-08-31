@@ -4,6 +4,110 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] — 2026-08-28
+
+
+### Added
+- **Document URLs honor their `?tab=` deep link.** Google's editor appends
+  `?tab=<id>` when you open a tab, so a pasted tab URL now acts exactly like
+  `--tab <id>` for `cat`, `edit` (incl. `--cell`), `write`, `insert`, `toc`,
+  `structure`, `insert-image`, and `suggest` (0.21.0's suggested-edit
+  command, wired in via this release's merge) — previously the tab was silently dropped
+  and the command operated on the first tab (or whole doc). An explicit
+  `--tab`/`--all-tabs` still overrides the URL.
+
+
+### Fixed
+- **Per-tab write-conflict baselines.** The write guard now tracks a read
+  baseline *per tab*, not just per document — a follow-up to the `?tab=` URL
+  support above. Two defects on multi-tab docs are fixed:
+  - **Cross-tab false negative.** `write --tab B` after only `cat --tab A`
+    used to be satisfied by A's read and would replace tab B unseen. It now
+    errors `no read baseline for tab 'B'` until you read B (or the whole
+    doc). `info` still advances the whole-doc guard's baseline (status
+    quo) but never authorizes tab-scoped writes — it shows no content,
+    and an `info` that moves the baseline also voids any earlier read's
+    content provenance for the tab guard.
+  - **Same-tab false positive.** `write --tab X` twice in a row used to
+    conflict on the second write (the first write bumped the doc version but
+    the tab-scoped write left the baseline behind). A tab write now advances
+    that tab's own baseline, so repeated edits to one tab just work.
+- **HTML-escaped `&amp;tab=` in a pasted URL is honored.** A doc URL copied
+  out of rendered HTML keeps the escaped separator; the tab id used to go
+  unseen, silently downgrading `edit`/`write` to the whole-doc path.
+- **`insert --tab X` accepts a `cat --tab X` baseline.** The tab-populate
+  flow the collapse-guard error recommends no longer demands a whole-doc
+  read: `insert` runs the same per-tab conflict check as `write --tab`.
+- **`structure --fields` no longer counts as a read.** A masked response
+  may omit tab ids, sibling tabs, or the content itself, so it can't prove
+  the document (or a tab) was actually seen; it now records the
+  interaction without advancing any read baseline.
+- **Metadata-only version bumps heal per-tab baselines.** `mv`/`rename`
+  used to leave `tab_read_versions` behind their own version bump, so the
+  next `write --tab` false-conflicted. Entries current at pre-flight are
+  now carried forward under the same attributability guard as the global
+  baseline.
+- **Replacing a document's only tab counts as a whole-doc write** (the
+  single-tab rule `cat --tab` already follows), so a following
+  whole-document `write`/`push` doesn't conflict with the CLI's own edit.
+- **Blank `--tab` values are rejected** (exit 3) instead of silently
+  reading as "no tab" and mutating the default target.
+
+  A plain `cat`/`pull` still covers every tab (its Drive export is the whole
+  document), so the common read-then-write flow is unchanged. On a single-tab
+  document a `cat --tab X` reads the whole document too, so a following
+  whole-document `write`/`push` is not blocked. An edit to a *different* tab
+  still trips the check — Google's version number is per-document — which is
+  conservative by design; `--force` overrides. `structure --tab X` follows
+  the same rule as `cat --tab X`: on a multi-tab doc it stamps only that
+  tab's baseline, not the whole-doc one.
+
+
+### Changed
+- State files gain a `tab_read_versions` map and a
+  `global_read_covers_doc` provenance marker. Older state files load
+  unchanged, but their **whole-doc read baseline is not trusted for
+  tab-scoped writes** — a pre-0.22 `cat --tab A` stored its version in the
+  global baseline, which would wrongly authorize `write --tab B`. The
+  first `write --tab` after upgrading may therefore ask for a fresh
+  `gdoc cat`. Downgrading is safe but lossy in the same direction: a
+  pre-0.22 binary rewriting state drops both new fields, so re-upgrading
+  fail-closes (re-read before the next tab write) rather than risking an
+  overwrite.
+- **Multi-tab `cat --tab X` / `structure --tab X` no longer establish a
+  whole-doc baseline.** A scripted `cat --tab X` followed by
+  `write`/`push --force-collapse-tabs` now errors `no read baseline`
+  where it previously succeeded — reading one tab shouldn't authorize
+  flattening the others. Read the whole doc (plain `cat`) first.
+- **`?tab=t.0` is treated as no tab.** The editor auto-appends `t.0` for the
+  first tab, so it's ambient UI noise; honoring it would push the common
+  pasted-URL case onto the lower-fidelity Docs-API renderer. It now stays on
+  the high-fidelity Drive export path. Escape hatch: pass `--tab t.0`
+  explicitly to force the literal first-tab read.
+- **`gdoc insert` no longer requires `--tab`** when the document URL already
+  carries a `?tab=`.
+
+
+### Notes
+- Combining a URL tab with a whole-document flag errors (exit 3) and names the
+  URL as the source: `cat --comments`/`--revision`,
+  `write --force-collapse-tabs`.
+- `pull`/`push`/`export`/`diff`/`comments`/`images` ignore a URL tab (they
+  cover the whole document) but print a one-line stderr `NOTE:` when
+  discarding a non-`t.0` tab (suppressed under `--quiet`).
+- **`t.0` caveat:** tab ids are assigned at creation and survive
+  reordering, so after tabs are dragged around, id `t.0` may no longer be
+  the first-*positioned* tab — yet the editor still emits `?tab=t.0` when
+  viewing it, and the ambient-noise rule still drops it. If you mean that
+  tab specifically, pass `--tab t.0` explicitly (the multi-tab collapse
+  error now points this out).
+- Spreadsheet `#gid=` deep links are still unparsed — select a worksheet with
+  `--tab`/`--range`.
+
+
+### Docs
+- Corrected the README Tabs section: the Drive export returns **all** tabs
+  (each under a `# **Tab title**` heading), not just the first.
 ## [0.21.0] — 2026-08-26
 
 ### Added

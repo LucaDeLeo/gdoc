@@ -181,3 +181,59 @@ class TestCmdEditCell:
         with pytest.raises(GdocError, match="needs replacement text") as exc:
             cmd_edit(_args(cell="Label A"))
         assert exc.value.exit_code == 3
+
+
+def _two_tab_doc():
+    # Second tab's grid sits at different offsets than GRID so a wrong-tab
+    # resolution produces a visibly wrong range.
+    grid2 = {"content": [_table([
+        [("Label A\n", 105), ("Value A\n", 120)],
+    ])]}
+    return {
+        "revisionId": "rev123",
+        "tabs": [
+            {
+                "tabProperties": {"tabId": "t.first", "title": "First", "index": 0},
+                "documentTab": {"body": GRID},
+            },
+            {
+                "tabProperties": {"tabId": "t.second", "title": "Second", "index": 1},
+                "documentTab": {"body": grid2},
+            },
+        ],
+    }
+
+
+class TestCmdEditCellUrlTab:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_ver())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_two_tab_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_url_tab_cell_edit_targets_selected_tab(
+        self, _pf, _doc_, mock_replace, _v, _u,
+    ):
+        # The composition the URL feature advertises: cell indices resolve
+        # from the URL-selected tab's body, and the write carries its id.
+        rc = cmd_edit(_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.second",
+            cell="Label A", old_text="new value",
+        ))
+        assert rc == 0
+        call = mock_replace.call_args
+        assert call.args[1] == [{"startIndex": 120, "endIndex": 127}]
+        assert call.kwargs["tab_id"] == "t.second"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_ver())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_two_tab_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_tab_flag_cell_edit_same_composition(
+        self, _pf, _doc_, mock_replace, _v, _u,
+    ):
+        rc = cmd_edit(_args(cell="Label A", old_text="x", tab="Second"))
+        assert rc == 0
+        call = mock_replace.call_args
+        assert call.args[1] == [{"startIndex": 120, "endIndex": 127}]
+        assert call.kwargs["tab_id"] == "t.second"

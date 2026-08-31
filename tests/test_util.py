@@ -10,6 +10,7 @@ from gdoc.util import (
     build_doc_url,
     confirm_destructive,
     extract_doc_id,
+    extract_doc_ref,
 )
 
 
@@ -81,6 +82,70 @@ class TestExtractDocId:
     def test_folder_url_with_params(self):
         url = "https://drive.google.com/drive/folders/abc123?usp=sharing"
         assert extract_doc_id(url) == "abc123"
+
+
+class TestExtractDocRef:
+    def test_no_tab_param(self):
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit"
+        assert extract_doc_ref(url) == ("1aBcDeFg", None)
+
+    def test_tab_t0(self):
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?tab=t.0"
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.0")
+
+    def test_tab_non_t0(self):
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?tab=t.abc123"
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.abc123")
+
+    def test_tab_with_fragment(self):
+        url = (
+            "https://docs.google.com/document/d/1aBcDeFg/edit"
+            "?tab=t.xyz#heading=h.abc"
+        )
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.xyz")
+
+    def test_tab_as_second_query_param(self):
+        url = (
+            "https://docs.google.com/document/d/1aBcDeFg/edit"
+            "?usp=sharing&tab=t.xyz"
+        )
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.xyz")
+
+    def test_tab_suffixed_param_name_does_not_match(self):
+        # The [?&] anchor means a param whose *name* ends in "tab"
+        # (e.g. subtab=) must NOT be read as the tab id.
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?subtab=t.9"
+        assert extract_doc_ref(url) == ("1aBcDeFg", None)
+
+    def test_html_escaped_separator_still_finds_tab(self):
+        # A URL copied out of rendered HTML keeps "&amp;" as the separator.
+        # Missing the tab there is not a no-op: the caller silently falls
+        # back to the whole-doc path and edits outside the intended tab.
+        url = (
+            "https://docs.google.com/document/d/1aBcDeFg/edit"
+            "?usp=sharing&amp;tab=t.xyz"
+        )
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.xyz")
+
+    def test_escaped_separator_does_not_relax_the_name_anchor(self):
+        # The &amp; alternative must not become a wildcard: a param whose
+        # name merely ends in "tab" is still rejected.
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?a=1&amp;subtab=t.9"
+        assert extract_doc_ref(url) == ("1aBcDeFg", None)
+
+    def test_bare_id_has_no_tab(self):
+        assert extract_doc_ref("1aBcDeFgHiJkLmNoPqRsTuVwXyZ") == (
+            "1aBcDeFgHiJkLmNoPqRsTuVwXyZ",
+            None,
+        )
+
+    def test_folder_url_has_no_tab(self):
+        url = "https://drive.google.com/drive/folders/abc123?usp=sharing"
+        assert extract_doc_ref(url) == ("abc123", None)
+
+    def test_invalid_url_raises(self):
+        with pytest.raises(ValueError, match="Cannot extract"):
+            extract_doc_ref("https://example.com/not-a-doc")
 
 
 class TestErrorClasses:

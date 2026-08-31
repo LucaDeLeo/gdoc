@@ -699,6 +699,45 @@ class TestEditTab:
         with pytest.raises(GdocError, match="Document not found"):
             cmd_edit(args)
 
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_tabs_doc())
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_url_tab_passes_tab_id(
+        self, _pf, mock_get_tabs, mock_replace, _ver, _update,
+    ):
+        """A non-t.0 ?tab= in the URL drives the tab-scoped edit path."""
+        args = _make_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t1",
+            tab=None,
+        )
+        rc = cmd_edit(args)
+        assert rc == 0
+        mock_get_tabs.assert_called_once()
+        assert mock_replace.call_args[1]["tab_id"] == "t1"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    @patch("gdoc.api.docs.replace_formatted", return_value=1)
+    @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
+    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_url_tab_t0_uses_whole_doc(
+        self, _pf, mock_get_tabs, mock_doc, _find, mock_replace, _ver, _update,
+    ):
+        """?tab=t.0 is ambient noise: whole-doc path, tab_id=None."""
+        args = _make_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.0",
+            tab=None,
+        )
+        rc = cmd_edit(args)
+        assert rc == 0
+        mock_doc.assert_called_once()
+        mock_get_tabs.assert_not_called()
+        assert mock_replace.call_args[1]["tab_id"] is None
+
 
 class TestEditStdin:
     @patch("gdoc.state.update_state_after_command")

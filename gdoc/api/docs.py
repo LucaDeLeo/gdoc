@@ -1414,6 +1414,7 @@ def insert_markdown_into_tab(
     markdown: str,
     position: str = "start",
     replace: bool = False,
+    doc: dict | None = None,
 ) -> dict:
     """Insert (or replace) markdown content in a tab via Docs API.
 
@@ -1428,13 +1429,19 @@ def insert_markdown_into_tab(
         position: "start" or "end". Ignored when replace=True.
         replace: If True, delete the tab body first then insert at the
             body start.
+        doc: Optional pre-fetched get_document_with_tabs() response. When a
+            caller (e.g. `write --tab`) already fetched the doc to resolve the
+            tab for its conflict check, pass it here to avoid a second fetch.
+            Its revisionId still pins writeControl, so a concurrent edit
+            between the fetch and this write is still rejected.
 
     Returns:
         Dict with "tab_id", "tab_title", "insert_index".
     """
     from gdoc.mdparse import parse_markdown, to_docs_requests, utf16_len
 
-    doc = get_document_with_tabs(doc_id)
+    if doc is None:
+        doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
     tabs = flatten_tabs(doc.get("tabs", []))
     tab_match = resolve_tab(tabs, tab_name)
