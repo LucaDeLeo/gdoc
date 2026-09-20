@@ -3,6 +3,7 @@
 from googleapiclient.errors import HttpError
 
 from gdoc.api import get_drive_service
+from gdoc.mdimport import collapse_nbsp_lines
 from gdoc.util import AuthError, GdocError
 
 
@@ -41,9 +42,14 @@ def _escape_query_value(value: str) -> str:
 def export_doc(doc_id: str, mime_type: str = "text/markdown") -> str:
     """Export a Google Docs document as the given MIME type.
 
-    Returns the decoded UTF-8 content string.
+    Returns the decoded UTF-8 content string. Markdown exports have the
+    export's ``&nbsp;``-only lines (its rendering of empty paragraphs)
+    collapsed to empty lines, so the text round-trips through ``write``.
     """
-    return export_doc_bytes(doc_id, mime_type).decode("utf-8")
+    content = export_doc_bytes(doc_id, mime_type).decode("utf-8")
+    if mime_type == "text/markdown":
+        content = collapse_nbsp_lines(content)
+    return content
 
 
 def export_doc_bytes(doc_id: str, mime_type: str) -> bytes:

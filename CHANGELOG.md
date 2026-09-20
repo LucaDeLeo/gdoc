@@ -4,6 +4,21 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`cat`, `pull`, `diff`, `push` and revision exports no longer show
+  `&nbsp;` for empty paragraphs.** The Drive markdown export renders every
+  empty paragraph as a line holding only `&nbsp;`. Agents that read a doc
+  this way and echo the convention back through `write`/`edit` inserted the
+  six characters as literal text, because the Markdown importer has no
+  HTML entity decoding. Markdown exports now collapse those lines to empty
+  lines at the API boundary (`export_doc`, `export_revision`), so every
+  command sees the same text and a read/write round-trip is clean. A
+  backslash-escaped `\&nbsp;` (a paragraph whose text is the literal
+  string) and inline `&nbsp;` are left as they are; `--plain` output is
+  untouched.
+
 ## [0.21.0] — 2026-08-26
 
 ### Added

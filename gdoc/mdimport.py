@@ -122,3 +122,17 @@ def strip_images(content: str) -> str:
     result = IMAGE_DEF_RE.sub("", result)
     result = re.sub(r"\n{3,}", "\n\n", result)
     return result
+
+
+# The Drive markdown export renders every empty paragraph as a line
+# holding only ``&nbsp;``. Callers that echo such lines back through
+# ``write``/``edit`` insert the six characters as literal text, because the
+# Markdown importer has no HTML entity decoding. A backslash-escaped
+# ``\&nbsp;`` is deliberately not matched: that is how the export renders a
+# paragraph whose text is the literal string.
+_NBSP_LINE_RE = re.compile(r"^[ \t]*&nbsp;[ \t]*$", re.MULTILINE)
+
+
+def collapse_nbsp_lines(content: str) -> str:
+    """Turn lines consisting only of ``&nbsp;`` into empty lines."""
+    return _NBSP_LINE_RE.sub("", content)
