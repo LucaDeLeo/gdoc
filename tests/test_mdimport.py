@@ -2,7 +2,7 @@
 
 import pytest
 
-from gdoc.mdimport import extract_images, strip_images
+from gdoc.mdimport import collapse_nbsp_lines, extract_images, strip_images
 
 
 class TestExtractImages:
@@ -146,3 +146,26 @@ class TestStripImages:
         assert "![][image1]" not in result
         assert "[image1]:" not in result
         assert "Intro" in result and "After" in result
+
+
+class TestCollapseNbspLines:
+    def test_bare_nbsp_line_becomes_empty(self):
+        content = "Links:\n\n&nbsp;\n\n* item\n"
+        assert collapse_nbsp_lines(content) == "Links:\n\n\n\n* item\n"
+
+    def test_surrounding_whitespace_tolerated(self):
+        assert collapse_nbsp_lines("a\n  &nbsp; \nb") == "a\n\nb"
+
+    def test_escaped_literal_preserved(self):
+        # The export renders a paragraph whose text is literally "&nbsp;"
+        # with a backslash; that is real content and must survive.
+        content = "\\&nbsp;\n"
+        assert collapse_nbsp_lines(content) == content
+
+    def test_inline_nbsp_preserved(self):
+        content = "Sentence.&nbsp;  \nnext\n"
+        assert collapse_nbsp_lines(content) == content
+
+    def test_no_nbsp_unchanged(self):
+        content = "# Title\n\nBody\n"
+        assert collapse_nbsp_lines(content) == content

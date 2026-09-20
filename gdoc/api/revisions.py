@@ -13,6 +13,7 @@ from functools import lru_cache
 from googleapiclient.errors import HttpError
 
 from gdoc.api import ACCOUNT_CACHE_SIZE, account_cache_key, get_drive_service
+from gdoc.mdimport import collapse_nbsp_lines
 from gdoc.revdiff import pruned_error
 from gdoc.util import AuthError, GdocError
 
@@ -123,8 +124,10 @@ def export_revision(
             _translate_http_error(e, file_id)
 
     url = export_links.get(mime_type)
+    exported_mime = mime_type
     if not url:
         url = export_links.get("text/plain")
+        exported_mime = "text/plain"
         if url and mime_type != "text/plain":
             print(
                 f"WARN: revision {revision_id} has no {mime_type} "
@@ -151,4 +154,6 @@ def export_revision(
             f"(HTTP {response.status_code})"
         )
     response.encoding = "utf-8"
+    if exported_mime == "text/markdown":
+        return collapse_nbsp_lines(response.text)
     return response.text

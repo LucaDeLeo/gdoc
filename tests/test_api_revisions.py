@@ -30,6 +30,21 @@ class TestExportRevision:
         assert call.args == (LINKS["text/markdown"],)
         assert call.kwargs["timeout"] == _EXPORT_TIMEOUT
 
+    def test_markdown_collapses_nbsp_lines(self, mock_session):
+        mock_session.return_value.get.return_value = _response(
+            text="Title\n\n&nbsp;\n\nBody"
+        )
+        content = export_revision("doc", "5", export_links=LINKS)
+        assert content == "Title\n\n\n\nBody"
+
+    def test_plain_fallback_keeps_nbsp_lines(self, mock_session, capsys):
+        mock_session.return_value.get.return_value = _response(
+            text="a\n&nbsp;\nb"
+        )
+        links = {"text/plain": LINKS["text/plain"]}
+        content = export_revision("doc", "5", export_links=links)
+        assert content == "a\n&nbsp;\nb"
+
     def test_403_is_permission_denied_not_auth(self, mock_session):
         # The session auto-refreshes tokens, so a 403 means the export
         # is denied, not that auth expired.
