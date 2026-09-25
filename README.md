@@ -205,6 +205,8 @@ gdoc cat 1aBcDeFg...
 | `write DOC FILE` | Overwrite document from a local markdown file |
 | `cells SHEET RANGE` | Write values into a spreadsheet range (`-v VALUE` per cell, `--file rows.csv`, `--stdin` for TSV; `--append` adds rows, `--user-entered` parses formulas/dates) |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
+| `add-tab DOC TITLE` | Add a tab to a document |
+| `rename-tab DOC TAB TITLE` | Rename a tab, given its current title or ID |
 | `insert-image DOC IMG` | Insert a local image or public URL (`--after TEXT`, `--index N`, or `--end`; `--tab` for multi-tab docs; `--width`/`--height` in points) |
 | `replace-image DOC ID IMG` | Swap an image's content in place, keeping its size (IDs from `gdoc images`) |
 | `cp DOC TITLE` | Duplicate a document |
