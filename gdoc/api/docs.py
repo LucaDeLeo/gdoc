@@ -1299,6 +1299,21 @@ def add_tab(doc_id: str, title: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
+def rename_tab(doc_id: str, tab_id: str, title: str) -> None:
+    """Retitle an existing tab, leaving its content and position alone."""
+    service = get_docs_service()
+    try:
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": [{"updateDocumentTabProperties": {
+                "tabProperties": {"tabId": tab_id, "title": title},
+                "fields": "title",
+            }}]},
+        ).execute()
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
 def _build_cleanup_requests(
     body: dict, position: int, tab_id: str | None = None,
 ) -> list[dict]:

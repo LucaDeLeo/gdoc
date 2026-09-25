@@ -4,6 +4,18 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`gdoc rename-tab DOC TAB TITLE`.** Retitles an existing tab, named by
+  its current title or ID, via the Docs API's
+  `updateDocumentTabProperties` request; content and position are
+  untouched. Output matches `add-tab` (tab ID, new title and a `?tab=`
+  URL; `--json`/`--plain` also report the old title). The main use is
+  renaming the default "Tab 1" of a doc made with `gdoc new`, which was
+  otherwise only possible in the Docs UI. Exposed over MCP as
+  `gdoc_rename_tab` (a write tool).
+
 ## [0.21.0] — 2026-08-26
 
 ### Added

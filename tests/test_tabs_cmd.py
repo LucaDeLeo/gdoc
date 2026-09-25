@@ -1,4 +1,4 @@
-"""Tests for the `gdoc tabs` and `gdoc add-tab` subcommands."""
+"""Tests for the `gdoc tabs`, `gdoc add-tab` and `gdoc rename-tab` subcommands."""
 
 import json
 from types import SimpleNamespace
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gdoc.cli import cmd_add_tab, cmd_tabs
+from gdoc.cli import cmd_add_tab, cmd_rename_tab, cmd_tabs
 from gdoc.notify import ChangeInfo
 from gdoc.util import GdocError
 
@@ -287,3 +287,122 @@ class TestAddTab:
         mock_add.side_effect = GdocError("Document not found: abc123")
         with pytest.raises(GdocError, match="Document not found"):
             cmd_add_tab(_make_add_tab_args())
+
+
+# ── rename-tab command ───────────────────────────────────────────
+
+
+def _make_rename_tab_args(**overrides):
+    defaults = {
+        "command": "rename-tab",
+        "doc": "abc123",
+        "tab": "Tab 1",
+        "title": "Calls",
+        "json": False,
+        "verbose": False,
+        "plain": False,
+        "quiet": False,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+_RENAME_TABS = [
+    {"id": "t.0", "title": "Tab 1", "index": 0, "nesting_level": 0,
+     "body": {}, "lists": {}},
+    {"id": "t.abc", "title": "Notes", "index": 1, "nesting_level": 0,
+     "body": {}, "lists": {}},
+]
+
+
+class TestRenameTab:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.rename_tab")
+    @patch("gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS)
+    def test_rename_by_title_terse(
+        self, _tabs, mock_rename, _pf, _ver, _update, capsys,
+    ):
+        rc = cmd_rename_tab(_make_rename_tab_args())
+        assert rc == 0
+        mock_rename.assert_called_once_with("abc123", "t.0", "Calls")
+        out = capsys.readouterr().out
+        assert "t.0\tCalls\t" in out
+        assert "https://docs.google.com/document/d/abc123/edit?tab=t.0" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.rename_tab")
+    @patch("gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS)
+    def test_rename_by_id(self, _tabs, mock_rename, _pf, _ver, _update):
+        rc = cmd_rename_tab(_make_rename_tab_args(tab="t.abc", title="Log"))
+        assert rc == 0
+        mock_rename.assert_called_once_with("abc123", "t.abc", "Log")
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.rename_tab")
+    @patch("gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS)
+    def test_rename_json(self, _tabs, _rename, _pf, _ver, _update, capsys):
+        rc = cmd_rename_tab(_make_rename_tab_args(json=True))
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert data["id"] == "t.0"
+        assert data["title"] == "Calls"
+        assert data["old_title"] == "Tab 1"
+        assert data["url"] == (
+            "https://docs.google.com/document/d/abc123/edit?tab=t.0"
+        )
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.rename_tab")
+    @patch("gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS)
+    def test_rename_plain(self, _tabs, _rename, _pf, _ver, _update, capsys):
+        rc = cmd_rename_tab(_make_rename_tab_args(plain=True))
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tt.0" in out
+        assert "title\tCalls" in out
+        assert "old_title\tTab 1" in out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 10})
+    @patch("gdoc.notify.pre_flight")
+    @patch("gdoc.api.docs.rename_tab")
+    @patch("gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS)
+    def test_rename_preflight_and_state(
+        self, _tabs, _rename, mock_pf, _ver, mock_update,
+    ):
+        change_info = ChangeInfo(current_version=7)
+        mock_pf.return_value = change_info
+        rc = cmd_rename_tab(_make_rename_tab_args())
+        assert rc == 0
+        mock_pf.assert_called_once_with("abc123", quiet=False)
+        mock_update.assert_called_once_with(
+            "abc123", change_info, command="rename-tab", quiet=False,
+            command_version=10,
+        )
+
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.rename_tab")
+    @patch("gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS)
+    def test_unknown_tab(self, _tabs, mock_rename, _pf):
+        with pytest.raises(GdocError, match="tab not found: Missing") as exc:
+            cmd_rename_tab(_make_rename_tab_args(tab="Missing"))
+        assert exc.value.exit_code == 3
+        mock_rename.assert_not_called()
+
+    @patch("gdoc.notify.pre_flight")
+    @patch("gdoc.api.docs.rename_tab")
+    def test_empty_title_rejected(self, mock_rename, mock_pf):
+        with pytest.raises(GdocError, match="cannot be empty") as exc:
+            cmd_rename_tab(_make_rename_tab_args(title="   "))
+        assert exc.value.exit_code == 3
+        mock_pf.assert_not_called()
+        mock_rename.assert_not_called()
