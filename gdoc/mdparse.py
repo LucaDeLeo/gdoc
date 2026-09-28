@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import html
 import html.entities
 import re
@@ -1626,10 +1627,20 @@ def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
                 "range": span(start, start + item.list_depth),
             }})
 
+    starts = [item.start for item in items]
+    consumed = [0]
+    for item in items:
+        consumed.append(consumed[-1] + item.list_depth)
+
     def coordinate(point):
-        return insert_index + offsets[point] - sum(
-            min(item.list_depth, max(0, point - item.start)) for item in items
-        )
+        # Nesting tabs removed before the point; only the item the point
+        # starts in can have part of its tabs after it.
+        before = bisect.bisect_left(starts, point)
+        removed = consumed[before]
+        if before:
+            last = items[before - 1]
+            removed -= last.list_depth - min(last.list_depth, point - last.start)
+        return insert_index + offsets[point] - removed
 
     def end_of(item):
         # A stripped final empty item still owns the retained paragraph mark.
