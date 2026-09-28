@@ -653,6 +653,20 @@ class TestCommand:
             cmd_nest(_args())
         assert not isinstance(exc.value, StaleRevisionError)
 
+    def test_applied_resend_with_closed_stderr_still_succeeds(self, api, mocker):
+        from gdoc.api.docs import StaleRevisionError
+
+        class Closed(io.StringIO):
+            def write(self, _):
+                raise BrokenPipeError
+
+            def fileno(self):
+                raise io.UnsupportedOperation
+
+        api.write.side_effect = StaleRevisionError("document changed")
+        mocker.patch("sys.stderr", Closed())
+        assert cmd_nest(_args()) == 0
+
     def test_stale_revision_with_the_list_unchanged_says_re_run(self, api):
         from gdoc.api.docs import StaleRevisionError
 

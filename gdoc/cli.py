@@ -1504,17 +1504,18 @@ def cmd_nest(args) -> int:
                 "neither as planned nor as it was. The change may already "
                 "be applied: inspect the list before retrying."
             )
-        print(
-            "WARN: the write reported a changed document, but the list is "
-            "already exactly as planned (a retried request); not re-applied",
-            file=sys.stderr,
+        resent = (
+            "the write reported a changed document, but the list is "
+            "already exactly as planned (a retried request); not re-applied"
         )
+    else:
+        resent = None
 
     # From here the change is saved. A failed follow-up read must not be
     # reported as a failed write: a caller that retried would move the
     # items twice. So read errors become warnings.
     verb = "nested" if delta > 0 else "unnested"
-    warnings = []
+    warnings = [resent] if resent else []
 
     # The rebuild relies on how createParagraphBullets assigns levels and
     # joins lists, so read the tab back and say so if it did not land.
