@@ -542,9 +542,9 @@ def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
         if _text(el) != want:
             # Positions are compared, so a shifted or altered paragraph
             # (another edit, a leftover tab) makes the rest meaningless.
-            shown = want.strip()
+            shown = repr(want.strip()[:40]) if want.strip() else "a blank line"
             return [
-                f"{shown[:40]!r} is no longer where it was (the tab changed, "
+                f"{shown} is no longer where it was (the tab changed, "
                 "or text was left behind)"
             ]
     for i, want in plan.expected.items():
