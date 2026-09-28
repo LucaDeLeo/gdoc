@@ -2057,9 +2057,12 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     Comments missing from the result have no live anchor (for example,
     comments created through the Drive API with only a quote).
 
-    Raises PreviewUnavailableError when the OAuth client's project is not
-    preview-enrolled (the field is rejected, or accepted but not applied)
-    or the caller lacks the comment access the view needs (403).
+    Raises PreviewUnavailableError whenever the anchors can't be read but
+    the document otherwise can: the OAuth client's project is not
+    preview-enrolled (the field is rejected, or accepted but not applied),
+    access is refused (403), or the request fails (network, rate limit,
+    server error). Callers fall back to quoted text. Only expired
+    credentials (AuthError) and a missing document (GdocError) propagate.
     """
     from google.auth.exceptions import GoogleAuthError, TransportError
     from requests.exceptions import RequestException
@@ -2068,31 +2071,33 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
         # No fields mask: Google rejects masks that expand childTabs.
         resp = _comments_view_get(doc_id)
     except TransportError as e:
-        raise GdocError(f"network error: {e}")
+        # A network failure during token refresh, not bad credentials.
+        raise PreviewUnavailableError(f"network error: {e}")
     except GoogleAuthError as e:
         raise AuthError(f"Authentication expired ({e}). Run `gdoc auth`.")
     except RequestException as e:
-        raise GdocError(f"network error: {e}")
+        raise PreviewUnavailableError(f"network error: {e}")
     status = resp.status_code
     if _preview_field_rejected(resp):
         raise PreviewUnavailableError(
             "the OAuth client's Cloud project is not enrolled in the "
             "Google Workspace Developer Preview"
         )
-    if status == 403:
-        raise PreviewUnavailableError(
-            "reading comment anchors needs comment or edit access"
-        )
     if status == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
     if status == 404:
         raise GdocError(f"Document not found: {doc_id}")
+    if status == 403:
+        raise PreviewUnavailableError(
+            "permission denied (403); the comments view needs comment or "
+            "edit access"
+        )
     if status != 200:
-        raise GdocError(f"API error ({status}): {resp.reason}")
+        raise PreviewUnavailableError(f"API error ({status}): {resp.reason}")
     try:
         document = resp.json()
     except ValueError:
-        raise GdocError("API error: unreadable document response")
+        raise PreviewUnavailableError("unreadable document response")
     if document.get("commentsViewMode") != "COMMENTS_VIEW_MODE_INCLUDED":
         raise PreviewUnavailableError(
             "the server did not apply the Developer Preview comments view"
@@ -2126,10 +2131,14 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
         offset += len(chars)
         for anchor_id, anchor in doc_tab.get("commentAnchors", {}).items():
             for r in anchor.get("ranges", []):
+                # A range in a header, footer or footnote (segmentId) is
+                # indexed within that segment, not the body: it keeps the
+                # comment attached but contributes no body text.
+                segment = r.get("segmentId")
                 ranges_by_anchor.setdefault(anchor_id, []).append((
                     r.get("tabId") or tab_id,
-                    r.get("startIndex", 0),
-                    r.get("endIndex", 0),
+                    0 if segment else r.get("startIndex", 0),
+                    0 if segment else r.get("endIndex", 0),
                 ))
     full_text = "".join(text_parts)
 
@@ -2164,11 +2173,13 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
             }
             continue
         text = "".join(full_text[p] for p in spots)
+        # A soft line break (vertical tab) ends a markdown line too.
+        lines_text = text.replace("\x0b", "\n")
         # The last paragraph that holds anchored text: its part of the
         # anchor, and where that part starts in the full text.
         line_start = len(text)
         while True:
-            cut = text.rfind("\n", 0, line_start)
+            cut = lines_text.rfind("\n", 0, line_start)
             part = text[cut + 1:line_start]
             if part.strip() or cut == -1:
                 break

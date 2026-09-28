@@ -191,6 +191,23 @@ class TestGetCommentAnchors:
         )
         assert "[#c1 open] [attached, location not found]" in result
 
+    def test_footnote_range_is_attached_without_body_text(self):
+        tab = _tab("t.1", ["Body text here."], {})
+        tab["documentTab"]["commentAnchors"] = {"kix.a": {"ranges": [
+            {"startIndex": 1, "endIndex": 5, "tabId": "t.1",
+             "segmentId": "kix.footnote1"},
+        ]}}
+        anchors = _anchors(_document([tab], {"c1": "kix.a"}))
+        assert anchors["c1"]["text"] == ""
+
+    def test_soft_line_break_ends_the_placement_text(self):
+        doc = _document(
+            [_tab("t.1", ["First line\x0bsecond line"],
+                  {"kix.a": ["line\x0bsecond"]})],
+            {"c1": "kix.a"},
+        )
+        assert _anchors(doc)["c1"]["key"] == "second"
+
     def test_request_uses_the_preview_view(self):
         session = MagicMock()
         session.get.return_value = _response(body=_document([], {}))
@@ -212,19 +229,30 @@ class TestGetCommentAnchors:
                             "Cannot find field."),
         _response(403, text="forbidden"),
         _response(200, body={"tabs": []}),
-    ], ids=["not-enrolled", "no-comment-access", "field-not-applied"])
-    def test_unavailable_preview(self, resp):
+        _response(429, text="slow down", reason="Too Many Requests"),
+        _response(503, text="backend", reason="Service Unavailable"),
+        _response(400, text="Bad request"),
+    ], ids=["not-enrolled", "no-comment-access", "field-not-applied",
+            "rate-limited", "server-error", "other-400"])
+    def test_unavailable_anchors_fall_back(self, resp):
         with patch("gdoc.api.docs._comments_view_get", return_value=resp):
             with pytest.raises(PreviewUnavailableError):
+                get_comment_anchors("doc1")
+
+    def test_network_failure_falls_back(self):
+        from requests.exceptions import ConnectionError as ReqConnectionError
+
+        with patch("gdoc.api.docs._comments_view_get",
+                   side_effect=ReqConnectionError("dns failure")):
+            with pytest.raises(PreviewUnavailableError, match="network"):
                 get_comment_anchors("doc1")
 
     @pytest.mark.parametrize("status,error,match", [
         (401, AuthError, "Run `gdoc auth`"),
         (404, GdocError, "Document not found: doc1"),
-        (503, GdocError, r"API error \(503\)"),
     ])
     def test_other_errors_are_not_a_fallback(self, status, error, match):
-        resp = _response(status, text="x", reason="Service Unavailable")
+        resp = _response(status, text="x")
         with patch("gdoc.api.docs._comments_view_get", return_value=resp):
             with pytest.raises(error, match=match) as exc:
                 get_comment_anchors("doc1")
