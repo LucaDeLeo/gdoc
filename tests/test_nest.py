@@ -1,5 +1,6 @@
 """Tests for `gdoc nest` / `gdoc unnest` and the planner in gdoc.listnest."""
 
+import io
 import json
 from types import SimpleNamespace
 
@@ -678,6 +679,18 @@ class TestCommand:
         second["tabs"].insert(0, decoy)
         api.get.side_effect = [_doc(_tab(*STD)), second]
         assert cmd_nest(_args()) == 0
+
+    def test_closed_stdout_after_the_write_still_succeeds(self, api, mocker):
+        class Closed(io.StringIO):
+            def write(self, _):
+                raise BrokenPipeError
+
+            def fileno(self):
+                raise io.UnsupportedOperation
+
+        mocker.patch("sys.stdout", Closed())
+        assert cmd_nest(_args()) == 0
+        api.state.assert_called_once()
 
     def test_parser(self):
         args = build_parser().parse_args(

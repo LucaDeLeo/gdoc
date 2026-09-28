@@ -1,6 +1,7 @@
 """CLI parser, subcommand dispatch, and exception handler."""
 
 import argparse
+import io
 import os
 import sys
 from dataclasses import dataclass
@@ -1548,16 +1549,14 @@ def cmd_nest(args) -> int:
 
     mode = get_output_mode(args)
     if mode == "json":
-        print(format_json(moved=plan.moved, levels=delta))
+        lines = [format_json(moved=plan.moved, levels=delta)]
     elif mode == "plain":
-        print(f"id\t{doc_id}")
-        print("status\tupdated")
+        lines = [f"id\t{doc_id}", "status\tupdated"]
     else:
         items = "item" if plan.moved == 1 else "items"
         lvls = "level" if args.levels == 1 else "levels"
-        print(f"OK {verb} {plan.moved} {items} by {args.levels} {lvls}")
-    for warning in warnings:
-        print(f"WARN: {warning}", file=sys.stderr)
+        lines = [f"OK {verb} {plan.moved} {items} by {args.levels} {lvls}"]
+    _print_after_write(lines, [f"WARN: {w}" for w in warnings])
     if command_version is None:
         return 0
 
@@ -1569,11 +1568,31 @@ def cmd_nest(args) -> int:
             quiet=quiet, command_version=command_version,
         )
     except Exception as e:  # noqa: BLE001 — post-mutation, see above
-        print(
-            f"WARN: {verb} but awareness state was not persisted: {e}",
-            file=sys.stderr,
+        _print_after_write(
+            [], [f"WARN: {verb} but awareness state was not persisted: {e}"],
         )
     return 0
+
+
+def _print_after_write(out: list[str], err: list[str]) -> None:
+    """Print after a saved non-idempotent write without risking the exit code.
+
+    A closed pipe (`gdoc nest ... | head -0`) would otherwise raise
+    BrokenPipeError here, or at interpreter exit, turning a saved change
+    into a failure a caller might retry. Output that cannot be delivered
+    is dropped instead.
+    """
+    for stream, lines in ((sys.stdout, out), (sys.stderr, err)):
+        try:
+            for line in lines:
+                print(line, file=stream)
+            stream.flush()
+        except (BrokenPipeError, ValueError):
+            try:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull, stream.fileno())
+            except (OSError, ValueError, io.UnsupportedOperation):
+                pass
 
 
 def _doc_matches(doc_id: str, body: str) -> bool:
