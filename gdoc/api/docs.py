@@ -2112,7 +2112,9 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     # Every tab's text as one string, tab after tab, plus each tab's map
     # from doc index to position in that string. The markdown export of a
     # document with several tabs heads each tab with its title, so those
-    # titles are counted too; a single-tab export has no title heading.
+    # titles are counted too. A single-tab export usually has no title
+    # heading (one that once had more tabs can keep it); a count that then
+    # disagrees with the markdown leaves the comment unplaced, not misplaced.
     tabs = list(walk(document.get("tabs", [])))
     text_parts: list[str] = []
     position: dict[str, dict[int, int]] = {}

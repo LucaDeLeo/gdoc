@@ -76,16 +76,26 @@ The agent sees exactly what it can `edit` (numbered lines) and what's discussion
 context (un-numbered lines). This matches the Read/Edit pattern from Claude Code —
 line numbers are a display prefix, not part of the content.
 
-The anchoring uses `quotedFileContent.value` from the comments API — the text
-the comment was attached to. The CLI finds that substring in the markdown and
-places the annotation after the line containing it.
+Placement uses each comment's live anchor from the Docs API Developer Preview
+(`documents.get` with `commentsViewMode`): the text the comment covers now. The
+CLI finds that text in the markdown and places the annotation after the line
+where the anchor ends. Drive's `quotedFileContent` is not used for this: Drive
+never updates it after an edit, so it can't show whether a comment is still
+attached.
 
-Unanchored comments go at the bottom:
+Comments not placed inline go at the bottom, with a note when there is one:
 
 ```
       	[UNANCHORED]
       	  [#5 open] dave@co.com: "General feedback: great doc"
+      	  [#6 open] [detached] erin@co.com: "Cite this?"
+      	  [#7 open] [attached, location not found] frank@co.com: "Crop this image"
 ```
+
+`[detached]` means the anchored text is all gone (Docs shows "Original content
+deleted"). Without preview access the CLI warns and falls back to the quoted
+text, labelled `[quoted text found]` or `[quoted text not found (edited or
+detached)]`.
 
 ## Awareness System — "What Changed?"
 
