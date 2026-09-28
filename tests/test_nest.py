@@ -490,6 +490,14 @@ class TestCheckResult:
                        ("Bravo", 0, "num"), ("Charlie", 0, "num"))
         assert "no longer where it was" in check_result(shifted, plan)[0]
 
+    def test_an_inserted_twin_item_does_not_pass_for_the_target(self):
+        # A new item with the target's text and planned level lands at the
+        # target's position; the anchor fingerprint (Alpha above) catches it.
+        plan = _plan(_tab(*STD), "Bravo", 1)
+        twin = _tab(("Intro", 0, None), ("New", 0, "num"), ("Bravo", 1, "num"),
+                    ("Bravo", 0, "num"), ("Charlie", 0, "num"))
+        assert check_result(twin, plan)
+
     def test_wrong_level_or_list_is_reported(self):
         plan = _plan(_tab(*STD), "Bravo", 1)
         stayed = _tab(*STD)
@@ -632,6 +640,17 @@ class TestCommand:
         captured = capsys.readouterr()
         assert captured.out == "OK nested 1 item by 1 level\n"
         assert "already exactly as planned" in captured.err
+
+    def test_stale_revision_with_a_third_state_is_an_unknown_outcome(self, api):
+        from gdoc.api.docs import StaleRevisionError
+
+        other = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 2, "num"),
+                     ("Charlie", 0, "num"), ("Outro", 0, None))
+        api.get.side_effect = [_doc(_tab(*STD)), _doc(other)]
+        api.write.side_effect = StaleRevisionError("document changed; re-run it")
+        with pytest.raises(GdocError, match="may already be applied") as exc:
+            cmd_nest(_args())
+        assert not isinstance(exc.value, StaleRevisionError)
 
     def test_stale_revision_with_the_list_unchanged_says_re_run(self, api):
         from gdoc.api.docs import StaleRevisionError

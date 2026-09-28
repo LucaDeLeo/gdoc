@@ -267,6 +267,7 @@ class NestPlan:
     blanks: list[int]
     markers: dict[int, dict] = field(default_factory=dict)
     texts: dict[int, str] = field(default_factory=dict)
+    original: dict[int, int] = field(default_factory=dict)
 
 
 def plan_nesting(
@@ -504,8 +505,32 @@ def plan_nesting(
         requests=requests, list_id=list_id, moved=len(moved),
         expected={i: lvl for i, lvl in levels.items()}, blanks=blanks,
         markers={i: _marker_style(content[i]) for i in levels},
-        texts={i: _text(content[i]) for i in list(levels) + blanks},
+        # The item the window joins is fingerprinted too, so positions
+        # are checked against their surroundings.
+        texts={i: _text(content[i]) for i in [start - 1, *levels, *blanks]},
+        original={i: _level(content[i]) for i in levels},
     )
+
+
+def is_unchanged(document_tab: dict, plan: NestPlan) -> bool:
+    """Whether a re-read tab still shows the window exactly as planned from.
+
+    Same text at every fingerprinted position, every rebuilt item still in
+    the list at its original level with its original marker style, and no
+    blank line bulleted: proof that the planned write did not land.
+    """
+    content = document_tab.get("body", {}).get("content", [])
+    for i, want in plan.texts.items():
+        if i >= len(content) or _text(content[i]) != want:
+            return False
+    for i, level in plan.original.items():
+        el = content[i]
+        if (
+            not _in_list(el, plan.list_id) or _level(el) != level
+            or _marker_style(el) != plan.markers.get(i, _marker_style(el))
+        ):
+            return False
+    return all(_bullet(content[i]) is None for i in plan.blanks)
 
 
 def check_result(document_tab: dict, plan: NestPlan) -> list[str]:

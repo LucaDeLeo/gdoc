@@ -1430,7 +1430,12 @@ def cmd_nest(args) -> int:
         get_document_with_tabs,
         resolve_raw_tab,
     )
-    from gdoc.listnest import check_result, locate_item, plan_nesting
+    from gdoc.listnest import (
+        check_result,
+        is_unchanged,
+        locate_item,
+        plan_nesting,
+    )
 
     def reread_tab() -> dict | None:
         """This tab in a fresh read, found by ID only (never by title)."""
@@ -1487,8 +1492,17 @@ def cmd_nest(args) -> int:
                 f"could not be re-read to check ({e}). The change may "
                 "already be applied: inspect the list before retrying."
             )
-        if again is None or check_result(again.get("documentTab", {}), plan):
-            raise
+        again_tab = (again or {}).get("documentTab", {})
+        if again is not None and is_unchanged(again_tab, plan):
+            raise  # provably not applied: re-running is safe
+        if again is None or check_result(again_tab, plan):
+            # Neither the planned result nor the original: someone else
+            # edited, and our write may or may not be part of it.
+            raise GdocError(
+                "the write reported a changed document, and the list is "
+                "neither as planned nor as it was. The change may already "
+                "be applied: inspect the list before retrying."
+            )
         print(
             "WARN: the write reported a changed document, but the list is "
             "already exactly as planned (a retried request); not re-applied",
