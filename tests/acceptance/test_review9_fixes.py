@@ -268,3 +268,82 @@ def test_restart_inside_an_appended_fragment_still_warns(route):
         "insert", text="2. b\n1. restart\n4. requested\n", tab="t.0",
         position="end")
     assert code == 0 and "starts at 4" in output + error
+
+
+def test_single_item_under_a_list_continues_it(route):
+    """Round 3 (Claude R3-2): one new item under a list continues it."""
+    doc = route.load(NativeDoc(("p", "a", "NORMAL_TEXT", NUMBERED),
+                               ("p", "P"), ("p", "Tail")))
+    route.ok("cat")
+    code, output, error = route.call("edit", old_text="P", new_text="2. x")
+    assert code == 0 and "start at 1" not in output + error
+    assert _read(route) == "1. a\n2. x\nTail\n"
+    assert {bullet[0] for _, _, bullet in styles(doc) if bullet} == {1}
+
+
+def test_first_items_expanded_at_their_level_keep_the_list(route):
+    """Round 3 (Claude R3-1): several first items reworded as more items of
+    their level keep the list; the untouched items keep their numbers."""
+    doc = route.load(NativeDoc(*FOUR))
+    route.ok("cat")
+    route.ok("edit", old_text="a\nb", new_text="1. A\n2. B\n3. X")
+    assert _read(route) == "1. A\n2. B\n3. X\n4. c\n5. d\n"
+    assert {bullet for _, _, bullet in styles(doc)} == {(1, 0)}
+
+
+def test_reshaping_a_first_item_that_would_split_the_list_is_refused(route):
+    """Round 3 (Claude R3-1): a nested item added under the first item would
+    start a new list before the rest; refused, nothing sent."""
+    route.load(NativeDoc(*FOUR))
+    route.ok("cat")
+    batches = len(route.service.batches)
+    code, output, error = route.call("edit", old_text="a",
+                                     new_text="1. a1\n  1. sub")
+    assert code != 0 and "renumbering" in output + error
+    assert len(route.service.batches) == batches
+
+
+def test_kept_item_warning_names_the_number_it_shows(route):
+    """Round 3 (Claude R3-4)."""
+    route.load(NativeDoc(*FOUR))
+    route.ok("cat")
+    code, output, error = route.call("edit", old_text="b", new_text="7. b2")
+    assert code == 0 and "shows 2" in output + error
+
+
+def test_restart_with_another_number_is_its_own_list(route):
+    """Round 3 (GPT 1): a top-level restart that does not continue is a new
+    list, reset to 1 with a warning."""
+    doc = route.load(NativeDoc())
+    route.ok("cat")
+    code, output, error = route.call("write", text="1. a\n2. b\n2. restart\n")
+    assert code == 0 and "start at 1" in output + error
+    assert _read(route) == "1. a\n2. b\n1. restart\n"
+    assert len({bullet[0] for _, _, bullet in styles(doc) if bullet}) == 2
+
+
+def test_append_after_a_list_with_another_preset_warns(route):
+    """Round 3 (GPT 2): createParagraphBullets joins only a matching preset,
+    so a UI-made list is not assumed to continue."""
+    roman = {"preset": "NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL", "list": 1, "nest": 0}
+    route.load(NativeDoc(("p", "a", "NORMAL_TEXT", roman),
+                         ("p", "b", "NORMAL_TEXT", roman)))
+    route.ok("cat")
+    code, output, error = route.call("insert", text="3. c\n", tab="t.0",
+                                     position="end")
+    assert code == 0 and "start at 1" in output + error
+
+
+def test_nested_item_continues_a_nested_item_above(route):
+    """Round 3 (GPT 3): same-level continuation below a nested item."""
+    expected_doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="1. parent\n  1. child\n  2. sibling\n")
+    expected = (_read(route), styles(expected_doc))
+    doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="1. parent\n  1. child\n")
+    code, output, error = route.call("insert", text="  2. sibling\n", tab="t.0",
+                                     position="end")
+    assert code == 0 and "start at 1" not in output + error
+    assert (_read(route), styles(doc)) == expected

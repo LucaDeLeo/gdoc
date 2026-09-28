@@ -366,8 +366,12 @@ class NativeDoc:
                 content.append(paragraph)
         lists = {}
         for list_id, preset in list_presets.items():
-            glyph = ({"glyphType": "DECIMAL"} if preset.startswith("NUMBERED")
-                     else {"glyphSymbol": "●"})
+            # gdoc's two presets; any other (made in the Docs UI) differs.
+            glyph = ({"glyphType": "DECIMAL"}
+                     if preset == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+                     else {"glyphType": "UPPER_ROMAN"} if preset.startswith("NUMBERED")
+                     else {"glyphSymbol": "●"} if preset == "BULLET_DISC_CIRCLE_SQUARE"
+                     else {"glyphSymbol": "❖"})
             offset = self.list_offsets.get(int(list_id[1:]), 0)
             lists[list_id] = {"listProperties": {"nestingLevels": [{
                 **glyph,

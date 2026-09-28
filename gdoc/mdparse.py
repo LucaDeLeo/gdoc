@@ -81,6 +81,7 @@ class ParsedMarkdown:
     # The preset of a level-0 native list directly before the insertion that
     # a first list starting the text continues (an item replaced in place).
     continues_list: str | None = None
+    continues_level: int = 0  # that item's nesting level
     # Item offset -> the number Docs will show there when it continues an
     # existing list, so a matching requested start needs no warning.
     shown_numbers: dict = field(default_factory=dict)
@@ -1574,9 +1575,9 @@ def _needs_list_per_group(parsed: ParsedMarkdown, items: list, blocks: list) -> 
         if not item.style["bulletPreset"].startswith("NUMBERED"):
             continue
         prior = active.get(item.list_depth)
-        if item.list_depth and prior and prior != item.list_group:
+        if prior and prior[0] == item.list_block and prior[1] != item.list_group:
             return True
-        active[item.list_depth] = item.list_group
+        active[item.list_depth] = (item.list_block, item.list_group)
         earlier = previous.get(item.list_group)
         if earlier is not None:
             between = [s for s in parsed.styles
@@ -1666,10 +1667,11 @@ def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
     for members in sorted(lists, key=lambda members: members[0].start):
         start, end = coordinate(members[0].start), end_of(members[-1])
         preset = members[0].style["bulletPreset"]
-        # Continuing the list above joins it at level 0, so tabs stay
-        # absolute; only the anchor is needed.
-        temporary = 1 if (members[0].start == 0
-                          and parsed.continues_list == preset) else 2
+        # Continuing the list above joins it at its item's level, so tabs
+        # count from that level; only the anchor is needed.
+        joins = members[0].start == 0 and parsed.continues_list == preset
+        temporary = 1 if joins else 2
+        base = parsed.continues_level if joins else 0
         requests += [
             {"insertText": {"location": location(start),
                             "text": "\n" * temporary}},
@@ -1683,12 +1685,12 @@ def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
         ]
         tabs = 0
         for item in reversed(members):
-            if item.list_depth:
+            if item.list_depth - base:
                 requests.append({"insertText": {
                     "location": location(coordinate(item.start) + temporary),
-                    "text": "\t" * item.list_depth,
+                    "text": "\t" * (item.list_depth - base),
                 }})
-                tabs += item.list_depth
+                tabs += item.list_depth - base
         requests += [
             {"createParagraphBullets": {
                 "range": span(start + temporary - 1, end + temporary + tabs),
