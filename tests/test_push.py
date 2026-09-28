@@ -118,7 +118,9 @@ def test_push_noop_uses_native_content_and_revision(native_write, baseline, caps
         "revision_id": "r10",
     }
     env.write.assert_not_called()
-    assert state.load_state("abc123").read_revision_ids == {"first": "r10"}
+    # Without a gdoc-tab-sha256 the revision string alone is no read (R8-14).
+    assert state.load_state("abc123").read_revision_ids == (
+        {"first": baseline} if baseline else {})
 
 
 def test_push_default_preserves_sibling_and_tab_frontmatter_selects_it(native_write):

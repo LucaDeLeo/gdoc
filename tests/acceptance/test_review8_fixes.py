@@ -208,6 +208,36 @@ def test_zero_width_bottom_border_is_not_a_rule(route):
             "magnitude") for _, mark in doc.paragraphs())
 
 
+def test_in_sync_push_of_an_image_tab_file_records_no_baseline(route, tmp_path):
+    """R8-14: without a tab fingerprint (a tab with images), an in-sync file
+    at the same revision is no read, so an edited copy still needs one."""
+    import shutil
+
+    from gdoc import state
+    doc = NativeDoc(("p", "Alpha."), ("p", "Beta."))
+    doc.apply({"insertInlineImage": {"location": {"index": 1},
+                                     "uri": "https://x/i.png"}})
+    route.load(doc)
+    pulled = _pull(route, tmp_path / "draft.md")
+    shutil.rmtree(state.STATE_DIR)  # another machine: no local state
+    route.ok("write", text=pulled)  # in sync
+    code, output, error = route.call(
+        "write", text=pulled.replace("Beta.", "Beta edited."))
+    assert code != 0, output + error
+    assert "Beta." in _texts(route)[-1]
+    route.ok("cat")
+    route.ok("write", text=pulled.replace("Beta.", "Beta edited."))
+    assert _texts(route)[-1] == "Beta edited."
+
+
+def test_plain_in_sync_result_is_tsv(monkeypatch, tmp_path):
+    """R8-16: `--plain` (CLI only) reports an in-sync write as TSV."""
+    route = NativeRoute("cli", monkeypatch, tmp_path)
+    route.load(NativeDoc(("p", "Alpha.")))
+    output = route.ok("write", text="Alpha.\n", plain=True)
+    assert output == "id\tsynthetic\ntab_id\tt.0\nstatus\tin_sync\n"
+
+
 def test_written_rule_still_reads_as_rule(route):
     route.load(NativeDoc(("p", "seed")))
     route.ok("cat")

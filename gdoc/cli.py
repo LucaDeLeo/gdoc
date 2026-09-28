@@ -1709,13 +1709,16 @@ def _write_native_markdown(
                 tab_fingerprint=native_tab_fingerprint(selected),
             )
         # Matching Markdown is not a read: invisible native changes may differ.
-        # Only a file whose own provenance covers this snapshot advances.
-        if file_current and _preview_complete([selected]):
+        # Only a file whose recorded native fingerprint matches this snapshot
+        # is one; a revision string alone is not.
+        if tab_unchanged and _preview_complete([selected]):
             _record_read(doc_id, [selected], revision)
         if mode == "json":
             print(format_json(
                 in_sync=True, tab_id=selected["id"], revision_id=revision,
             ))
+        elif mode == "plain":
+            print(f"id\t{doc_id}\ntab_id\t{selected['id']}\nstatus\tin_sync")
         else:
             print("OK already in sync (selected tab matches; nothing to write)")
         return 0
