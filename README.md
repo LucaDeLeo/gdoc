@@ -244,8 +244,8 @@ access (or with comment-only permission on the doc, which can't `batchUpdate`),
 or when the quoted text isn't found in the document, it falls back
 transparently to the Drive API path: the comment is created unanchored
 (`anchored: false` in `--json`/`--plain`) with the quote stored as
-`quotedFileContent` metadata, which `cat --comments` matches client-side but
-the Docs UI does not highlight. Same command either way — anchoring problems
+`quotedFileContent` metadata, which `cat --comments` places by matching that
+text but the Docs UI does not highlight. Same command either way — anchoring problems
 never fail the comment (though unrelated API errors, like a missing doc or
 expired auth, still do).
 
@@ -433,7 +433,9 @@ the Sheets API, so no re-authentication is needed.
      5	Authentication uses OAuth2.
 ```
 
-Comments whose anchor text has been deleted, is too short, or is ambiguous are grouped in an `[UNANCHORED]` section at the end.
+Comments are placed from their live anchors: the text each comment covers now, as the Docs UI highlights it. This needs the same [Developer Preview](https://developers.google.com/workspace/preview) enrollment as anchored `comment --quote`. A comment whose anchored text is all gone is listed as `[detached]` (Docs shows "Original content deleted"); a `write --tab` that changes the tab detaches every comment in it, resolved ones included. Comments that aren't placed inline are grouped in an `[UNANCHORED]` section at the end. `--json` reports `"anchors": "live"`.
+
+Without preview access, gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment.
 
 ## Revision history & diffs
 
