@@ -145,6 +145,28 @@ def _marker_style(el: dict) -> dict:
     return _set_fields((_bullet(el) or {}).get("textStyle"))
 
 
+def _marker_differences(el: dict) -> list[str]:
+    """Formatting on the item's bullet or number that a rebuild could drop.
+
+    Live: a fully bold item has a bold number, and it is bold again after
+    the rebuild; an item whose text ends in Georgia keeps a plain marker.
+    So marker formatting that repeats the item's end-of-text style is safe.
+    Refused: a marker field the text does not share, and an explicit false
+    (say an unbolded number on bold text) that the text contradicts.
+    ``underline: false`` is on every plain marker and is ignored.
+    """
+    marker = (_bullet(el) or {}).get("textStyle") or {}
+    text = _newline_style(el)
+    odd = []
+    for key, m in marker.items():
+        if m is False:
+            if key != "underline" and text.get(key) is True:
+                odd.append(key)
+        elif text.get(key) != m:
+            odd.append(key)
+    return sorted(odd)
+
+
 def _newline_style(el: dict) -> dict:
     """Text style of the run that ends the paragraph (holds its newline)."""
     for pe in reversed((_paragraph(el) or {}).get("elements", [])):
@@ -157,6 +179,24 @@ def _newline_style(el: dict) -> dict:
 def _label(el: dict) -> str:
     text = _text(el).strip()
     return repr(text[:40] + ("..." if len(text) > 40 else ""))
+
+
+def _container_paragraph_start(node: dict, index: int) -> int:
+    """Start of the innermost paragraph holding *index* inside a table."""
+    best = node.get("startIndex", 0)
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if not isinstance(cur, dict):
+            if isinstance(cur, list):
+                stack.extend(cur)
+            continue
+        if "paragraph" in cur and cur.get("startIndex", 0) <= index < cur.get(
+            "endIndex", 0
+        ):
+            best = max(best, cur["startIndex"])
+        stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
+    return best
 
 
 def locate_item(body: dict, text: str) -> int:
@@ -175,11 +215,15 @@ def locate_item(body: dict, text: str) -> int:
     content = body.get("content", [])
     found: set[int] = set()
     in_container = 0
+    seen_cells: set[int] = set()
     for m in matches:
         for i, el in enumerate(content):
             if el.get("startIndex", 0) <= m["startIndex"] < el.get("endIndex", 0):
                 if _paragraph(el) is None:
-                    in_container += 1
+                    cell = _container_paragraph_start(el, m["startIndex"])
+                    if cell not in seen_cells:
+                        seen_cells.add(cell)
+                        in_container += 1
                 elif m["endIndex"] > el["endIndex"]:
                     raise _usage(f"{text!r} spans more than one paragraph")
                 else:
@@ -371,9 +415,7 @@ def plan_nesting(
             )
         if _text(el).startswith("\t"):
             raise _usage(f"{_label(el)} starts with a tab character")
-        marker = _marker_style(el)
-        derived = _set_fields(_newline_style(el))
-        odd = sorted(k for k, v in marker.items() if derived.get(k) != v)
+        odd = _marker_differences(el)
         if odd:
             # A rebuilt marker takes the style of the item's own text (a
             # fully bold item gets a bold number, live-tested); formatting

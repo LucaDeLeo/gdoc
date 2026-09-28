@@ -19,9 +19,10 @@ All notable changes to `gdoc` are documented here. This project follows
   - ambiguous or missing text, non-list or in-table targets;
   - moves that would rebuild a list's first item, skip a level, or unnest past
     the top level;
-  - checkbox, custom-glyph and edited-format lists (`1) a) i)`);
+  - checkbox and custom-glyph lists, and numbered presets other than
+    `1. a. i.` (for example `1) a) i)`);
   - items that start with a tab, carry a hand-set indent or a marker formatted
-    apart from their text, or hold pending suggestions;
+    differently from their text, or hold pending suggestions;
   - moves that would merge, split or re-home lists (ranges across lists, items
     right after another list's item, an unnest that would sweep in a deeper
     item of another list, sub-items that are a separate list).

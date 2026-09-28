@@ -391,6 +391,26 @@ class TestRefusals:
         plan = _plan(tab, "Bravo", 1)
         assert plan.markers == {2: {"bold": True}}
 
+    @pytest.mark.parametrize("key", ["bold", "italic"])
+    def test_explicitly_unformatted_marker_on_a_formatted_item(self, key):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {key: False, "underline": False}
+        para["elements"][0]["textRun"]["textStyle"] = {key: True}
+        self._refused(tab, "Bravo", 1, f"formatted bullet or number \\({key}\\)")
+
+    def test_plain_marker_on_styled_text_is_not_refused(self):
+        # Live: an item ending in Georgia (or a link) keeps a plain marker
+        # through the rebuild.
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"underline": False}
+        para["elements"][0]["textRun"]["textStyle"] = {
+            "weightedFontFamily": {"fontFamily": "Georgia", "weight": 400},
+            "underline": True,
+        }
+        assert _plan(tab, "Bravo", 1).moved == 1
+
     def test_plain_marker_style_is_not_formatting(self):
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
@@ -592,6 +612,15 @@ class TestCommand:
         api.write.side_effect = StaleRevisionError("document changed; re-run it")
         with pytest.raises(StaleRevisionError, match="re-run"):
             cmd_nest(_args())
+
+    def test_stale_revision_then_failed_reread_is_an_unknown_outcome(self, api):
+        from gdoc.api.docs import StaleRevisionError
+
+        api.get.side_effect = [_doc(_tab(*STD)), GdocError("API error (503)")]
+        api.write.side_effect = StaleRevisionError("document changed; re-run it")
+        with pytest.raises(GdocError, match="may already be applied") as exc:
+            cmd_nest(_args())
+        assert "re-run" not in str(exc.value)
 
     def test_read_back_finds_the_tab_by_id_not_title(self, api):
         # Another tab is titled like this tab's ID; the read-back must still

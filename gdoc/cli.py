@@ -1479,7 +1479,14 @@ def cmd_nest(args) -> int:
         # without a reply; if Google applied the first attempt, the resend
         # fails the pin. Check before telling the caller to re-run, which
         # would move the items again.
-        again = reread_tab()
+        try:
+            again = reread_tab()
+        except Exception as e:  # noqa: BLE001 — the write may have landed
+            raise GdocError(
+                "the write reported a changed document and the document "
+                f"could not be re-read to check ({e}). The change may "
+                "already be applied: inspect the list before retrying."
+            )
         if again is None or check_result(again.get("documentTab", {}), plan):
             raise
         print(
