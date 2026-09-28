@@ -237,6 +237,14 @@ class TestRefusals:
         tab = _tab(("Alpha", 0, "num"), ("Bravo bravo", 0, "num"))
         assert _at(tab, "bravo") == 2
 
+    def test_length_changing_lowercase_does_not_shift_the_match(self):
+        # "İ".lower() is two code points; offset-based matching drifted onto
+        # a later paragraph.
+        tab = _tab(("\u0130" * 6, 0, None), ("Alpha", 0, "num"), ("Bravo", 0, "num"),
+                   ("Charlie and more", 0, "num"))
+        assert _at(tab, "Bravo") == 3
+        assert _plan(tab, "Bravo", 1).expected == {3: 1}
+
     def test_text_spanning_paragraphs(self):
         with pytest.raises(GdocError, match="more than one paragraph"):
             _at(_tab(*STD), "Alpha\nBravo")

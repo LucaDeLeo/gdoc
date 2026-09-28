@@ -204,67 +204,67 @@ def _label(el: dict) -> str:
     return repr(text[:40] + ("..." if len(text) > 40 else ""))
 
 
-def _container_paragraph_start(node: dict, index: int) -> int:
-    """Start of the innermost paragraph holding *index* inside a table."""
-    best = node.get("startIndex", 0)
+def _inner_paragraph_texts(node) -> list[str]:
+    """Texts of every paragraph nested anywhere inside *node* (a table)."""
+    texts = []
     stack = [node]
     while stack:
         cur = stack.pop()
-        if not isinstance(cur, dict):
-            if isinstance(cur, list):
-                stack.extend(cur)
-            continue
-        if "paragraph" in cur and cur.get("startIndex", 0) <= index < cur.get(
-            "endIndex", 0
-        ):
-            best = max(best, cur["startIndex"])
-        stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
-    return best
+        if isinstance(cur, list):
+            stack.extend(cur)
+        elif isinstance(cur, dict):
+            if "paragraph" in cur:
+                texts.append(_text(cur))
+            else:
+                stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
+    return texts
 
 
 def locate_item(body: dict, text: str) -> int:
     """Index into ``body["content"]`` of the one paragraph containing *text*.
 
-    Matching is the same case-insensitive search ``edit`` uses. Raises a
-    usage error (exit 3) when the text is missing, is found in more than
-    one paragraph, spans paragraphs, or sits in a table.
+    Case-insensitive, like ``edit``, but matched per paragraph without
+    character offsets: lowercasing can change a string's length (Turkish
+    dotted capital I), which would shift offset-based matches onto the
+    wrong paragraph. Raises a usage error (exit 3) when the text is
+    missing, is found in more than one paragraph, spans paragraphs, or
+    sits in a table.
     """
-    from gdoc.api.docs import diagnose_no_match, find_text_in_document
-
-    matches = find_text_in_document(None, text, body=body)
-    if not matches:
-        # already_normalized: skip the "--normalize" hint, a flag nest
-        # does not have.
-        reason = diagnose_no_match(None, text, body=body, already_normalized=True)
-        raise _usage(f"no match found for {text!r}" + (f"; {reason}" if reason else ""))
-    content = body.get("content", [])
-    found: set[int] = set()
+    if "\n" in text.strip("\n"):
+        raise _usage(f"{text!r} spans more than one paragraph")
+    needle = text.strip("\n").lower()
+    if not needle:
+        raise _usage("the item text is empty")
+    found: list[int] = []
     in_container = 0
-    seen_cells: set[int] = set()
-    for m in matches:
-        for i, el in enumerate(content):
-            if el.get("startIndex", 0) <= m["startIndex"] < el.get("endIndex", 0):
-                if _paragraph(el) is None:
-                    cell = _container_paragraph_start(el, m["startIndex"])
-                    if cell not in seen_cells:
-                        seen_cells.add(cell)
-                        in_container += 1
-                elif m["endIndex"] > el["endIndex"]:
-                    raise _usage(f"{text!r} spans more than one paragraph")
-                else:
-                    found.add(i)
-                break
+    for i, el in enumerate(body.get("content", [])):
+        if _paragraph(el) is not None:
+            if needle in _text(el).lower():
+                found.append(i)
+        else:
+            in_container += sum(
+                needle in t.lower() for t in _inner_paragraph_texts(el)
+            )
     if len(found) + in_container > 1:
         raise _usage(
             f"{text!r} matches {len(found) + in_container} paragraphs; use "
             "text unique to one list item"
         )
-    if not found:
+    if in_container:
         raise _usage(
             f"{text!r} is inside a table or other container; only list "
             "items in the tab body can be nested"
         )
-    return found.pop()
+    if not found:
+        from gdoc.api.docs import diagnose_no_match
+
+        # already_normalized: skip the "--normalize" hint, a flag nest
+        # does not have.
+        reason = diagnose_no_match(None, text, body=body, already_normalized=True)
+        raise _usage(
+            f"no match found for {text!r}" + (f"; {reason}" if reason else "")
+        )
+    return found[0]
 
 
 @dataclass
