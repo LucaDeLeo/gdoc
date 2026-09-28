@@ -18,8 +18,8 @@ All notable changes to `gdoc` are documented here. This project follows
   write (exit 3): ambiguous or missing text, non-list or in-table targets,
   nesting a list's first item or skipping a level, unnesting past the top
   level, checkbox, custom-glyph and edited-format lists (`1) a) i)`), items
-  starting with a tab, carrying a hand-set indent or holding pending
-  suggestions, and moves that would
+  starting with a tab, carrying a hand-set indent or a formatted marker, or
+  holding pending suggestions, and moves that would
   merge, split or re-home lists (ranges across lists, items right after
   another list's item, an unnest that would sweep in a deeper item of another
   list, sub-items that are a separate list). A 5xx or dropped connection on

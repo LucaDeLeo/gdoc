@@ -350,6 +350,19 @@ def plan_nesting(
             )
         if _text(el).startswith("\t"):
             raise _usage(f"{_label(el)} starts with a tab character")
+        marker_style = {
+            k: v for k, v in (_bullet(el).get("textStyle") or {}).items()
+            if v is not False
+        }
+        if marker_style:
+            # Docs reports {"underline": false} on every plain marker; any
+            # other field is formatting set on this item's bullet or number,
+            # which the rebuild would not carry over.
+            raise _usage(
+                f"{_label(el)} has a formatted bullet or number ("
+                + ", ".join(sorted(marker_style))
+                + "); rebuilding it would reset that formatting"
+            )
         if _custom_indent(el, lists):
             raise _usage(
                 f"{_label(el)} has a hand-set indent; rebuilding it would "

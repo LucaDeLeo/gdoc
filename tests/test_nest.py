@@ -367,6 +367,27 @@ class TestRefusals:
         }}))
         assert _plan(tab, "Bravo", 1).moved == 1
 
+    def test_formatted_marker_on_a_moved_item(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
+            "underline": False, "bold": True,
+        }
+        self._refused(tab, "Bravo", 1, "formatted bullet or number \\(bold\\)")
+
+    def test_formatted_marker_on_a_rebuilt_sibling(self):
+        tab = _tab(("Alpha", 0, "num"), ("a-one", 2, "num"), ("Bravo", 1, "num"))
+        tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
+            "foregroundColor": {"color": {"rgbColor": {"red": 1}}},
+        }
+        self._refused(tab, "Bravo", -1, "formatted bullet or number")
+
+    def test_plain_marker_style_is_not_formatting(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
+            "underline": False,
+        }
+        assert _plan(tab, "Bravo", 1).moved == 1
+
     def test_pending_suggestion(self):
         tab = _tab(("Alpha", 0, "num"),
                    ("Bravo", 0, "num", {"suggestedBulletChanges": {"s.1": {}}}))

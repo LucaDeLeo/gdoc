@@ -650,9 +650,9 @@ Refused before any write (exit 3), with a message naming the item:
   directly after an item of another list (for example a bullet item after a
   numbered sub-list), an unnest whose rebuild would take in a deeper item of
   another list above it, or an item whose sub-items are a separate list;
-- items that start with a tab character, carry a hand-set indent (the
-  rebuild would reset it to the list's standard indent), or contain pending
-  suggestions.
+- items that start with a tab character, carry a hand-set indent or a
+  formatted bullet or number (the rebuild would reset either to the list's
+  standard), or contain pending suggestions.
 
 Blank lines between items (loose lists) are kept, with their original
 indentation. Like `edit`, this is a partial write: the awareness state records
