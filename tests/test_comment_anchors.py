@@ -114,7 +114,7 @@ class TestGetCommentAnchors:
         )
         assert _anchors(doc) == {
             "c1": {"text": "quick red fox", "key": "quick red fox",
-                   "counts": [(0, 1)]},
+                   "occurrence": 0, "occurrences": 1},
             "c2": None,
         }
 
@@ -148,20 +148,39 @@ class TestGetCommentAnchors:
             ],
             {"c1": "kix.a"},
         )
-        assert _anchors(doc)["c1"]["counts"] == [(2, 3)]
+        anchor = _anchors(doc)["c1"]
+        # Three body copies plus the two tab titles ("" for both here).
+        assert (anchor["occurrence"], anchor["occurrences"]) == (2, 3)
 
-    def test_tab_titles_add_a_second_count(self):
-        # The export heads each tab with its title, so "Budget" in the
-        # body is the second occurrence once titles are counted.
-        tab = _tab("t.1", ["Budget"], {"kix.a": ["Budget"]})
-        tab["tabProperties"]["title"] = "Budget"
-        doc = _document([tab], {"c1": "kix.a"})
-        assert _anchors(doc)["c1"]["counts"] == [(0, 1), (1, 2)]
+    def test_tab_titles_count_only_with_several_tabs(self):
+        # The export heads each tab with its title only when there are
+        # several tabs; the default single-tab title never appears.
+        first = _tab("t.1", ["Budget"], {"kix.a": ["Budget"]})
+        first["tabProperties"]["title"] = "Budget"
+        second = _tab("t.2", ["Other"], {})
+        second["tabProperties"]["title"] = "Notes"
+        doc = _document([first, second], {"c1": "kix.a"})
+        anchor = _anchors(doc)["c1"]
+        assert (anchor["occurrence"], anchor["occurrences"]) == (1, 2)
         result = annotate_markdown(
-            "# Budget\n\nBudget\n", [_comment("c1", "Budget")],
-            anchors=_anchors(doc),
+            "# Budget\n\nBudget\n\n# Notes\n\nOther\n",
+            [_comment("c1", "Budget")], anchors=_anchors(doc),
         )
         assert _annotation_line(result, "c1") == 3
+
+    def test_single_tab_title_is_not_counted(self):
+        tab = _tab("t.1", ["Revenue grew 1 percent.", "First step"],
+                   {"kix.a": ["1"]})
+        tab["tabProperties"]["title"] = "Tab 1"
+        doc = _document([tab], {"c1": "kix.a"})
+        anchor = _anchors(doc)["c1"]
+        assert (anchor["occurrence"], anchor["occurrences"]) == (0, 1)
+        # The list number is markup, not text, so the only "1" is line 1.
+        result = annotate_markdown(
+            "Revenue grew 1 percent.\n\n1. First step\n",
+            [_comment("c1", "1")], anchors=_anchors(doc),
+        )
+        assert _annotation_line(result, "c1") == 1
 
     def test_child_tabs_are_searched(self):
         child = _tab("t.child", ["Nested text here."], {"kix.a": ["Nested"]})
@@ -196,7 +215,9 @@ class TestGetCommentAnchors:
             {"startIndex": 1, "endIndex": 2, "tabId": "t.1"},
         ]}}
         anchors = _anchors(_document([tab], {"c1": "kix.a"}))
-        assert anchors["c1"] == {"text": "", "key": "", "counts": []}
+        assert anchors["c1"] == {
+            "text": "", "key": "", "occurrence": 0, "occurrences": 0,
+        }
         result = annotate_markdown(
             "![](image.png)\n", [_comment("c1", "x")], anchors=anchors,
         )
@@ -480,6 +501,17 @@ class TestProbeScenarios:
             [_comment("c1", "x")], anchors=anchors,
         )
         assert _annotation_line(result, "c1") == 1
+
+    def test_fenced_code_is_literal(self):
+        doc = _document(
+            [_tab("t.1", ["x = a*b_c"], {"kix.a": ["x = a*b_c"]})],
+            {"c1": "kix.a"},
+        )
+        result = annotate_markdown(
+            "```py\nx = a*b_c\n```\n", [_comment("c1", "x")],
+            anchors=_anchors(doc),
+        )
+        assert _annotation_line(result, "c1") == 2
 
     def test_visible_text_is_built_once_per_call(self):
         from gdoc import annotate

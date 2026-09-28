@@ -2064,11 +2064,10 @@ def get_comment_anchors(
       anchor covers only non-text content such as an image.
     - ``key``: the anchored text in the paragraph where the anchor ends,
       stripped — the text ``cat --comments`` looks for to pick a line.
-    - ``counts``: ``(occurrence, occurrences)`` pairs — which occurrence
-      of ``key`` this is (0-based) and how many there are, over every tab's
-      text in tab order; then, if tab titles also contain ``key``, the same
-      counted with each title before its tab, as the markdown export of a
-      tabbed document heads each tab. Empty when ``key`` can't be located.
+    - ``occurrence`` / ``occurrences``: which occurrence of ``key`` this is
+      (0-based) and how many there are, over every tab's text in tab order
+      (with each tab's title before it when there are several tabs, as in
+      the markdown export). Zero occurrences when ``key`` can't be located.
 
     Comments missing from the result have no live anchor (for example,
     comments created through the Drive API with only a quote).
@@ -2124,20 +2123,20 @@ def get_comment_anchors(
             yield t
             yield from walk(t.get("childTabs", []))
 
-    # Every tab's title and text as one string, tab after tab, plus each
-    # tab's map from doc index to position in that string. The markdown
-    # export of a tabbed document heads each tab with its title.
+    # Every tab's text as one string, tab after tab, plus each tab's map
+    # from doc index to position in that string. The markdown export of a
+    # document with several tabs heads each tab with its title, so those
+    # titles are counted too; a single-tab export has no title heading.
+    tabs = list(walk(document.get("tabs", [])))
     text_parts: list[str] = []
     position: dict[str, dict[int, int]] = {}
-    title_spans: list[tuple[int, int]] = []
     ranges_by_anchor: dict[str, list[tuple[str, int, int]]] = {}
     offset = 0
-    for tab in walk(document.get("tabs", [])):
+    for tab in tabs:
         tab_id = tab.get("tabProperties", {}).get("tabId", "")
         title = tab.get("tabProperties", {}).get("title", "")
-        if title:
+        if len(tabs) > 1:
             text_parts.append(title + "\n")
-            title_spans.append((offset, offset + len(title)))
             offset += len(title) + 1
         doc_tab = tab.get("documentTab", {})
         chars = sorted(
@@ -2191,7 +2190,9 @@ def get_comment_anchors(
             continue
         if not spots:
             # Still attached, but only to non-text content (an image).
-            anchors[comment_id] = {"text": "", "key": "", "counts": []}
+            anchors[comment_id] = {
+                "text": "", "key": "", "occurrence": 0, "occurrences": 0,
+            }
             continue
         text = "".join(full_text[p] for p in spots)
         # A soft line break (vertical tab) ends a markdown line too.
@@ -2206,24 +2207,20 @@ def get_comment_anchors(
                 break
             line_start = cut
         key = part.strip()
-        counts: list[tuple[int, int]] = []
+        occurrence = occurrences = 0
         if key:
             key_pos = spots[cut + 1 + (len(part) - len(part.lstrip()))]
             starts = find_all(key)
             # Split ranges can make key text that never occurs as one run;
-            # no counts leaves the comment unplaced.
+            # zero occurrences leaves the comment unplaced.
             if key_pos in starts:
-                body = [
-                    p for p in starts
-                    if not any(a <= p < b for a, b in title_spans)
-                ]
-                counts.append((body.index(key_pos), len(body)))
-                if len(body) != len(starts):
-                    counts.append((starts.index(key_pos), len(starts)))
+                occurrence = starts.index(key_pos)
+                occurrences = len(starts)
         anchors[comment_id] = {
             "text": text,
             "key": key,
-            "counts": counts,
+            "occurrence": occurrence,
+            "occurrences": occurrences,
         }
     return anchors, document.get("revisionId", "")
 

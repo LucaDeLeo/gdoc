@@ -303,7 +303,7 @@ def _export_with_anchors(
         file=sys.stderr,
     )
     return markdown, {
-        cid: None if live is None else {**live, "counts": []}
+        cid: None if live is None else {**live, "occurrences": 0}
         for cid, live in anchors.items()
     }
 

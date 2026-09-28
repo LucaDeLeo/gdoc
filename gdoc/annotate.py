@@ -81,13 +81,16 @@ def _find_all(text: str, key: str) -> list[int]:
     return starts
 
 
-# Markdown that isn't visible text: an escape (keeps the escaped char), an
+# Markdown that isn't visible text: a code fence (keeps its contents), a
+# list marker, an escape (keeps the escaped char), an
 # HTML entity (keeps the decoded char), a code span (keeps its contents),
 # an image, a link (keeps its label), a reference definition line, a
 # footnote reference, or an emphasis marker. Underscores inside a word
 # are literal, as in CommonMark.
 _MARKUP = re.compile(
-    r"\\(?P<escaped>.)"
+    r"^(?P<fence>```|~~~)[^\n]*\n(?P<block>(?s:.*?))^(?P=fence)[^\n]*$"
+    r"|^[ \t]*(?:\d+[.)]|[-*+])[ \t]+"
+    r"|\\(?P<escaped>.)"
     r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)"
     r"|(?P<ticks>`+)(?P<code>.+?)(?P=ticks)"
     r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
@@ -112,7 +115,9 @@ def _visible_text(markdown: str) -> tuple[str, list[int]]:
         pos = start
         for m in _MARKUP.finditer(markdown, start, end):
             keep(pos, m.start())
-            if m["escaped"] is not None:
+            if m["block"] is not None:
+                keep(m.start("block"), m.end("block"))
+            elif m["escaped"] is not None:
                 keep(m.start("escaped"), m.end("escaped"))
             elif m["entity"] is not None:
                 decoded = html.unescape(m["entity"])
@@ -145,11 +150,10 @@ def _place_live(
         return None
     text, where = visible
     starts = _find_all(text, key)
-    for occurrence, occurrences in anchor.get("counts", []):
-        if starts and len(starts) == occurrences:
-            last = where[starts[occurrence] + len(key) - 1]
-            return markdown.count("\n", 0, last)
-    return None
+    if not starts or len(starts) != anchor.get("occurrences"):
+        return None
+    last = where[starts[anchor["occurrence"]] + len(key) - 1]
+    return markdown.count("\n", 0, last)
 
 
 def annotate_markdown(
