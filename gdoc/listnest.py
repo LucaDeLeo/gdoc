@@ -178,7 +178,12 @@ def _marker_differences(el: dict) -> list[str]:
             # Kept only when the whole item carries it (live: Docs gives a
             # marker bold only for a fully bold item).
             odd.append(key)
-    return sorted(odd)
+    fully_bold = bool(runs) and all(r.get("bold") is True for r in runs)
+    if fully_bold and marker.get("bold") is not True:
+        # The mirror case: a fully bold item whose number was unbolded by
+        # hand would likely come back bold.
+        odd.append("bold")
+    return sorted(set(odd))
 
 
 def _newline_style(el: dict) -> dict:
