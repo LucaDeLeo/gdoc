@@ -88,7 +88,8 @@ def test_whitespace_runs_with_a_font_export_and_rewrite_unchanged():
     for _ in range(300):
         font = rng.choice(FONTS)
         paragraphs = [_random_paragraph(rng, font) for _ in range(rng.randint(1, 3))]
-        paragraphs.append([("Status draft", {"weightedFontFamily": {"fontFamily": font}})])
+        font_only = {"weightedFontFamily": {"fontFamily": font}}
+        paragraphs.append([("Status draft", font_only)])
         doc = _styled_doc(paragraphs)
         service = NativeService(doc)
         before = [_visible_styles(doc, start, mark) for start, mark in doc.paragraphs()]
