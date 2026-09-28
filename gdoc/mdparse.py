@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import html.entities
 import re
 from dataclasses import dataclass, field
 
@@ -83,13 +84,15 @@ class ParsedMarkdown:
 
 # Inline patterns — order matters (bold+italic before bold/italic)
 _BOLD_ITALIC_RE = re.compile(r"\*\*\*(.+?)\*\*\*")
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__")
+# An opener must not be followed by whitespace and a closer must not follow
+# it (CommonMark flanking), so `2 ** 10 and 3 ** 2` stays literal.
+_BOLD_RE = re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*|__(?!\s)(.+?)(?<!\s)__")
 _ITALIC_RE = re.compile(
     r"(?<!\*)\*(?![\s*])(.+?)(?<![\s*])\*(?!\*)"
     r"|(?<![\w_])_(?![\s_])(.+?)(?<![\s_])_(?![\w_])"
 )
 # Strikethrough uses two tildes; a run of three or more is literal.
-_STRIKE_RE = re.compile(r"(?<!~)~~(?!~)(.+?)(?<!~)~~(?!~)")
+_STRIKE_RE = re.compile(r"(?<!~)~~(?![~\s])(.+?)(?<![~\s])~~(?!~)")
 # Code spans follow CommonMark: a backtick string of length N (a run neither
 # preceded nor followed by a backtick) opens a span that only a backtick string
 # of the same length N closes; an unmatched backtick string is literal text.
@@ -102,6 +105,10 @@ _LINK_RE = re.compile(r"\[([^\]]+)\]\((.*)\)")
 _LINK_TITLE_RE = re.compile(
     r"(<[^<>\n]*>|[^\s<][^\s]*)[ \t\n]+"
     r"(?:\"[^\"]*\"|'[^']*'|\([^()]*\))[ \t]*")
+# A <bracketed> link destination, an optional title and the closing ")".
+_BRACKETED_DESTINATION_RE = re.compile(
+    r"[ \t\n]*<[^<>\n]*>(?:[ \t\n]+(?:\"[^\"]*\"|'[^']*'|\([^()]*\)))?"
+    r"[ \t\n]*\)")
 
 # Inline patterns in precedence order. Each entry: (regex, kind). On a tie at
 # the same position, the earlier entry wins, so ***x*** beats **x**/*x*.
@@ -331,7 +338,11 @@ def _find_link(masked: str, start: int = 0, pairs=None) -> re.Match | None:
     while opener != -1:
         label_end = brackets.get(opener)
         if label_end is not None and masked[label_end + 1:label_end + 2] == "(":
-            end = closes.get(label_end + 1)
+            # A <bracketed> destination may hold unbalanced parentheses; its
+            # closing ")" follows the ">" and an optional title.
+            bracketed = _BRACKETED_DESTINATION_RE.match(masked, label_end + 2)
+            end = (bracketed.end() - 1 if bracketed
+                   else closes.get(label_end + 1))
             if end is not None and end > label_end + 2:
                 width = label_end - opener - 1
                 return re.compile(r"\[([\s\S]{" + str(width)
@@ -651,7 +662,10 @@ def _scan(
         if kind == "separator":
             pass
         elif kind == "entity":
-            literal = html.unescape(m[0])
+            # Only a complete HTML5 name is an entity; html.unescape would
+            # also decode a legacy prefix (`&notes;` as `¬es;`).
+            literal = (html.unescape(m[0]) if m[0].startswith("&#")
+                       or m[0][1:] in html.entities.html5 else m[0])
             plain_parts.append(literal)
             offset += len(literal)
         elif kind == "code":
@@ -672,7 +686,12 @@ def _scan(
             alt = _strip_escapes(text[a:b])
             if kind == "image":
                 ua, ub = _grp(2)
-                uri = _strip_escapes(text[ua:ub])
+                destination = text[ua:ub]
+                # As for links, a CommonMark title is not part of the URI.
+                titled = _LINK_TITLE_RE.fullmatch(masked[ua:ub])
+                if titled:
+                    destination = destination[:titled.end(1)]
+                uri = _strip_escapes(destination)
                 if uri.startswith("<") and uri.endswith(">"):
                     uri = uri[1:-1]
             else:
@@ -693,6 +712,9 @@ def _scan(
                     s.start + seg_start, s.end + seg_start, s.style, s.type,
                 ))
             ua, ub = _grp(2)
+            # Whitespace around the destination is not part of it.
+            ua += len(masked[ua:ub]) - len(masked[ua:ub].lstrip(" \t\n"))
+            ub = max(ua, ub - (len(masked[ua:ub]) - len(masked[ua:ub].rstrip(" \t\n"))))
             destination = text[ua:ub]
             # A CommonMark link title after the destination is not part of the
             # URL; Docs links have no title, so it is dropped.
@@ -1061,7 +1083,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             i += 1
             continue
         path, line = container_path(lines[i])
-        if not line.strip() and path and path[-1] != "q":
+        if not line.strip(" \t") and path and path[-1] != "q":
             # A blank line inside list item content is a blank paragraph; only
             # its quote markers are containers (see get_tab_text).
             while path and path[-1] != "q":

@@ -332,6 +332,65 @@ def test_suggest_refuses_an_empty_replacement_across_paragraphs(
     assert not route.service.batches
 
 
+def _links(doc):
+    return [u.ts["link"]["url"] for u in doc.units
+            if u.ts.get("link") and u.ch.strip()]
+
+
+@pytest.mark.parametrize("markdown,texts,bold", [
+    # R8-20: `**`, `__` and `~~` next to whitespace are literal.
+    ("Compute 2 ** 10 and 3 ** 2.", ["Compute 2 ** 10 and 3 ** 2."], ""),
+    ("a __ b __ c and x ~~ y ~~ z", ["a __ b __ c and x ~~ y ~~ z"], ""),
+    ("keep **bold** and __this__", ["keep bold and this"], "boldthis"),
+    # R8-25: only complete entity names decode.
+    ("&notes; &copyright; &copy; &amp;", ["&notes; &copyright; © &"], ""),
+])
+def test_inline_literals_write_as_written(route, markdown, texts, bold):
+    route.load(NativeDoc(("p", "seed")))
+    route.ok("cat")
+    route.ok("write", text=markdown + "\n")
+    assert _texts(route) == texts
+    assert "".join(u.ch for u in route.service.doc.units
+                   if u.ts.get("bold") and u.ch.strip()) == bold
+
+
+@pytest.mark.parametrize("markdown,url", [
+    # R8-21: bracketed destinations may hold parentheses; spaces are trimmed.
+    ("[x](<https://x.y/a)b>)", "https://x.y/a)b"),
+    ("[x](<https://x.y/(a>)", "https://x.y/(a"),
+    ("[x]( https://x.y )", "https://x.y"),
+    ("[x](<https://x.y/a b> \"t\")", "https://x.y/a b"),
+    ("[x](https://x.y/a_(b))", "https://x.y/a_(b)"),
+])
+def test_link_destinations(route, markdown, url):
+    route.load(NativeDoc(("p", "seed")))
+    route.ok("cat")
+    route.ok("write", text=markdown + "\n")
+    assert _texts(route) == ["x"] and _links(route.service.doc) == [url]
+    route.ok("write", text=route.ok("cat") + "\nmore\n")
+    assert _texts(route) == ["x", "", "more"]
+    assert _links(route.service.doc) == [url]
+
+
+def test_image_title_is_not_part_of_the_uri(route):
+    """R8-24: as for links, an image title is dropped."""
+    route.load(NativeDoc(("p", "seed")))
+    route.ok("cat")
+    route.ok("write", text='![chart](https://example.org/a.png "Quarterly chart")\n')
+    assert [u.ch for u in route.service.doc.units if u.ch.startswith("[IMG:")] == [
+        "[IMG:https://example.org/a.png]"]
+
+
+@pytest.mark.parametrize("space", ["\x0b", "\xa0", "　"])
+def test_whitespace_only_item_content_keeps_character_and_container(route, space):
+    """R8-22: only spaces and tabs make an item-content line blank."""
+    route.load(NativeDoc(("p", "seed")))
+    route.ok("cat")
+    text = f"- item\n\n  {space}\n  after\n"
+    route.ok("write", text=text)
+    assert text in route.ok("cat")
+
+
 def test_written_rule_still_reads_as_rule(route):
     route.load(NativeDoc(("p", "seed")))
     route.ok("cat")
