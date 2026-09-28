@@ -387,7 +387,11 @@ def _style_run_markdown(content: str, style: dict) -> str:
         # A link label may be only whitespace; emphasis on whitespace alone
         # has no Markdown spelling.
         return f"[{text}]({_markdown_destination(style['link']['url'])}){newline}"
-    if not text or (not text.strip() and not style.get("weightedFontFamily")):
+    monospace = (style.get("weightedFontFamily") or {}).get(
+        "fontFamily") in _MONOSPACE_FONTS
+    if not text or (not text.strip() and not monospace):
+        # Only a monospace font gives whitespace a spelling (inline code);
+        # emphasis or any other font on whitespace alone has none.
         return content
     lead = text[: len(text) - len(text.lstrip())]
     trail = text[len(text.rstrip()):]
@@ -396,7 +400,7 @@ def _style_run_markdown(content: str, style: dict) -> str:
         for char in text.strip()
     )
 
-    if style.get("weightedFontFamily", {}).get("fontFamily") in _MONOSPACE_FONTS:
+    if monospace:
         lead = trail = ""
         fence = "`" * (1 + max((len(m[0]) for m in re.finditer(r"`+", text)),
                                default=0))
