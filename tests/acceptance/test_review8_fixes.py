@@ -188,3 +188,28 @@ def test_write_refuses_a_past_revision_file_without_force(route, tmp_path):
     assert _texts(route) == ["Alpha."]
     route.ok("write", text=old, force=True)
     assert _texts(route) == ["Old."]
+
+
+ZERO_BORDER = {"color": {}, "width": {"unit": "PT"}, "padding": {"unit": "PT"},
+               "dashStyle": "SOLID"}
+
+
+def test_zero_width_bottom_border_is_not_a_rule(route):
+    """R8-07: only a visible bottom border on an empty paragraph reads as `---`."""
+    doc = route.load(NativeDoc(("p", "Intro"), ("p", ""), ("p", "Next")))
+    for _, mark in doc.paragraphs():
+        doc.units[mark].ps["borderBottom"] = dict(ZERO_BORDER)
+    read = route.ok("cat")
+    assert "---" not in read and "Intro\n\nNext" in read
+    route.ok("write", text=read.replace("Next", "Later"))
+    assert _texts(route) == ["Intro", "", "Later"]
+    assert not any(
+        (doc.units[mark].ps.get("borderBottom") or {}).get("width", {}).get(
+            "magnitude") for _, mark in doc.paragraphs())
+
+
+def test_written_rule_still_reads_as_rule(route):
+    route.load(NativeDoc(("p", "seed")))
+    route.ok("cat")
+    route.ok("write", text="Intro\n\n---\n\nNext\n")
+    assert "Intro\n\n---\n\nNext\n" in route.ok("cat")

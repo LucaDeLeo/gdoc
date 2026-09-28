@@ -708,7 +708,10 @@ def _paragraph_markdown(
     # Preserve counters: a later paragraph can resume the same native list.
 
     paragraph_style = paragraph.get("paragraphStyle", {})
-    if not text and paragraph_style.get("borderBottom"):
+    # Docs returns a zero-width border on some paragraphs; only a visible one
+    # is a rule (as in lossy.py).
+    if not text and (paragraph_style.get("borderBottom") or {}).get(
+            "width", {}).get("magnitude", 0) > 0:
         return "---" + newline
     # A single native indent reads as one quote level around the same
     # heading, title or escaped prose as an unindented paragraph.
