@@ -18,7 +18,10 @@ BUL = "BULLET_DISC_CIRCLE_SQUARE"
 def _levels(fmt, **per_level):
     """Nine list levels as the API returns them; fmt is "%{i}." or "%{i}"."""
     return {"listProperties": {"nestingLevels": [
-        {"glyphFormat": fmt.format(i=i), **{k: v[i % 3] for k, v in per_level.items()}}
+        {"glyphFormat": fmt.format(i=i),
+         "indentStart": {"magnitude": 36 * (i + 1), "unit": "PT"},
+         "indentFirstLine": {"magnitude": 36 * (i + 1) - 18, "unit": "PT"},
+         **{k: v[i % 3] for k, v in per_level.items()}}
         for i in range(9)
     ]}}
 
@@ -343,6 +346,26 @@ class TestRefusals:
     def test_leading_tab_in_item_text(self):
         tab = _tab(("Alpha", 0, "num"), ("\tBravo", 0, "num"))
         self._refused(tab, "Bravo", 1, "starts with a tab")
+
+    def test_hand_set_indent_on_a_moved_item(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num", {"paragraphStyle": {
+            "indentStart": {"magnitude": 60, "unit": "PT"},
+        }}))
+        self._refused(tab, "Bravo", 1, "hand-set indent")
+
+    def test_hand_set_indent_on_a_rebuilt_sibling(self):
+        # Unnesting Bravo rebuilds a-one, whose own indent would be lost.
+        tab = _tab(("Alpha", 0, "num"), ("a-one", 2, "num", {"paragraphStyle": {
+            "indentFirstLine": {"magnitude": 10, "unit": "PT"},
+        }}), ("Bravo", 1, "num"))
+        self._refused(tab, "Bravo", -1, "hand-set indent")
+
+    def test_standard_indent_is_not_hand_set(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num", {"paragraphStyle": {
+            "indentStart": {"magnitude": 36, "unit": "PT"},
+            "indentFirstLine": {"magnitude": 18, "unit": "PT"},
+        }}))
+        assert _plan(tab, "Bravo", 1).moved == 1
 
     def test_pending_suggestion(self):
         tab = _tab(("Alpha", 0, "num"),

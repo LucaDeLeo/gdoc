@@ -113,6 +113,28 @@ def _in_list(el: dict, list_id: str) -> bool:
     return (_bullet(el) or {}).get("listId") == list_id
 
 
+def _custom_indent(el: dict, lists: dict) -> bool:
+    """Whether a list item's own indent differs from its level's standard.
+
+    The rebuild gives every item its level's standard indent (as Tab does
+    in Docs), so an item indented by hand would silently lose that.
+    """
+    style = _paragraph(el).get("paragraphStyle", {})
+    bullet = _bullet(el)
+    levels = (
+        lists.get(bullet["listId"], {})
+        .get("listProperties", {}).get("nestingLevels", [])
+    )
+    level = levels[_level(el)] if _level(el) < len(levels) else {}
+    for field in ("indentStart", "indentFirstLine"):
+        if field in style:
+            own = style[field].get("magnitude", 0)
+            standard = level.get(field, {}).get("magnitude", 0)
+            if abs(own - standard) > 0.01:
+                return True
+    return False
+
+
 def _label(el: dict) -> str:
     text = _text(el).strip()
     return repr(text[:40] + ("..." if len(text) > 40 else ""))
@@ -271,7 +293,8 @@ def plan_nesting(
             )
         if target[first] > _level(above) + 1:
             raise _usage(
-                f"nesting {_label(head)} by {delta} levels would put it more "
+                f"nesting {_label(head)} by {delta} "
+                f"level{'s' if delta > 1 else ''} would put it more "
                 f"than one level below {_label(above)}"
             )
     below = neighbour(end, 1)
@@ -280,7 +303,8 @@ def plan_nesting(
         and _level(below) > target[end] + 1
     ):
         raise _usage(
-            f"unnesting by {-delta} levels would leave {_label(below)} more "
+            f"unnesting by {-delta} level{'s' if delta < -1 else ''} would "
+            f"leave {_label(below)} more "
             f"than one level below {_label(content[end])}"
         )
 
@@ -326,6 +350,11 @@ def plan_nesting(
             )
         if _text(el).startswith("\t"):
             raise _usage(f"{_label(el)} starts with a tab character")
+        if _custom_indent(el, lists):
+            raise _usage(
+                f"{_label(el)} has a hand-set indent; rebuilding it would "
+                "reset the indent to the list's standard one"
+            )
     from gdoc.api.docs import _walk_suggestion_ids
 
     suggestions: set[str] = set()
