@@ -278,7 +278,18 @@ def locate_item(body: dict, text: str) -> int:
         )
     if not found:
         from gdoc.api.docs import diagnose_no_match
+        from gdoc.util import fold_typography
 
+        folded = fold_typography(needle)
+        if any(
+            folded in fold_typography(_text(el).lower())
+            for el in body.get("content", []) if _paragraph(el) is not None
+        ):
+            raise _usage(
+                f"no match found for {text!r}, but the text appears with "
+                "different quotes or dashes (for example \u2019 instead of '); "
+                "type them as they are in the document"
+            )
         # already_normalized: skip the "--normalize" hint, a flag nest
         # does not have.
         reason = diagnose_no_match(None, text, body=body, already_normalized=True)

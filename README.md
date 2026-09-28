@@ -625,9 +625,10 @@ gdoc unnest DOC --tab "Draft" "Bravo" --json
 # → {"ok": true, "moved": 1, "levels": -1}   (levels is negative for unnest)
 ```
 
-`TEXT` is matched like `edit` (case-insensitive) and must fall inside exactly
-one list item. Sub-items move with their items. Terse output is
-`OK nested 1 item by 1 level`; `--plain` prints `id` and `status updated`.
+`TEXT` is matched like `edit` (case-insensitive) and must occur in exactly one
+paragraph of the tab, which must be a list item. Sub-items move with their
+items. Terse output is `OK nested 1 item by 1 level`; `--plain` prints `id`
+and `status updated`.
 
 How it works: the Docs API cannot set a list level directly, so the command
 rebuilds the moved items (and, when unnesting below a deeper sibling, that

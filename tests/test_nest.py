@@ -276,6 +276,8 @@ class TestRefusals:
         with pytest.raises(GdocError) as exc:
             _at(tab, "Don't stop")
         assert "--normalize" not in str(exc.value)
+        assert "different quotes or dashes" in str(exc.value)
+        assert "whitespace" not in str(exc.value)
 
     def test_table_of_contents_entry_is_not_a_match(self):
         tab = _tab(*STD)
