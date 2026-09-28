@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 from typing import Any
 
 from gdoc import __version__
@@ -617,6 +618,48 @@ class MCPServer:
         self.tools = build_tools(read_only=read_only, allow=allow)
         self.account = account
         self.protocol_version = DEFAULT_PROTOCOL_VERSION
+        self._warm_up_thread: threading.Thread | None = None
+
+    # -- warm-up ---------------------------------------------------------
+
+    def start_warm_up(self) -> None:
+        """Pay the first call's fixed costs while the client is still
+        initializing: importing the Google client, refreshing the access
+        token, building the Drive and Docs services, and opening the Drive
+        connection. Measured on a hosted server, these add about 0.5 s to
+        the first tool call of every session.
+        """
+        self._warm_up_thread = threading.Thread(
+            target=self._warm_up, name="gdoc-mcp-warm-up", daemon=True
+        )
+        self._warm_up_thread.start()
+
+    def _warm_up(self) -> None:
+        from gdoc.util import account_context, resolve_account, token_path_for
+
+        try:
+            account = self.account or resolve_account()
+            if not token_path_for(account).exists():
+                return  # nothing to warm; the first call reports the auth error
+            with account_context(account):
+                from gdoc.api import get_drive_service
+                from gdoc.api.docs import get_docs_service
+                from gdoc.auth import get_credentials
+
+                # Refresh before building services: a refresh rewrites the
+                # token file, which changes the services' cache key.
+                get_credentials(account)
+                get_docs_service()
+                get_drive_service().about().get(fields="user(emailAddress)").execute()
+        except Exception:
+            pass  # best effort; the first real call surfaces any failure
+
+    def _wait_for_warm_up(self) -> None:
+        # The Google HTTP client is not thread-safe, so a tool call must not
+        # share a service object with a warm-up that is still running.
+        thread, self._warm_up_thread = self._warm_up_thread, None
+        if thread is not None:
+            thread.join(timeout=30)
 
     # -- request handlers ------------------------------------------------
 
@@ -652,6 +695,7 @@ class MCPServer:
             arguments = {**arguments, "account": self.account}
 
         command = _command_name(name)
+        self._wait_for_warm_up()
         try:
             stdout, stderr, code = call_command(command, arguments)
         except Exception as e:  # surface as a tool error, never kill the server
