@@ -2,7 +2,7 @@
 
 import pytest
 
-from gdoc.frontmatter import add_frontmatter, parse_frontmatter
+from gdoc.frontmatter import add_frontmatter, parse_frontmatter, set_frontmatter_value
 
 
 class TestParseFrontmatter:
@@ -141,3 +141,17 @@ class TestAddFrontmatter:
         meta, body = parse_frontmatter(content)
         assert meta == original_meta
         assert body == original_body
+
+
+class TestSetFrontmatterValue:
+    def test_replaces_existing_key_only(self):
+        src = "---\ngdoc: a\ngdoc-version: 1\ntitle: T\n---\nbody\n---\nx\n"
+        assert set_frontmatter_value(src, "gdoc-version", "2") == (
+            "---\ngdoc: a\ngdoc-version: 2\ntitle: T\n---\nbody\n---\nx\n"
+        )
+
+    def test_appends_missing_key(self):
+        src = "---\ngdoc: a\n---\nbody"
+        assert set_frontmatter_value(src, "gdoc-version", "2") == (
+            "---\ngdoc: a\ngdoc-version: 2\n---\nbody"
+        )
