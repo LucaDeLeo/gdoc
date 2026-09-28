@@ -616,43 +616,72 @@ def _kept_style(el: dict) -> dict:
     }
 
 
+def _offset(content: list, plan: NestPlan) -> int | None:
+    """How far the planned paragraphs moved in a re-read tab, or None.
+
+    The rebuilt range and the item above it form a contiguous run of
+    fingerprinted texts. Edits elsewhere in the tab (a paragraph added
+    above the list) shift that run without changing it, so it is found
+    by text rather than by position. None when the run is not found
+    exactly once.
+    """
+    keys = sorted(plan.texts)
+    first, last = keys[0], keys[-1]
+
+    def fits(d: int) -> bool:
+        return all(
+            0 <= i + d < len(content) and _text(content[i + d]) == want
+            for i, want in plan.texts.items()
+        )
+
+    if fits(0):
+        return 0
+    hits = [
+        d for d in range(-first, len(content) - last)
+        if d != 0 and fits(d)
+    ]
+    return hits[0] if len(hits) == 1 else None
+
+
 def is_unchanged(document_tab: dict, plan: NestPlan) -> bool:
     """Whether a re-read tab still shows the window exactly as planned from.
 
-    Same text at every fingerprinted position, every rebuilt item still in
-    the list at its original level with its original marker style, and no
-    blank line bulleted: proof that the planned write did not land.
+    Same fingerprinted texts (found wherever edits elsewhere moved them),
+    every rebuilt item still in the list at its original level with its
+    original marker style, and no blank line bulleted: proof that the
+    planned write did not land.
     """
     content = document_tab.get("body", {}).get("content", [])
-    for i, want in plan.texts.items():
-        if i >= len(content) or _text(content[i]) != want:
-            return False
+    d = _offset(content, plan)
+    if d is None:
+        return False
     for i, level in plan.original.items():
-        el = content[i]
+        el = content[i + d]
         if (
             not _in_list(el, plan.list_id) or _level(el) != level
             or _marker_style(el) != plan.markers.get(i, _marker_style(el))
         ):
             return False
-    return all(_bullet(content[i]) is None for i in plan.blanks)
+    return all(_bullet(content[i + d]) is None for i in plan.blanks)
 
 
-def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
-    """Differences between a re-read tab and what *plan* should have left."""
+def verify(document_tab: dict, plan: NestPlan) -> tuple[bool, list[str]]:
+    """Check a re-read tab against *plan*: (found, problems).
+
+    found is False when the planned paragraphs cannot be located by their
+    text (the tab changed around them, or text was left behind); the
+    result is then unverified rather than wrong.
+    """
     content = document_tab.get("body", {}).get("content", [])
+    d = _offset(content, plan)
+    if d is None:
+        return False, [
+            "the moved items could not be found by their text (the tab "
+            "changed around them, or text was left behind)"
+        ]
     problems = []
-    for i, want in plan.texts.items():
-        el = content[i] if i < len(content) else {}
-        if _text(el) != want:
-            # Positions are compared, so a shifted or altered paragraph
-            # (another edit, a leftover tab) makes the rest meaningless.
-            shown = repr(want.strip()[:40]) if want.strip() else "a blank line"
-            return [
-                f"{shown} is no longer where it was (the tab changed, "
-                "or text was left behind)"
-            ]
     for i, want in plan.expected.items():
-        el = content[i] if i < len(content) else {}
+        el = content[i + d]
         bullet = _bullet(el)
         if bullet is None:
             problems.append(f"{_label(el)} lost its bullet")
@@ -674,6 +703,12 @@ def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
                 f"{_label(el)} has a changed paragraph style ({', '.join(fields)})"
             )
     for i in plan.blanks:
-        if i >= len(content) or _bullet(content[i]) is not None:
+        if _bullet(content[i + d]) is not None:
             problems.append("a blank line between items kept a bullet")
-    return problems
+    return True, problems
+
+
+def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
+    """Differences between a re-read tab and what *plan* should have left
+    (empty when it landed as planned)."""
+    return verify(document_tab, plan)[1]

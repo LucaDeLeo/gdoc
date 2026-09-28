@@ -13,9 +13,11 @@ All notable changes to `gdoc` are documented here. This project follows
   are rebuilt in place in one `requiredRevisionId`-pinned batch so they rejoin
   their own native list: the list ID, a UI-restarted start number, text and
   marker styles, paragraph spacing, heading IDs, comment anchors and
-  bookmarks are kept, and nothing
-  else in the tab is rewritten. The result is read back, and any item not at
-  its planned level, list and marker style is reported as an error.
+  bookmarks are kept, and nothing else in the tab is rewritten. The result
+  is read back, with the moved items found by their text so edits elsewhere
+  in the tab do not matter; an item not at its planned level, list, marker
+  or paragraph style is reported as a warning with `"verified": false` (the
+  change is saved, exit 0).
   Refused before any write (exit 3):
   - ambiguous or missing text, non-list or in-table targets;
   - moves that would rebuild a list's first item, skip a level, or unnest past

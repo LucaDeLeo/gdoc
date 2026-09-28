@@ -1436,6 +1436,7 @@ def cmd_nest(args) -> int:
         is_unchanged,
         locate_item,
         plan_nesting,
+        verify,
     )
 
     def reread_tab() -> dict | None:
@@ -1518,21 +1519,35 @@ def cmd_nest(args) -> int:
     warnings = [resent] if resent else []
 
     # The rebuild relies on how createParagraphBullets assigns levels and
-    # joins lists, so read the tab back and say so if it did not land.
+    # joins lists, so read the tab back and say so if it did not land. The
+    # change is saved either way, so an unexpected or unverifiable result
+    # is a warning (exit 0), never a failure a caller would retry.
+    verified = False
     try:
         after = reread_tab()
     except Exception as e:  # noqa: BLE001 — post-mutation, see above
-        warnings.append(f"{verb} but the result could not be read back: {e}")
-    else:
-        problems = (
-            check_result(after.get("documentTab", {}), plan)
-            if after is not None else ["the tab is gone"]
+        warnings.append(
+            f"{verb} and saved, but the result could not be read back to "
+            f"verify it: {e}. Check the list before changing it again"
         )
-        if problems:
-            raise GdocError(
-                "the change was saved but the list is not as planned: "
+    else:
+        if after is None:
+            found, problems = False, ["the tab is gone"]
+        else:
+            found, problems = verify(after.get("documentTab", {}), plan)
+        verified = not problems
+        if problems and not found:
+            warnings.append(
+                f"{verb} and saved, but the result could not be verified: "
                 + "; ".join(problems)
-                + ". Check the list in the document before retrying"
+                + ". Check the list before changing it again"
+            )
+        elif problems:
+            warnings.append(
+                f"{verb} and saved, but the list is not as planned: "
+                + "; ".join(problems)
+                + ". Check the list before changing it again; re-running "
+                "would move the items again"
             )
 
     from gdoc.api.drive import get_file_version
@@ -1550,9 +1565,12 @@ def cmd_nest(args) -> int:
 
     mode = get_output_mode(args)
     if mode == "json":
-        lines = [format_json(moved=plan.moved, levels=delta)]
+        lines = [format_json(moved=plan.moved, levels=delta, verified=verified)]
     elif mode == "plain":
-        lines = [f"id\t{doc_id}", "status\tupdated"]
+        lines = [
+            f"id\t{doc_id}", "status\tupdated",
+            f"verified\t{'yes' if verified else 'no'}",
+        ]
     else:
         items = "item" if plan.moved == 1 else "items"
         lvls = "level" if args.levels == 1 else "levels"

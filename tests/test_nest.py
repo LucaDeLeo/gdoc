@@ -8,7 +8,13 @@ import pytest
 
 from gdoc import mcp
 from gdoc.cli import build_parser, cmd_nest
-from gdoc.listnest import check_result, list_preset, locate_item, plan_nesting
+from gdoc.listnest import (
+    check_result,
+    list_preset,
+    locate_item,
+    plan_nesting,
+    verify,
+)
 from gdoc.util import GdocError
 
 TAB = "t.1"
@@ -626,13 +632,27 @@ class TestCheckResult:
         }
         assert check_result(after, plan) == []
 
-    def test_shifted_paragraphs_are_reported_not_trusted(self):
+    def test_shifted_paragraphs_are_found_by_text(self):
         # A paragraph inserted above the list shifts every position; the
-        # items now at the planned positions must not pass for the moved ones.
+        # items are found by their text, and the ones now at the planned
+        # positions do not pass for them.
         plan = _plan(_tab(*STD), "Bravo", 1)
-        shifted = _tab(("New", 0, None), ("Intro", 0, None), ("Alpha", 1, "num"),
+        shifted = _tab(("New", 0, None), ("Intro", 0, None), ("Alpha", 0, "num"),
                        ("Bravo", 0, "num"), ("Charlie", 0, "num"))
-        assert "no longer where it was" in check_result(shifted, plan)[0]
+        assert "'Bravo' is at level 0, expected 1" in check_result(shifted, plan)[0]
+
+    def test_unrelated_edit_above_does_not_fail_a_correct_result(self):
+        plan = _plan(_tab(*STD), "Bravo", 1)
+        edited = _tab(("New", 0, None), ("Intro", 0, None), ("Alpha", 0, "num"),
+                      ("Bravo", 1, "num"), ("Charlie", 0, "num"), ("Outro", 0, None))
+        assert verify(edited, plan) == (True, [])
+
+    def test_items_that_cannot_be_found_are_unverified(self):
+        plan = _plan(_tab(*STD), "Bravo", 1)
+        rewritten = _tab(("Intro", 0, None), ("Alpha changed", 0, "num"),
+                         ("Bravo", 1, "num"))
+        found, problems = verify(rewritten, plan)
+        assert not found and "could not be found" in problems[0]
 
     def test_an_inserted_twin_item_does_not_pass_for_the_target(self):
         # A new item with the target's text and planned level lands at the
@@ -723,7 +743,7 @@ class TestCommand:
     def test_json_output(self, api, capsys):
         cmd_nest(_args(json=True))
         out = json.loads(capsys.readouterr().out)
-        assert out == {"ok": True, "moved": 1, "levels": 1}
+        assert out == {"ok": True, "moved": 1, "levels": 1, "verified": True}
 
     def test_refusal_writes_nothing(self, api):
         with pytest.raises(GdocError) as exc:
@@ -766,11 +786,37 @@ class TestCommand:
             cmd_nest(_args(levels=0))
         api.get.assert_not_called()
 
-    def test_result_that_did_not_land_is_an_error(self, api):
+    def test_saved_result_not_as_planned_is_a_warning_not_a_failure(
+        self, api, capsys,
+    ):
+        # The write was acknowledged: exit 0 so no caller retries it, with
+        # the unexpected result spelled out and verified=false.
         api.get.side_effect = [_doc(_tab(*STD)), _doc(_tab(*STD))]
-        with pytest.raises(GdocError, match="saved but the list is not") as exc:
-            cmd_nest(_args())
-        assert exc.value.exit_code == 1
+        assert cmd_nest(_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["verified"] is False
+        assert "saved, but the list is not as planned" in captured.err
+        assert "expected 1" in captured.err
+        assert "re-running would move the items again" in captured.err
+        api.state.assert_called_once()
+
+    def test_unverifiable_result_is_a_warning(self, api, capsys):
+        gone = _tab(("Intro", 0, None), ("Something else", 0, None))
+        api.get.side_effect = [_doc(_tab(*STD)), _doc(gone)]
+        assert cmd_nest(_args(plain=True)) == 0
+        captured = capsys.readouterr()
+        assert "verified\tno" in captured.out
+        assert "saved, but the result could not be verified" in captured.err
+
+    def test_concurrent_edit_above_the_list_still_verifies(self, api, capsys):
+        edited = _tab(("Added meanwhile", 0, None), ("Intro", 0, None),
+                      ("Alpha", 0, "num"), ("Bravo", 1, "num"),
+                      ("Charlie", 0, "num"), ("Outro", 0, None))
+        api.get.side_effect = [_doc(_tab(*STD)), _doc(edited)]
+        assert cmd_nest(_args()) == 0
+        captured = capsys.readouterr()
+        assert captured.out == "OK nested 1 item by 1 level\n"
+        assert captured.err == ""
 
     def test_failed_read_back_after_the_write_is_a_warning(self, api, capsys):
         api.get.side_effect = [_doc(_tab(*STD)), GdocError("API error (503)")]
@@ -832,6 +878,17 @@ class TestCommand:
         api.write.side_effect = StaleRevisionError("document changed")
         mocker.patch("sys.stderr", Closed())
         assert cmd_nest(_args()) == 0
+
+    def test_stale_revision_with_an_unrelated_edit_above_says_re_run(self, api):
+        # The stale error came from someone else's edit above the list; the
+        # list is found by text, untouched, so re-running is safe.
+        from gdoc.api.docs import StaleRevisionError
+
+        edited = _tab(("Added meanwhile", 0, None), *STD)
+        api.get.side_effect = [_doc(_tab(*STD)), _doc(edited)]
+        api.write.side_effect = StaleRevisionError("document changed; re-run it")
+        with pytest.raises(StaleRevisionError, match="re-run"):
+            cmd_nest(_args())
 
     def test_stale_revision_with_the_list_unchanged_says_re_run(self, api):
         from gdoc.api.docs import StaleRevisionError

@@ -622,7 +622,8 @@ gdoc unnest DOC "Bravo"                   # and back
 gdoc nest DOC "Bravo" --to "Delta"        # every item from Bravo through Delta
 gdoc unnest DOC "grandchild" --levels 2   # two levels out
 gdoc unnest DOC --tab "Draft" "Bravo" --json
-# → {"ok": true, "moved": 1, "levels": -1}   (levels is negative for unnest)
+# → {"ok": true, "moved": 1, "levels": -1, "verified": true}
+#   (levels is negative for unnest)
 ```
 
 `TEXT` is matched like `edit` (case-insensitive) and must occur in exactly one
@@ -634,8 +635,13 @@ How it works: the Docs API cannot set a list level directly, so the command
 rebuilds the moved items (and, when unnesting below a deeper sibling, that
 sibling) in one batch pinned to the revision it read (`requiredRevisionId`),
 so the items rejoin their own list at the new level. It then reads the tab
-back and fails with an error if any item did not land at its planned level,
-list and marker style. If the document is edited between the read and the
+back, finds the moved items by their text (so edits elsewhere in the tab do
+not matter), and checks each item's level, list, marker and paragraph style.
+The change is saved either way, so the command still exits 0; if the result
+is not as planned, or cannot be verified, it says so on stderr and reports
+`"verified": false` (`--plain`: `verified no`). Check the list then rather
+than re-running, which would move the items again. If the document is
+edited between the read and the
 write, the write is rejected: the command says `re-run it` when the list is
 provably untouched, and otherwise that the outcome is unknown and to inspect
 the list first (the operation is not safe to repeat blindly).
