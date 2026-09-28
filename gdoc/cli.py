@@ -1076,7 +1076,7 @@ def _read_file(path: str) -> str:
     if not os.path.isfile(path):
         raise GdocError(f"file not found: {path}", exit_code=3)
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
     except (OSError, UnicodeDecodeError) as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3)
@@ -3744,7 +3744,7 @@ def _cmd_new_from_file(args) -> int:
     try:
         with open(file_path, encoding="utf-8") as f:
             content = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3)
 
     base_dir = os.path.dirname(os.path.abspath(file_path))

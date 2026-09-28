@@ -76,6 +76,9 @@ class ParsedMarkdown:
     non_default_list_starts: list[str] = field(default_factory=list)
     # List items nested deeper than a Docs list's nine levels.
     deep_list_items: list[str] = field(default_factory=list)
+    # The preset of a level-0 native list directly before the insertion that
+    # a first list starting the text continues (an item replaced in place).
+    continues_list: str | None = None
     code_blocks: list[CodeBlockData] = field(default_factory=list)
     images: list[ImageData] = field(default_factory=list)
     # Per-paragraph pieces of one fenced replacement share this marker, so
@@ -687,8 +690,12 @@ def _scan(
             alt = _strip_escapes(text[a:b])
             if kind == "image":
                 ua, ub = _grp(2)
+                # As for links, surrounding whitespace and a CommonMark title
+                # are not part of the URI.
+                ua += len(masked[ua:ub]) - len(masked[ua:ub].lstrip(" \t\n"))
+                ub = max(ua, ub - (len(masked[ua:ub])
+                                   - len(masked[ua:ub].rstrip(" \t\n"))))
                 destination = text[ua:ub]
-                # As for links, a CommonMark title is not part of the URI.
                 titled = _LINK_TITLE_RE.fullmatch(masked[ua:ub])
                 if titled:
                     destination = destination[:titled.end(1)]
@@ -1595,10 +1602,11 @@ def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
 
     So each native list is created in one pinned sequence, top to bottom,
     behind two temporary paragraphs: an unbulleted separator, so the range
-    never joins a list above it, and an empty anchor with no tabs or indent
-    as the range's first paragraph, so each item's tabs are its absolute
-    level. Paragraphs the range spans that belong to no list, or to a list
-    created later, lose their bullets right after. A list spans only
+    never joins a list above it (unless ``parsed.continues_list`` asks the
+    first list to continue a level-0 list there), and an empty anchor with
+    no tabs or indent as the range's first paragraph, so each item's tabs
+    are its absolute level. Paragraphs the range spans that belong to no
+    list, or to a list created later, lose their bullets right after. A list spans only
     paragraphs that have no bullet yet: one that spanned an earlier list's
     item would also span that list's first item (their Markdown lists would
     interleave both ways, which the parser never produces).
@@ -1649,12 +1657,18 @@ def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
     zero = {"magnitude": 0, "unit": "PT"}
     for members in sorted(lists, key=lambda members: members[0].start):
         start, end = coordinate(members[0].start), end_of(members[-1])
+        preset = members[0].style["bulletPreset"]
+        # Continuing the list above joins it at level 0, so tabs stay
+        # absolute; only the anchor is needed.
+        temporary = 1 if (members[0].start == 0
+                          and parsed.continues_list == preset) else 2
         requests += [
-            {"insertText": {"location": location(start), "text": "\n\n"}},
-            {"deleteParagraphBullets": {"range": span(start, end + 2)}},
+            {"insertText": {"location": location(start),
+                            "text": "\n" * temporary}},
+            {"deleteParagraphBullets": {"range": span(start, end + temporary)}},
             # Leftover indent from an earlier range would add levels.
             {"updateParagraphStyle": {
-                "range": span(start, end + 2),
+                "range": span(start, end + temporary),
                 "paragraphStyle": {"indentStart": zero, "indentFirstLine": zero},
                 "fields": "indentStart,indentFirstLine",
             }},
@@ -1663,18 +1677,18 @@ def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
         for item in reversed(members):
             if item.list_depth:
                 requests.append({"insertText": {
-                    "location": location(coordinate(item.start) + 2),
+                    "location": location(coordinate(item.start) + temporary),
                     "text": "\t" * item.list_depth,
                 }})
                 tabs += item.list_depth
         requests += [
             {"createParagraphBullets": {
-                "range": span(start + 1, end + 2 + tabs),
-                "bulletPreset": members[0].style["bulletPreset"],
+                "range": span(start + temporary - 1, end + temporary + tabs),
+                "bulletPreset": preset,
             }},
-            # Starting at the separator's first index, the deletion leaves the
-            # first item its own style and bullet.
-            {"deleteContentRange": {"range": span(start, start + 2)}},
+            # Starting at the first temporary paragraph's first index, the
+            # deletion leaves the first item its own style and bullet.
+            {"deleteContentRange": {"range": span(start, start + temporary)}},
         ]
         for before, after in zip(members, members[1:]):
             if end_of(before) < coordinate(after.start):

@@ -3037,6 +3037,19 @@ def insert_markdown_into_tab(
     leading_table = (
         appending and bool(parsed.tables) and parsed.tables[0].plain_text_offset == 0
     )
+    # A nested item appended after a top-level item continues that item's
+    # list, as writing the concatenated Markdown nests it there.
+    first_item = next((s for s in parsed.styles if s.type == "bullets"), None)
+    last_paragraph = next((e["paragraph"] for e in reversed(body.get("content", []))
+                           if "paragraph" in e), {})
+    last_bullet = last_paragraph.get("bullet") or {}
+    if (appending and first_item is not None and first_item.start == 0
+            and first_item.list_depth > 0 and last_bullet
+            and last_bullet.get("nestingLevel", 0) == 0):
+        ordered = _list_is_ordered(tab_match.get("lists", {}),
+                                   last_bullet.get("listId", ""), 0)
+        parsed.continues_list = ("NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered
+                                 else "BULLET_DISC_CIRCLE_SQUARE")
     # An appended leading table splits the tab's last paragraph at its mark.
     # When that paragraph is empty and one of gdoc's ranges holds it (an
     # empty code line, a rule in a quote), the range has no text to keep
@@ -3468,6 +3481,64 @@ def _wording_contexts(body: dict, match: dict, markdown: str):
     return result
 
 
+def _continuing(parsed, body, found, source, tab_id):
+    """Continue the level-0 list of the item above a replaced list item.
+
+    Items replacing a list item in place stay in its list, as a write of the
+    edited Markdown keeps them, when the item above is in that list at level
+    0 (where joining keeps the replacement's levels absolute).
+    """
+    import dataclasses
+
+    bullet = found[0]["bullet"]
+    above = next((e["paragraph"] for e in _flat_paragraphs(body.get("content", []))
+                  if e.get("endIndex") == found[1]), None)
+    above_bullet = (above or {}).get("bullet") or {}
+    if (above_bullet.get("listId") != bullet.get("listId")
+            or above_bullet.get("nestingLevel", 0) != 0):
+        return parsed
+    lists = (_snapshot_tab(source, tab_id) or {}).get("lists", {})
+    preset = ("NUMBERED_DECIMAL_ALPHA_ROMAN"
+              if _list_is_ordered(lists, bullet.get("listId", ""), 0)
+              else "BULLET_DISC_CIRCLE_SQUARE")
+    return dataclasses.replace(parsed, continues_list=preset)
+
+
+def _flat_paragraphs(content):
+    for element in content:
+        if "paragraph" in element:
+            yield element
+        for row in element.get("table", {}).get("tableRows", []):
+            for cell in row.get("tableCells", []):
+                yield from _flat_paragraphs(cell.get("content", []))
+
+
+def _same_list_item(parsed, paragraph: dict, lists: dict):
+    """The item's wording without its marker, when ``parsed`` is one list
+    item of the same kind (numbered or bullet) and level as ``paragraph``."""
+    import dataclasses
+
+    bullet = paragraph.get("bullet")
+    items = [s for s in parsed.styles if s.type == "bullets"]
+    if (not bullet or len(items) != 1 or "\n" in parsed.plain_text.rstrip("\n")
+            or parsed.tables or parsed.code_blocks
+            or any(s.type == "markdown_prefix" for s in parsed.styles)):
+        return None
+    item, level = items[0], bullet.get("nestingLevel", 0)
+    ordered = item.style["bulletPreset"].startswith("NUMBERED")
+    if (item.list_depth != level
+            or ordered != _list_is_ordered(lists, bullet.get("listId", ""), level)):
+        return None
+    depth = item.list_depth
+    styles = [dataclasses.replace(s, start=max(0, s.start - depth),
+                                  end=max(0, s.end - depth))
+              for s in parsed.styles
+              if s.type not in ("bullets", "paragraph_style")]
+    return dataclasses.replace(
+        parsed, plain_text=parsed.plain_text[depth:], styles=styles,
+        removed_tabs=0, non_default_list_starts=[])
+
+
 def _table_between_blanks(content, match, parsed):
     """Plan a table-only replacement so the table reuses blank separators (I5).
 
@@ -3631,14 +3702,19 @@ def _plan_paragraph_run(siblings: list[dict], first: int, last: int,
     text_end = run[-1]["endIndex"] - 1
     plan = {k: v for k, v in match.items()
             if k not in ("startIndex", "endIndex")}
-    before_table = last + 1 < len(siblings) and "table" in siblings[last + 1]
+    # A table (or any other non-paragraph element) after the run keeps the
+    # mark before it, like the segment's last one.
+    before_table = (last + 1 < len(siblings)
+                    and "paragraph" not in siblings[last + 1])
     if last + 1 < len(siblings) and not before_table:
         # Empty the paragraphs first, then remove the one empty paragraph
         # left; either deletion starts at a paragraph's first index.
         return {**plan, "startIndex": start, "endIndex": text_end + 1,
                 "emptiedMark": text_end}
     previous = siblings[first - 1] if first else None
-    if previous is None or "table" in previous:
+    if previous is not None and "sectionBreak" in previous:
+        previous = None  # a body's leading section break holds no mark
+    if previous is None or "paragraph" not in previous:
         if before_table:
             raise GdocError(
                 "cannot remove the paragraph directly before a table "
@@ -4329,7 +4405,10 @@ def replace_formatted(
                 len(native) == len(new_markdown.split("\n"))
             )
         else:
-            contextual = body is not None and not (parsed.tables and whole)
+            # Tables, and list items that must share one native list, are
+            # compiled from the whole replacement, not paragraph by paragraph.
+            listed = sum(s.type == "bullets" for s in parsed.styles) > 1
+            contextual = body is not None and not ((parsed.tables or listed) and whole)
         if (body is not None and not new_markdown and not replace_paragraphs
                 and _removes_whole_paragraphs(body.get("content", []), match)):
             removals.append(match)
@@ -4378,6 +4457,14 @@ def replace_formatted(
         for part, context in parts:
             found = (_replacement_paragraph(body.get("content", []), part)
                      if body is not None else None)
+            lists = (_snapshot_tab(source, part.get("tabId", tab_id)) or {}).get(
+                "lists", {})
+            kept = found and _same_list_item(context[0], found[0], lists)
+            if kept:
+                # Rewording a list item as an item of its own kind and level
+                # keeps its native bullet, so its list and numbering stay.
+                planned.append((part, (kept, context[1])))
+                continue
             explicit = any(s.type in ("paragraph_style", "bullets")
                            for s in context[0].styles)
             # A structural collapse keeps only the last paragraph's mark, so
@@ -4401,6 +4488,9 @@ def replace_formatted(
             ):
                 reset_bullets.add(_match_key(part))
                 _reset_list_indents(context[0])
+                if found and found[0].get("bullet") and context[1] is None:
+                    context = (_continuing(context[0], body, found, source,
+                                           part.get("tabId", tab_id)), None)
             planned.append((part, context))
     if removals:
         from gdoc.mdparse import ParsedMarkdown
@@ -4408,6 +4498,17 @@ def replace_formatted(
                     for plan in _plan_paragraph_removals(source, removals)]
     matches = [part for part, _ in planned]
     contexts = {_match_key(part): context for part, context in planned}
+    # Only list items the edit writes as lists reset their start, not
+    # wording that merely looks like one.
+    starts = [start for selected, _ in contexts.values()
+              if any(s.type == "bullets" for s in selected.styles)
+              for start in selected.non_default_list_starts]
+    if starts:
+        import sys
+
+        print("WARN: Google Docs cannot set arbitrary native list starts; "
+              "the following lists will start at 1: " + "; ".join(starts),
+              file=sys.stderr)
     # Table insertion after the main batch tracks index shifts for a single
     # block-path match only. Inline matches insert the table source literally
     # and never reach _insert_table, so they do not count.

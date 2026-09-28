@@ -128,13 +128,12 @@ def _canonical(rows):
 def _runs(rng, body):
     """Runs of whole top-level paragraphs an exact match can select."""
     everything = "\n".join(text for kind, text, *_ in body)
-    last = len(body) - 1
     runs = []
     for i in range(len(body)):
         for j in range(i, len(body)):
             if body[j][0] != "p":
                 break
-            if not body[i][1] or not body[j][1] or (i == 0 and j == last):
+            if not body[i][1] or not body[j][1]:
                 continue
             old = "\n".join(text for _, text, *_ in body[i:j + 1])
             if everything.count(old) == 1:
@@ -151,6 +150,8 @@ def _refusal_expected(body, i, j):
     table or nothing, or from an empty list item of another list state."""
     if not _borrows(body, j):
         return False
+    if i == 0 and j == len(body) - 1:
+        return False
     if i == 0 or body[i - 1][0] == "t":
         return True
     kept, removed = body[i - 1][4], body[j][4]
@@ -163,6 +164,8 @@ def _refusal_expected(body, i, j):
 
 def _plan_span(body, i, j):
     """The characters the removal deletes (see _plan_paragraph_run)."""
+    if i == 0 and j == len(body) - 1:
+        return body[i][2], body[j][3] - 1  # wording only; one mark stays
     if _borrows(body, j):
         return body[i - 1][3] - 1, body[j][3] - 1
     return body[i][2], body[j][3]
@@ -181,8 +184,13 @@ def test_i1_to_i4_removing_whole_paragraphs(route, seed):
         context = (markdown, old, output + error)
         if _refusal_expected(body, i, j):
             assert code != 0 and len(route.service.batches) == batches, context
+            assert "unexpected error" not in output + error, context
             continue
         assert code == 0, context
+        if i == 0 and j == len(body) - 1:
+            # The segment's only paragraphs: their wording goes, one mark stays.
+            assert [row[0] for row in _shape(doc)] == [""], context
+            continue
         assert _canonical(_shape(doc)) == _canonical(shape[:i] + shape[j + 1:]), context
         _read(route)
 
