@@ -68,6 +68,16 @@ All notable changes to `gdoc` are documented here. This project follows
 
 - A list quoted inside a nested list item keeps its own bullets or numbering;
   the enclosing list no longer absorbs it.
+- Whitespace between differently styled runs in a document with an explicit
+  font reads as plain whitespace, not doubled spaces or empty `**` markers.
+- An empty paragraph reads as `---` only when its bottom border is visible.
+- A rebased write warns and reports `rebased: true`; `--plain` prints an in-sync
+  result as TSV; an input file that is not UTF-8 exits 3.
+- `suggest` refuses an empty replacement across a paragraph break, which
+  accepting could not join.
+- `**`, `__` and `~~` beside whitespace stay literal; `<...>` link destinations
+  may hold parentheses; an image title is dropped from its URI; an incomplete
+  entity name such as `&notes;` stays literal.
 - `write` of a pulled file replaces the tab it came from and refuses another
   `--tab` or document. It checks the file's `gdoc-revision` as `push` does, so a
   later read cannot authorize an older file; a `pull --revision` file needs

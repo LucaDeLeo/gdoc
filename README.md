@@ -454,7 +454,7 @@ explicitly authorizes replacement from the current snapshot; it never disables t
 revision precondition. `--quiet` only suppresses notifications. A successful write
 uses the revision acknowledged by Google, so successive own writes normally need
 no extra read. Missing acknowledgments or a rebased recovery do not bless unseen
-content. An unchanged selected tab returns `already in sync` without mutation.
+content; a rebased write says so with a stderr warning and `rebased: true` in JSON. An unchanged selected tab returns `already in sync` without mutation.
 Matching Markdown is not a read: styles and pending suggestions do not appear in
 Markdown, so an `already in sync` result never establishes a new baseline.
 
