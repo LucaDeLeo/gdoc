@@ -277,6 +277,16 @@ class TestRefusals:
             _at(tab, "Don't stop")
         assert "--normalize" not in str(exc.value)
 
+    def test_table_of_contents_entry_is_not_a_match(self):
+        tab = _tab(*STD)
+        toc_para = {"startIndex": 1, "endIndex": 7, "paragraph": {"elements": [{
+            "startIndex": 1, "endIndex": 7, "textRun": {"content": "Bravo\n"}}]}}
+        tab["body"]["content"].insert(1, {
+            "startIndex": 0, "endIndex": 0,
+            "tableOfContents": {"content": [toc_para]},
+        })
+        assert _at(tab, "Bravo") == 4
+
     def test_not_a_list_item(self):
         self._refused(_tab(*STD), "Intro", 1, "not a list item")
 
@@ -425,10 +435,15 @@ class TestRefusals:
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         para = tab["body"]["content"][2]["paragraph"]
         para["bullet"]["textStyle"] = {"underline": False}
-        para["elements"][0]["textRun"]["textStyle"] = {
-            "weightedFontFamily": {"fontFamily": "Georgia", "weight": 400},
-            "underline": True,
-        }
+        start = para["elements"][0]["startIndex"]
+        para["elements"] = [
+            {"startIndex": start, "endIndex": start + 3,
+             "textRun": {"content": "Bra", "textStyle": {}}},
+            {"startIndex": start + 3, "endIndex": start + 6, "textRun": {
+                "content": "vo\n", "textStyle": {
+                    "weightedFontFamily": {"fontFamily": "Georgia", "weight": 400},
+                    "underline": True}}},
+        ]
         assert _plan(tab, "Bravo", 1).moved == 1
 
     @pytest.mark.parametrize("style", [
@@ -472,13 +487,30 @@ class TestRefusals:
         para["elements"][0]["textRun"]["textStyle"] = {"italic": True}
         self._refused(tab, "Bravo", 1, "formatted bullet or number \\(italic\\)")
 
-    def test_fully_linked_item_is_not_refused(self):
+    @pytest.mark.parametrize("style", [
+        {"weightedFontFamily": {"fontFamily": "Georgia", "weight": 400}},
+        {"fontSize": {"magnitude": 14, "unit": "PT"}},
+        {"underline": True},
+    ])
+    def test_plain_marker_on_a_fully_styled_item_is_refused(self, style):
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         para = tab["body"]["content"][2]["paragraph"]
         para["bullet"]["textStyle"] = {"underline": False}
-        para["elements"][0]["textRun"]["textStyle"] = {
-            "underline": True, "link": {"url": "https://example.com/"},
-        }
+        para["elements"][0]["textRun"]["textStyle"] = dict(style)
+        self._refused(tab, "Bravo", 1, "formatted bullet or number")
+
+    def test_link_item_with_a_plain_paragraph_mark_is_not_refused(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"underline": False}
+        start = para["elements"][0]["startIndex"]
+        para["elements"] = [
+            {"startIndex": start, "endIndex": start + 5, "textRun": {
+                "content": "Bravo", "textStyle": {
+                    "underline": True, "link": {"url": "https://example.com/"}}}},
+            {"startIndex": start + 5, "endIndex": start + 6,
+             "textRun": {"content": "\n", "textStyle": {}}},
+        ]
         assert _plan(tab, "Bravo", 1).moved == 1
 
     def test_plain_marker_style_is_not_formatting(self):
@@ -660,6 +692,12 @@ class TestCommand:
         with pytest.raises(GdocError, match="tab not found") as exc:
             cmd_nest(_args(tab="Nope"))
         assert exc.value.exit_code == 3
+
+    def test_empty_to_is_refused(self, api):
+        with pytest.raises(GdocError, match="empty") as exc:
+            cmd_nest(_args(to=""))
+        assert exc.value.exit_code == 3
+        api.write.assert_not_called()
 
     def test_zero_levels_is_refused_before_any_call(self, api):
         with pytest.raises(GdocError, match="at least 1"):

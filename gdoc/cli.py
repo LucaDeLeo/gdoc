@@ -1475,7 +1475,7 @@ def cmd_nest(args) -> int:
     body = document_tab.get("body", {})
 
     first = locate_item(body, args.text)
-    last = locate_item(body, args.to) if args.to else first
+    last = locate_item(body, args.to) if args.to is not None else first
     plan = plan_nesting(document_tab, tab_id, first, last, delta)
 
     try:

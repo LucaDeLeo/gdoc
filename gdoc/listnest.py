@@ -178,14 +178,20 @@ def _marker_differences(el: dict) -> list[str]:
             # Kept only when the whole item carries it (live: Docs gives a
             # marker bold only for a fully bold item).
             odd.append(key)
-    # The mirror case: an item carrying a flag on every run while its marker
-    # lacks it. Docs bolds the marker of a fully bold item on its own, so a
-    # hand-unbolded one would likely come back bold; the other flags are
-    # untested and refused alike. Underline is exempt: every marker reports
-    # underline false, and a fully linked item is underlined.
-    for key in ("bold", "italic", "strikethrough", "smallCaps"):
-        on_every_run = bool(runs) and all(r.get(key) is True for r in runs)
-        if on_every_run and marker.get(key) is not True:
+    # The mirror case: a style set on every run (the paragraph mark
+    # included) that the marker lacks. Docs bolds the marker of a fully
+    # bold item on its own, so a hand-unbolded one would likely come back
+    # bold; fonts, sizes, colours and the rest are untested and refused
+    # alike. An item that only ends in a style is not affected (live: an
+    # item ending in Georgia keeps a plain marker).
+    shared = set(runs[0]) if runs else set()
+    for r in runs[1:]:
+        shared &= set(r)
+    for key in shared:
+        values = [r[key] for r in runs]
+        if values[0] is False or any(v != values[0] for v in values):
+            continue
+        if marker.get(key) != values[0]:
             odd.append(key)
     return sorted(set(odd))
 
@@ -241,7 +247,8 @@ def locate_item(body: dict, text: str) -> int:
         if _paragraph(el) is not None:
             if needle in _text(el).lower():
                 found.append(i)
-        else:
+        elif "tableOfContents" not in el:
+            # A table of contents repeats heading text; it is not a match.
             in_container += sum(
                 needle in t.lower() for t in _inner_paragraph_texts(el)
             )
