@@ -238,6 +238,47 @@ def test_plain_in_sync_result_is_tsv(monkeypatch, tmp_path):
     assert output == "id\tsynthetic\ntab_id\tt.0\nstatus\tin_sync\n"
 
 
+def _cli(argv):
+    import contextlib
+    import io
+
+    from gdoc import cli
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = cli.run_argv(argv, check_updates=False)
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_diff_ignores_tab_without_gdoc_provenance(monkeypatch, tmp_path):
+    """R8-15: `diff DOC FILE` (CLI only; MCP has no local files) ignores
+    another tool's `tab` field, as `write` does."""
+    route = NativeRoute("cli", monkeypatch, tmp_path)
+    route.load(NativeDoc(("p", "Alpha.")))
+    path = tmp_path / "notes.md"
+    path.write_text("---\ntitle: Notes\ntab: Overview\n---\nAlpha.\n")
+    code, output, error = _cli(["diff", "synthetic", str(path)])
+    assert code == 0, error
+    path.write_text("---\ngdoc: synthetic\ntab: Overview\n---\nAlpha.\n")
+    code, output, error = _cli(["diff", "synthetic", str(path)])
+    assert code == 3 and "tab not found: Overview" in error
+
+
+@pytest.mark.parametrize("command", ["write", "insert", "diff", "push"])
+def test_non_utf8_input_file_is_a_usage_error(monkeypatch, tmp_path, command):
+    """R8-17: undecodable input exits 3 before any mutation (CLI only)."""
+    route = NativeRoute("cli", monkeypatch, tmp_path)
+    route.load(NativeDoc(("p", "Alpha.")))
+    path = tmp_path / "bad.md"
+    path.write_bytes(b"\xff\xfe bad")
+    argv = ([command, str(path)] if command == "push"
+            else [command, "synthetic", str(path)])
+    if command == "insert":
+        argv += ["--tab", "Main"]
+    code, output, error = _cli(argv)
+    assert code == 3 and "cannot read file" in error
+    assert not route.service.batches
+
+
 def test_written_rule_still_reads_as_rule(route):
     route.load(NativeDoc(("p", "seed")))
     route.ok("cat")

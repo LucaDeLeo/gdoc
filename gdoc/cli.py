@@ -720,7 +720,7 @@ def cmd_insert(args) -> int:
     try:
         with open(file_path, encoding="utf-8") as f:
             content = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3) from e
 
     from gdoc.frontmatter import parse_frontmatter
@@ -807,7 +807,7 @@ def _read_cell_rows(args) -> list[list[str]]:
 
                     return list(csv.reader(f))
                 return [line.rstrip("\n").split("\t") for line in f]
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise GdocError(f"cannot read {file_path}: {e}", exit_code=3) from e
 
     rows = [line.rstrip("\n").split("\t") for line in sys.stdin]
@@ -1077,7 +1077,7 @@ def _read_file(path: str) -> str:
     try:
         with open(path) as f:
             content = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3)
     return content
 
@@ -1558,7 +1558,7 @@ def cmd_write(args) -> int:
     try:
         with open(file_path, encoding="utf-8", newline="") as f:
             content = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3) from e
 
     # Strip frontmatter — pull prepends it, and leaving it in the upload
@@ -2027,7 +2027,7 @@ def cmd_push(args) -> int:
     try:
         with open(file_path, encoding="utf-8", newline="") as f:
             content = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3)
 
     # Parse frontmatter
@@ -2473,7 +2473,7 @@ def cmd_diff(args) -> int:
     try:
         with open(file_path, encoding="utf-8", newline="") as f:
             local = f.read()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise GdocError(f"cannot read file: {e}", exit_code=3)
     # Compare the body with the tab that cat, pull and write use.
     from gdoc.api.docs import get_tab_text
@@ -2481,8 +2481,12 @@ def cmd_diff(args) -> int:
 
     metadata, local = parse_frontmatter(local)
     local = local.replace("\r\n", "\n")
+    # As for `write`, `tab` is provenance only in a file pulled from this doc.
+    pulled = metadata.get("gdoc")
+    file_tab = (metadata.get("tab")
+                if pulled and _resolve_doc_id(pulled) == doc_id else None)
     _, document, selected = _read_native_tab(
-        doc_id, getattr(args, "tab", None) or metadata.get("tab"),
+        doc_id, getattr(args, "tab", None) or file_tab,
     )
     remote = get_tab_text(selected, markdown=not use_plain)
 
