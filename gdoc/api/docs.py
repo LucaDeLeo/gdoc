@@ -1135,6 +1135,27 @@ def _raise_if_stale_revision(e: HttpError) -> None:
         )
 
 
+def batch_update_pinned(
+    doc_id: str, requests: list[dict], revision_id: str,
+) -> None:
+    """Run one batchUpdate pinned to *revision_id* (all requests or none).
+
+    A stale revision (someone edited since the read) becomes a clear
+    "re-run it" error instead of a raw 400.
+    """
+    try:
+        get_docs_service().documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": requests,
+                "writeControl": {"requiredRevisionId": revision_id},
+            },
+        ).execute()
+    except HttpError as e:
+        _raise_if_stale_revision(e)
+        _translate_http_error(e, doc_id)
+
+
 def find_object_tab(doc: dict, object_id: str) -> str | None:
     """Find which tab holds an inline/positioned object ID.
 
