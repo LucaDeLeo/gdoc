@@ -79,9 +79,10 @@ line numbers are a display prefix, not part of the content.
 Placement uses each comment's live anchor from the Docs API Developer Preview
 (`documents.get` with `commentsViewMode`): the text the comment covers now. The
 CLI finds that text in the markdown and places the annotation after the line
-where the anchor ends. Drive's `quotedFileContent` is not used for this: Drive
-never updates it after an edit, so it can't show whether a comment is still
-attached.
+where the anchor ends. Drive's `quotedFileContent` can't show whether a comment
+is still attached, because Drive never updates it after an edit. It is used
+only for comments with no live anchor, such as ones created through the Drive
+API (including gdoc's own `comment --quote` fallback).
 
 Comments not placed inline go at the bottom, with a note when there is one:
 
@@ -93,9 +94,11 @@ Comments not placed inline go at the bottom, with a note when there is one:
 ```
 
 `[detached]` means the anchored text is all gone (Docs shows "Original content
-deleted"). Without preview access the CLI warns and falls back to the quoted
-text, labelled `[quoted text found]` or `[quoted text not found (edited or
-detached)]`.
+deleted"). When live anchors can't be read (no preview access, no comment
+access, or the request fails), the CLI warns and places every comment by its
+quoted text instead. The labels then say what was matched, not whether the
+comment is attached: `[quoted text found]`, `[quoted text not found (edited or
+detached)]`, `[quoted text ambiguous]` or `[quoted text too short]`.
 
 ## Awareness System — "What Changed?"
 
