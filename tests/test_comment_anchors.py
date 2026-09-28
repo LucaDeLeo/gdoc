@@ -173,6 +173,24 @@ class TestGetCommentAnchors:
         )
         assert _anchors(doc)["c1"]["text"] == "cell words"
 
+    def test_anchor_on_an_image_is_attached_not_detached(self):
+        tab = _tab("t.1", [], {})
+        tab["documentTab"]["body"]["content"] = [{"paragraph": {"elements": [
+            {"startIndex": 1, "inlineObjectElement": {"inlineObjectId": "i"}},
+            {"startIndex": 2, "textRun": {"content": "\n"}},
+        ]}}]
+        tab["documentTab"]["commentAnchors"] = {"kix.a": {"ranges": [
+            {"startIndex": 1, "endIndex": 2, "tabId": "t.1"},
+        ]}}
+        anchors = _anchors(_document([tab], {"c1": "kix.a"}))
+        assert anchors["c1"] == {
+            "text": "", "key": "", "occurrence": 0, "occurrences": 0,
+        }
+        result = annotate_markdown(
+            "![](image.png)\n", [_comment("c1", "x")], anchors=anchors,
+        )
+        assert "[#c1 open] [attached, location not found]" in result
+
     def test_request_uses_the_preview_view(self):
         session = MagicMock()
         session.get.return_value = _response(body=_document([], {}))
@@ -336,7 +354,31 @@ class TestProbeScenarios:
         assert _annotation_line(result, "c1") == 3
 
     def test_attached_but_not_in_the_markdown(self):
-        # Markdown escapes the asterisk, so the live text isn't found.
+        # The export adds the tab title, so the markdown has one more
+        # "Notes" than the document text and the occurrence can't be mapped.
+        doc = _document(
+            [_tab("t.1", ["Notes"], {"kix.a": ["Notes"]})],
+            {"c1": "kix.a"},
+        )
+        result = annotate_markdown(
+            "# Notes\n\nNotes\n", [_comment("c1", "Notes")],
+            anchors=_anchors(doc),
+        )
+        assert "[#c1 open] [attached, location not found]" in result
+
+    def test_formatted_anchor_is_found_and_link_targets_are_ignored(self):
+        # "target" is bold in part; the only raw-markdown match is in a URL.
+        md = "tar**get**\n\n[Read more](https://example.com/target)\n"
+        doc = _document(
+            [_tab("t.1", ["target", "Read more"], {"kix.a": ["target"]})],
+            {"c1": "kix.a"},
+        )
+        result = annotate_markdown(
+            md, [_comment("c1", "target")], anchors=_anchors(doc),
+        )
+        assert _annotation_line(result, "c1") == 1
+
+    def test_escaped_text_is_matched_unescaped(self):
         doc = _document(
             [_tab("t.1", ["Price is 5*3 today."], {"kix.a": ["5*3 today"]})],
             {"c1": "kix.a"},
@@ -345,7 +387,7 @@ class TestProbeScenarios:
             "Price is 5\\*3 today.\n", [_comment("c1", "5*3 today")],
             anchors=_anchors(doc),
         )
-        assert "[#c1 open] [attached, location not found]" in result
+        assert _annotation_line(result, "c1") == 1
 
     def test_comment_without_live_anchor_uses_its_quote(self):
         result = annotate_markdown(

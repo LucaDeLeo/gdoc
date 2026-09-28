@@ -1,5 +1,7 @@
 """Line-numbered comment annotation engine for cat --comments."""
 
+import re
+
 
 def _format_author(author_dict: dict) -> str:
     """Format author for display: prefer email, fallback to name."""
@@ -77,20 +79,61 @@ def _find_all(text: str, key: str) -> list[int]:
     return starts
 
 
+# Markdown that isn't visible text: an escape (keeps the escaped char),
+# an image, a link (keeps its text), a reference definition line, or an
+# emphasis/code marker.
+_MARKUP = re.compile(
+    r"\\(.)"
+    r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
+    r"|\[([^\]]*)\]\([^)]*\)"
+    r"|^\[[^\]]+\]:[^\n]*$"
+    r"|[*_~`]",
+    re.MULTILINE,
+)
+
+
+def _visible_text(markdown: str) -> tuple[str, list[int]]:
+    """The markdown's visible text, and each char's index in *markdown*."""
+    chars: list[str] = []
+    where: list[int] = []
+
+    def keep(start: int, end: int) -> None:
+        for i in range(start, end):
+            if markdown[i] not in "*_~`":
+                chars.append(markdown[i])
+                where.append(i)
+
+    pos = 0
+    for m in _MARKUP.finditer(markdown):
+        keep(pos, m.start())
+        if m.group(1) is not None:
+            chars.append(m.group(1))
+            where.append(m.start(1))
+        elif m.group(2) is not None:
+            keep(m.start(2), m.end(2))
+        pos = m.end()
+    keep(pos, len(markdown))
+    return "".join(chars), where
+
+
 def _place_live(markdown: str, anchor: dict) -> int | None:
     """Line index for a live anchor, or None when it can't be pinned down.
 
-    The anchor's key is found in the markdown; when it occurs more than
-    once, the anchor's own occurrence (counted in the document text) picks
-    one, provided the markdown has the same number of occurrences.
+    The anchor's key is found in the markdown's visible text, so emphasis
+    markers, escapes and link targets neither hide nor fake a match. When
+    the key occurs more than once, the anchor's own occurrence (counted in
+    the document text) picks one, provided the markdown has the same
+    number of occurrences.
     """
     key = anchor.get("key", "")
     if not key:
         return None
-    starts = _find_all(markdown, key)
+    visible, where = _visible_text(markdown)
+    starts = _find_all(visible, key)
     if not starts or len(starts) != anchor.get("occurrences"):
         return None
-    return _line_of(markdown, starts[anchor["occurrence"]], len(key))
+    last = where[starts[anchor["occurrence"]] + len(key) - 1]
+    return markdown.count("\n", 0, last)
 
 
 def annotate_markdown(

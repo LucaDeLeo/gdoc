@@ -2043,9 +2043,11 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     is detached (the UI says "Original content deleted").
 
     Returns ``{comment_id: anchor}`` for every comment the preview reports
-    with an anchor ID. ``anchor`` is None when detached, otherwise:
+    with an anchor ID. ``anchor`` is None when detached (no range left),
+    otherwise:
 
-    - ``text``: the anchored text now, in document order.
+    - ``text``: the anchored text now, in document order; empty when the
+      anchor covers only non-text content such as an image.
     - ``key``: the anchored text in the paragraph where the anchor ends,
       stripped — the text ``cat --comments`` looks for to pick a line.
     - ``occurrence`` / ``occurrences``: which occurrence of ``key`` this is
@@ -2152,8 +2154,14 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
             for i in range(start, end)
             if i in position.get(tab_id, {})
         )
-        if not spots:
+        if anchor_id not in ranges_by_anchor:
             anchors[comment_id] = None
+            continue
+        if not spots:
+            # Still attached, but only to non-text content (an image).
+            anchors[comment_id] = {
+                "text": "", "key": "", "occurrence": 0, "occurrences": 0,
+            }
             continue
         text = "".join(full_text[p] for p in spots)
         # The last paragraph that holds anchored text: its part of the
