@@ -388,6 +388,8 @@ gdoc write DOC draft.md    # OK written
 
 Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight checks entirely (saves 2 API calls).
 
+Files from `gdoc pull` carry their own baseline. `pull` stamps the file with `gdoc-version: N`, the Drive version its content came from, and `push`, `write DOC FILE`, and the sync hook compare that stamp with the doc's current version instead of this machine's last read. If anyone has edited the doc since the pull, the upload is refused, even when a later `gdoc cat` on this machine has seen the newer version; re-pull and reapply your edits, or use `--force`. A successful upload advances the stamp to the version the upload created, so you can push, edit, and push again. Any change to the doc makes the file stale, including edits in other tabs. Files without a stamp (hand-written, or pulled by an older gdoc) keep the read-baseline rule above.
+
 ## Spreadsheets
 
 `cat`, `tabs`, and `info` detect Google Sheets automatically — point them at a

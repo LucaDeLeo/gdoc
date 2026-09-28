@@ -4,6 +4,25 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] — 2026-09-28
+
+### Fixed
+- **A stale pulled file can no longer overwrite newer edits.** Conflict
+  detection compared the doc against the version this machine last read,
+  and a pulled file recorded no version of its own. So `gdoc pull DOC
+  draft.md` at version 1, a collaborator's edit (version 2), and any
+  `gdoc cat DOC` on this machine let `gdoc push draft.md` delete the
+  collaborator's edit. `pull` now stamps the file with `gdoc-version:
+  <Drive version>` (read before the export, so the stamp is never newer
+  than the content; `pull --revision` files get no stamp), and `push`,
+  `write DOC FILE` (when the file's `gdoc:` names DOC), the sync hook,
+  and MCP `write` use that stamp as the baseline: a mismatch refuses with
+  exit 3 unless `--force` or the doc already equals the file. After an
+  upload the stamp advances to the version in the upload response; a tab
+  write, which reports no version of its own, leaves the stamp and warns.
+  The pull hook stamps what it pulls and re-pulls when a file's stamp is
+  behind the doc. Unstamped files keep the old rule.
+
 ## [0.21.0] — 2026-08-26
 
 ### Added
