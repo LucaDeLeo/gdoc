@@ -694,3 +694,48 @@ def test_serve_protects_the_protocol_stream_from_stray_prints(mocker):
     # Every line on the protocol stream is still valid JSON-RPC.
     for line in stdout.getvalue().splitlines():
         assert json.loads(line)["jsonrpc"] == "2.0"
+
+
+# -- warm-up ---------------------------------------------------------------
+
+
+def test_warm_up_skips_accounts_without_a_token(mocker, tmp_path):
+    mocker.patch("gdoc.util.token_path_for", return_value=tmp_path / "missing.json")
+    credentials = mocker.patch("gdoc.auth.get_credentials")
+    mcp.MCPServer()._warm_up()
+    credentials.assert_not_called()
+
+
+def test_warm_up_refreshes_before_building_services(mocker, tmp_path):
+    token = tmp_path / "token.json"
+    token.write_text("{}")
+    mocker.patch("gdoc.util.token_path_for", return_value=token)
+    calls = []
+    mocker.patch("gdoc.auth.get_credentials", side_effect=lambda *a: calls.append("credentials"))
+    mocker.patch("gdoc.api.docs.get_docs_service", side_effect=lambda: calls.append("docs"))
+    drive = mocker.MagicMock()
+    mocker.patch("gdoc.api.get_drive_service", side_effect=lambda: calls.append("drive") or drive)
+    mcp.MCPServer()._warm_up()
+    assert calls == ["credentials", "docs", "drive"]
+    drive.about.return_value.get.return_value.execute.assert_called_once()
+
+
+def test_warm_up_failures_are_swallowed(mocker, tmp_path):
+    token = tmp_path / "token.json"
+    token.write_text("{}")
+    mocker.patch("gdoc.util.token_path_for", return_value=token)
+    mocker.patch("gdoc.auth.get_credentials", side_effect=RuntimeError("offline"))
+    mcp.MCPServer()._warm_up()  # must not raise
+
+
+def test_tool_call_waits_for_warm_up(mocker):
+    mocker.patch.object(mcp, "call_command", return_value=("out", "", 0))
+    server = mcp.MCPServer()
+    thread = mocker.MagicMock()
+    server._warm_up_thread = thread
+    server.dispatch({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "gdoc_ls", "arguments": {}},
+    })
+    thread.join.assert_called_once()
+    assert server._warm_up_thread is None

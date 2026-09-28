@@ -4,6 +4,16 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`gdoc mcp` warms up at startup.** While the client initializes, a
+  background thread imports the Google client, refreshes the access token,
+  builds the Drive and Docs services and opens the Drive connection. The
+  first tool call of a session waits for it instead of repeating that work;
+  on a hosted server this saves about 0.5 s on that call. The warm-up is
+  skipped when the account has no token and never reports errors itself.
+
 ## [0.21.0] — 2026-08-26
 
 ### Added
