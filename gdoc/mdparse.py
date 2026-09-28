@@ -72,13 +72,18 @@ class ParsedMarkdown:
     # removes them at apply time, so the document grows by len(plain_text)
     # minus this when the requests are applied.
     removed_tabs: int = 0
-    # Numbering starts that native createParagraphBullets would reset to 1.
+    # Numbering starts that native createParagraphBullets would reset to 1,
+    # and each one's (item offset, requested number).
     non_default_list_starts: list[str] = field(default_factory=list)
+    non_default_start_items: list[tuple[int, int]] = field(default_factory=list)
     # List items nested deeper than a Docs list's nine levels.
     deep_list_items: list[str] = field(default_factory=list)
     # The preset of a level-0 native list directly before the insertion that
     # a first list starting the text continues (an item replaced in place).
     continues_list: str | None = None
+    # Item offset -> the number Docs will show there when it continues an
+    # existing list, so a matching requested start needs no warning.
+    shown_numbers: dict = field(default_factory=dict)
     code_blocks: list[CodeBlockData] = field(default_factory=list)
     images: list[ImageData] = field(default_factory=list)
     # Per-paragraph pieces of one fenced replacement share this marker, so
@@ -925,6 +930,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
     container: tuple = ()  # the current paragraph's container path
     context_blocks: dict[tuple, int] = {}  # each context's current list block
     non_default_list_starts: list[str] = []
+    non_default_start_items: list[tuple[int, int]] = []
     deep_list_items: list[str] = []
 
     def note_deep(indent: str, content: str) -> None:
@@ -1008,6 +1014,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                         f"numbered list at line {i + 1} ({content!r}) "
                         f"starts at {start_number} (reset to 1)"
                     )
+                    non_default_start_items.append((offset, start_number))
             else:
                 group = previous[0]
             groups[key] = (group, start_number)
@@ -1320,6 +1327,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         tables=all_tables,
         removed_tabs=removed_tabs,
         non_default_list_starts=non_default_list_starts,
+        non_default_start_items=non_default_start_items,
         deep_list_items=deep_list_items,
         code_blocks=code_blocks,
         images=images,

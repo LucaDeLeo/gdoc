@@ -3031,19 +3031,14 @@ def insert_markdown_into_tab(
     leading_table = (
         appending and bool(parsed.tables) and parsed.tables[0].plain_text_offset == 0
     )
-    # A nested item appended after a top-level item continues that item's
-    # list, as writing the concatenated Markdown nests it there.
-    first_item = next((s for s in parsed.styles if s.type == "bullets"), None)
-    last_paragraph = next((e["paragraph"] for e in reversed(body.get("content", []))
-                           if "paragraph" in e), {})
-    last_bullet = last_paragraph.get("bullet") or {}
-    if (appending and first_item is not None and first_item.start == 0
-            and first_item.list_depth > 0 and last_bullet
-            and last_bullet.get("nestingLevel", 0) == 0):
-        ordered = _list_is_ordered(tab_match.get("lists", {}),
-                                   last_bullet.get("listId", ""), 0)
-        parsed.continues_list = ("NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered
-                                 else "BULLET_DISC_CIRCLE_SQUARE")
+    # Appended items continue the tab's last list where writing the
+    # concatenated Markdown would.
+    last = next((e for e in reversed(body.get("content", [])) if "paragraph" in e),
+                None)
+    joined = appending and _list_continuation(
+        parsed, body.get("content", []), last, tab_match.get("lists", {}))
+    if joined:
+        parsed.continues_list, parsed.shown_numbers = joined
     _warn_list_starts(parsed)
     # An appended leading table splits the tab's last paragraph at its mark.
     # When that paragraph is empty and one of gdoc's ranges holds it (an
@@ -3476,40 +3471,88 @@ def _wording_contexts(body: dict, match: dict, markdown: str):
     return result
 
 
-def _warn_list_starts(parsed) -> None:
-    """Warn about numbered starts the API resets to 1. A fragment whose
-    items all continue the list above shows the numbers it asks for."""
+def _warn_list_starts(parsed, shown=None) -> None:
+    """Warn about numbered starts the API resets to 1, except where the item
+    joins an existing list that already shows the requested number."""
     import sys
 
-    blocks = {s.list_block for s in parsed.styles if s.type == "bullets"}
-    if parsed.non_default_list_starts and not (
-            parsed.continues_list and len(blocks) == 1):
+    shown = {**parsed.shown_numbers, **(shown or {})}
+    messages = [message for message, (offset, number) in zip(
+        parsed.non_default_list_starts, parsed.non_default_start_items)
+        if shown.get(offset) != number]
+    if messages:
         print("WARN: Google Docs cannot set arbitrary native list starts; "
-              "the following lists will start at 1: "
-              + "; ".join(parsed.non_default_list_starts), file=sys.stderr)
+              "the following lists will start at 1: " + "; ".join(messages),
+              file=sys.stderr)
 
 
-def _continuing(parsed, body, found, source, tab_id):
-    """Continue the level-0 list of the item above a replaced list item.
+def _list_number(content: list[dict], start: int) -> int:
+    """The number Docs shows on the list item starting at ``start``,
+    counted as the reader counts it (deeper levels restart)."""
+    counters: dict = {}
+    for element in _flat_paragraphs(content):
+        bullet = element["paragraph"].get("bullet")
+        if not bullet:
+            continue
+        list_id, level = bullet.get("listId"), bullet.get("nestingLevel", 0)
+        for key in [k for k in counters if k[0] == list_id and k[1] > level]:
+            del counters[key]
+        counters[(list_id, level)] = counters.get((list_id, level), 0) + 1
+        if element.get("startIndex", 0) == start:
+            return counters[(list_id, level)]
+    return 1
 
-    Items replacing a list item in place stay in its list, as a write of the
-    edited Markdown keeps them, when the item above is in that list at level
-    0 (where joining keeps the replacement's levels absolute).
+
+def _continuing(parsed, content, replaced, lists):
+    """Continue the list above replaced paragraphs, as a write would.
+
+    ``replaced`` is the first replaced paragraph ``(paragraph, start, end)``.
+    Items replacing an item of the list above stay in it; items replacing
+    other paragraphs continue it where writing the edited Markdown would.
     """
     import dataclasses
 
-    bullet = found[0]["bullet"]
-    above = next((e["paragraph"] for e in _flat_paragraphs(body.get("content", []))
-                  if e.get("endIndex") == found[1]), None)
-    above_bullet = (above or {}).get("bullet") or {}
-    if (above_bullet.get("listId") != bullet.get("listId")
-            or above_bullet.get("nestingLevel", 0) != 0):
+    above = next((e for e in _flat_paragraphs(content)
+                  if e.get("endIndex") == replaced[1]), None)
+    same_list = bool(above) and (
+        (replaced[0].get("bullet") or {}).get("listId")
+        == (above["paragraph"].get("bullet") or {}).get("listId"))
+    joined = _list_continuation(parsed, content, above, lists, same_list)
+    if joined is None:
         return parsed
-    lists = (_snapshot_tab(source, tab_id) or {}).get("lists", {})
-    preset = ("NUMBERED_DECIMAL_ALPHA_ROMAN"
-              if _list_is_ordered(lists, bullet.get("listId", ""), 0)
+    preset, shown = joined
+    return dataclasses.replace(parsed, continues_list=preset, shown_numbers=shown)
+
+
+def _list_continuation(parsed, content, above, lists, same_list=False):
+    """``(preset, shown numbers)`` when the fragment's first list continues
+    the level-0 list item ``above`` (where joining keeps levels absolute):
+    a nested first item nests under it, a bullet continues it, and a
+    numbered one continues it when it asks for the next number (or replaces
+    an item of that list). None otherwise."""
+    bullet = (above or {}).get("paragraph", {}).get("bullet") or {}
+    first = min((s for s in parsed.styles if s.type == "bullets"),
+                key=lambda s: s.start, default=None)
+    if not bullet or bullet.get("nestingLevel", 0) or first is None or first.start:
+        return None
+    ordered = _list_is_ordered(lists, bullet.get("listId", ""), 0)
+    preset = ("NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered
               else "BULLET_DISC_CIRCLE_SQUARE")
-    return dataclasses.replace(parsed, continues_list=preset)
+    if first.style["bulletPreset"] != preset:
+        return None
+    number = _list_number(content, above.get("startIndex", 0))
+    requested = dict(parsed.non_default_start_items).get(first.start, 1)
+    if (ordered and not first.list_depth and not same_list
+            and requested != number + 1):
+        return None
+    return preset, _continued_numbers(parsed, number)
+
+
+def _continued_numbers(parsed, above: int) -> dict:
+    """The numbers the fragment's top-level items show when they continue a
+    list whose item above shows ``above``."""
+    top = [s for s in parsed.styles if s.type == "bullets" and not s.list_depth]
+    return {item.start: above + k for k, item in enumerate(top, 1)}
 
 
 def _flat_paragraphs(content):
@@ -3522,29 +3565,36 @@ def _flat_paragraphs(content):
 
 
 def _same_list_item(parsed, paragraph: dict, lists: dict):
-    """The item's wording without its marker, when ``parsed`` is one list
-    item of the same kind (numbered or bullet) and level as ``paragraph``."""
+    """The items' wording without markers, when every paragraph of ``parsed``
+    is a list item of the same kind (numbered or bullet) and level as
+    ``paragraph``: inserted into its paragraph, they keep its bullet."""
     import dataclasses
 
     bullet = paragraph.get("bullet")
-    items = [s for s in parsed.styles if s.type == "bullets"]
-    if (not bullet or len(items) != 1 or "\n" in parsed.plain_text.rstrip("\n")
-            or parsed.tables or parsed.code_blocks
+    items = sorted((s for s in parsed.styles if s.type == "bullets"),
+                   key=lambda s: s.start)
+    if (not bullet or not items or parsed.tables or parsed.code_blocks
+            or len(items) != parsed.plain_text.rstrip("\n").count("\n") + 1
             or any(s.type == "markdown_prefix" for s in parsed.styles)):
         return None
-    item, level = items[0], bullet.get("nestingLevel", 0)
-    ordered = item.style["bulletPreset"].startswith("NUMBERED")
-    if (item.list_depth != level
-            or ordered != _list_is_ordered(lists, bullet.get("listId", ""), level)):
+    level = bullet.get("nestingLevel", 0)
+    ordered = _list_is_ordered(lists, bullet.get("listId", ""), level)
+    if any(item.list_depth != level
+           or item.style["bulletPreset"].startswith("NUMBERED") != ordered
+           for item in items):
         return None
-    depth = item.list_depth
-    styles = [dataclasses.replace(s, start=max(0, s.start - depth),
-                                  end=max(0, s.end - depth))
+
+    def moved(point):
+        return point - level * sum(item.start < point for item in items)
+
+    text = "".join(parsed.plain_text[item.start + level:item.end]
+                   for item in items) + parsed.plain_text[items[-1].end:]
+    styles = [dataclasses.replace(s, start=moved(s.start), end=moved(s.end))
               for s in parsed.styles
               if s.type not in ("bullets", "paragraph_style")]
     return dataclasses.replace(
-        parsed, plain_text=parsed.plain_text[depth:], styles=styles,
-        removed_tabs=0, non_default_list_starts=[])
+        parsed, plain_text=text, styles=styles, removed_tabs=0,
+        non_default_list_starts=[], non_default_start_items=[])
 
 
 def _table_between_blanks(content, match, parsed):
@@ -4415,7 +4465,11 @@ def replace_formatted(
         else:
             # Tables, and list items that must share one native list, are
             # compiled from the whole replacement, not paragraph by paragraph.
-            listed = sum(s.type == "bullets" for s in parsed.styles) > 1
+            # Items replacing as many existing items stay per paragraph,
+            # where each keeps its native bullet.
+            listed = sum(s.type == "bullets" for s in parsed.styles) > 1 and not (
+                any(p.get("bullet") for p, _, _ in native)
+                and len(native) == len(new_markdown.rstrip("\n").split("\n")))
             contextual = body is not None and not ((parsed.tables or listed) and whole)
         if (body is not None and not new_markdown and not replace_paragraphs
                 and _removes_whole_paragraphs(body.get("content", []), match)):
@@ -4469,8 +4523,11 @@ def replace_formatted(
                 "lists", {})
             kept = found and _same_list_item(context[0], found[0], lists)
             if kept:
-                # Rewording a list item as an item of its own kind and level
-                # keeps its native bullet, so its list and numbering stay.
+                # Rewording a list item as items of its own kind and level
+                # keeps its native bullet, so its list and numbering stay;
+                # new items split from it inherit the bullet.
+                _warn_list_starts(context[0], _continued_numbers(
+                    context[0], _list_number(body.get("content", []), found[1]) - 1))
                 planned.append((part, (kept, context[1])))
                 continue
             explicit = any(s.type in ("paragraph_style", "bullets")
@@ -4496,9 +4553,12 @@ def replace_formatted(
             ):
                 reset_bullets.add(_match_key(part))
                 _reset_list_indents(context[0])
-                if found and found[0].get("bullet") and context[1] is None:
-                    context = (_continuing(context[0], body, found, source,
-                                           part.get("tabId", tab_id)), None)
+            if (context[1] is None and native and not replace_paragraphs
+                    and any(s.type == "bullets" for s in context[0].styles)):
+                context = (_continuing(
+                    context[0], body.get("content", []), native[0],
+                    (_snapshot_tab(source, part.get("tabId", tab_id)) or {}).get(
+                        "lists", {})), None)
             planned.append((part, context))
     if removals:
         from gdoc.mdparse import ParsedMarkdown

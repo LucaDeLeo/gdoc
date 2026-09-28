@@ -163,3 +163,76 @@ def test_continuing_items_do_not_warn_about_their_start(route):
     code, output, error = route.call("edit", old_text="b", new_text="2. b2\n3. b3")
     assert code == 0 and "start at 1" not in output + error
     assert _read(route) == "1. a\n2. b2\n3. b3\n4. c\n"
+
+
+FOUR = [("p", t, "NORMAL_TEXT", NUMBERED) for t in "abcd"]
+
+
+@pytest.mark.parametrize("old,new,expected", [
+    ("b\nc", "2. b2\n3. c2", "1. a\n2. b2\n3. c2\n4. d\n"),
+    ("a", "1. a1\n2. a2", "1. a1\n2. a2\n3. b\n4. c\n5. d\n"),
+    ("d", "4. d1\n5. d2", "1. a\n2. b\n3. c\n4. d1\n5. d2\n"),
+])
+def test_items_reworded_in_place_keep_their_list(route, old, new, expected):
+    """Final review round 2: rewording or expanding existing items, first
+    item included, keeps one native list and the untouched items' numbers."""
+    doc = route.load(NativeDoc(*FOUR))
+    route.ok("cat")
+    code, output, error = route.call("edit", old_text=old, new_text=new)
+    assert code == 0 and "start at 1" not in output + error
+    assert _read(route) == expected
+    assert {bullet for _, _, bullet in styles(doc)} == {(1, 0)}
+
+
+@pytest.mark.parametrize("base,command,arguments", [
+    ("1. parent\n", "insert",
+     {"text": "  7. child\n", "tab": "t.0", "position": "end"}),
+    ("1. a\n2. b\n3. c\n", "edit", {"old_text": "b", "new_text": "7. b2\n8. b3"}),
+    ("1. a\n2. b\n3. c\n", "edit", {"old_text": "b", "new_text": "2. b2\n  7. sub"}),
+])
+def test_starts_that_do_not_match_still_warn(route, base, command, arguments):
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    code, output, error = route.call(command, **arguments)
+    assert code == 0 and "start at 1" in output + error
+
+
+@pytest.mark.parametrize("base,inserted", [
+    ("1. p\n", "2. q\n"),
+    ("- p\n", "- q\n"),
+    ("1. p\n", "1. q\n"),
+])
+def test_appended_items_join_the_list_as_the_concatenation_does(
+        route, base, inserted):
+    """Final review round 2 (F3): an appended next item continues the list;
+    a restart stays its own list."""
+    expected_doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base + inserted)
+    expected = (_read(route), styles(expected_doc))
+    doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    route.ok("insert", text=inserted, tab="t.0", position="end")
+    assert (_read(route), styles(doc)) == expected
+
+
+def test_plain_paragraph_under_a_list_continues_it(route):
+    doc = route.load(NativeDoc(("p", "a", "NORMAL_TEXT", NUMBERED),
+                               ("p", "P"), ("p", "Tail")))
+    route.ok("cat")
+    route.ok("edit", old_text="P", new_text="2. x\n3. y")
+    assert _read(route) == "1. a\n2. x\n3. y\nTail\n"
+    assert {bullet[0] for _, _, bullet in styles(doc) if bullet} == {1}
+
+
+def test_top_level_item_after_a_nested_last_item_warns(route):
+    """Joining the list below a nested item would need negative tabs, so a
+    top-level item appended there is its own list, with the start warning."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="1. p\n  1. c\n")
+    code, output, error = route.call("insert", text="2. q\n", tab="t.0",
+                                     position="end")
+    assert code == 0 and "start at 1" in output + error
