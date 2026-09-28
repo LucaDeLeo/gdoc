@@ -202,6 +202,7 @@ gdoc cat 1aBcDeFg...
 | `edit DOC OLD NEW` | Find and replace text with Markdown formatting, including text inside tables (`--all` for all; `--normalize` to match through smart quotes/dashes; `-` reads an argument from stdin) |
 | `edit DOC --cell ADDR NEW` | Replace a table cell by label or `ROW,COL` coordinates (`--col`, `--table`) |
 | `suggest DOC OLD NEW` | Same find-and-replace as `edit`, made as a **suggested edit** the doc's reviewers accept or reject (same `--all`/`--normalize`/`--case-sensitive`/`--tab`/`--old-file`/`--new-file`/`-` flags; inline Markdown only — see below) |
+| `nest DOC TEXT` / `unnest DOC TEXT` | Move a list item (and its sub-items) one level in or out, in place; `--to TEXT` for a range of items, `--levels N`, `--tab` — see below |
 | `write DOC FILE` | Overwrite document from a local markdown file |
 | `cells SHEET RANGE` | Write values into a spreadsheet range (`-v VALUE` per cell, `--file rows.csv`, `--stdin` for TSV; `--append` adds rows, `--user-entered` parses formulas/dates) |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
@@ -605,6 +606,52 @@ Requirements and limits:
 
 Like `edit`, a suggestion is a partial write: the awareness state records the
 new document version but does not advance the read baseline.
+
+## Nesting list items
+
+`nest` and `unnest` move list items one level in or out, like pressing Tab or
+Shift-Tab in Google Docs. The items keep their native list: same list ID,
+so numbering continues, a list restarted at 5 stays at 5, and comments on the
+items stay attached. Nothing outside the moved items is rewritten.
+
+```bash
+gdoc nest DOC "Bravo"                     # Bravo becomes a sub-item of the item above
+gdoc unnest DOC "Bravo"                   # and back
+gdoc nest DOC "Bravo" --to "Delta"        # every item from Bravo through Delta
+gdoc unnest DOC "grandchild" --levels 2   # two levels out
+gdoc nest DOC --tab "Draft" "Bravo" --json
+# → {"ok": true, "moved": 1, "levels": 1}
+```
+
+`TEXT` is matched like `edit` (case-insensitive) and must fall inside exactly
+one list item. Sub-items move with their items. Terse output is
+`OK nested 1 item by 1 level`; `--plain` prints `id` and `status updated`.
+
+How it works: the Docs API cannot set a list level directly, so the command
+rebuilds the moved items (and, when unnesting below a deeper sibling, that
+sibling) in one batch pinned to the revision it read (`requiredRevisionId`),
+so the items rejoin their own list at the new level. It then reads the tab
+back and fails with an error if any item did not land at its planned level
+and list. A document edited between the read and the write gives
+`document changed while the command was running; re-run it`.
+
+Refused before any write (exit 3), with a message naming the item:
+
+- text that matches no paragraph or several, is not a list item, or is inside
+  a table;
+- nesting the first item of a list, or an item more than one level deeper than
+  the item above it; unnesting an item at the top level, or so far that the
+  next item would sit two levels below it;
+- checkbox lists and lists with custom glyphs (only the default numbered
+  `1. a. i.` and bullet `● ○ ■` lists are supported);
+- moves that would merge or split lists: a range spanning two lists, an item
+  directly after an item of another list (for example a bullet item after a
+  numbered sub-list), or an item whose sub-items are a separate list;
+- items that start with a tab character or contain pending suggestions.
+
+Blank lines between items (loose lists) are kept, with their original
+indentation. Like `edit`, this is a partial write: the awareness state records
+the new version but does not advance the read baseline.
 
 ## Import from file
 

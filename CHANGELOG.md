@@ -4,6 +4,24 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] — 2026-09-28
+
+### Added
+- **List nesting: `gdoc nest DOC TEXT` and `gdoc unnest DOC TEXT`.** Move a
+  list item, or a range of items (`--to TEXT`), with their sub-items by
+  `--levels N` (default 1), like Tab and Shift-Tab in Google Docs. The items
+  are rebuilt in place in one `requiredRevisionId`-pinned batch so they rejoin
+  their own native list: the list ID, a UI-restarted start number, text
+  styles, paragraph spacing and comment anchors are kept, and nothing else in
+  the tab is rewritten. The result is read back and any item that did not land
+  at its planned level and list is reported as an error. Refused before any
+  write (exit 3): ambiguous or missing text, non-list or in-table targets,
+  nesting a list's first item or skipping a level, unnesting past the top
+  level, checkbox and custom-glyph lists, and moves that would merge or split
+  lists (ranges across lists, items right after another list's item, sub-items
+  that are a separate list). Honors `--tab` and `--account`; exposed over MCP
+  as `gdoc_nest` and `gdoc_unnest` (write tools).
+
 ## [0.21.0] — 2026-08-26
 
 ### Added
