@@ -428,3 +428,19 @@ def test_append_after_a_parenthesized_list_warns(route):
     code, output, error = route.call("insert", text="3. c\n", tab="t.0",
                                      position="end")
     assert code == 0 and "start at 1" in output + error
+
+
+@pytest.mark.parametrize("inserted,warns", [("7. c\n", False), ("3. c\n", True)])
+def test_continuation_counts_from_the_list_start(route, inserted, warns):
+    """Round 4 (GPT 2): a list starting at 5 (set in the Docs UI) shows 5, 6;
+    an appended 7 continues it, and a 3 warns."""
+    doc = NativeDoc(("p", "a", "NORMAL_TEXT", NUMBERED),
+                    ("p", "b", "NORMAL_TEXT", NUMBERED))
+    doc.list_starts[1] = 5
+    route.load(doc)
+    assert _read(route) == "5. a\n6. b\n"
+    code, output, error = route.call("insert", text=inserted, tab="t.0",
+                                     position="end")
+    assert code == 0 and ("start at 1" in output + error) == warns
+    if not warns:
+        assert _read(route) == "5. a\n6. b\n7. c\n"

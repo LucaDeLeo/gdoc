@@ -3488,9 +3488,15 @@ def _warn_list_starts(parsed, shown=None) -> None:
               file=sys.stderr)
 
 
-def _list_number(content: list[dict], start: int) -> int:
+def _list_number(content: list[dict], start: int, lists: dict | None = None) -> int:
     """The number Docs shows on the list item starting at ``start``,
-    counted as the reader counts it (deeper levels restart)."""
+    counted as the reader counts it (deeper levels restart, and each level
+    starts at its definition's startNumber)."""
+    def first(list_id, level):
+        levels = ((lists or {}).get(list_id, {}).get("listProperties", {})
+                  .get("nestingLevels", []))
+        return levels[level].get("startNumber", 1) if level < len(levels) else 1
+
     counters: dict = {}
     for element in _flat_paragraphs(content):
         bullet = element["paragraph"].get("bullet")
@@ -3499,7 +3505,8 @@ def _list_number(content: list[dict], start: int) -> int:
         list_id, level = bullet.get("listId"), bullet.get("nestingLevel", 0)
         for key in [k for k in counters if k[0] == list_id and k[1] > level]:
             del counters[key]
-        counters[(list_id, level)] = counters.get((list_id, level), 0) + 1
+        counters[(list_id, level)] = counters.get(
+            (list_id, level), first(list_id, level) - 1) + 1
         if element.get("startIndex", 0) == start:
             return counters[(list_id, level)]
     return 1
@@ -3550,7 +3557,7 @@ def _list_continuation(parsed, content, above, lists, same_list=False):
             or not _default_preset(lists, list_id)
             or any(s.list_depth < level for s in first_list)):
         return None
-    number = _list_number(content, above.get("startIndex", 0))
+    number = _list_number(content, above.get("startIndex", 0), lists)
     requested = dict(parsed.non_default_start_items).get(items[0].start, 1)
     if (ordered and items[0].list_depth == level and not same_list
             and requested != number + 1):
@@ -4607,7 +4614,8 @@ def replace_formatted(
                 # keeps the native bullet, so the list and its numbering stay;
                 # new items split from it inherit the bullet.
                 _warn_list_starts(context[0], _continued_numbers(
-                    context[0], _list_number(body.get("content", []), replaced[1]) - 1,
+                    context[0],
+                    _list_number(body.get("content", []), replaced[1], lists) - 1,
                     (replaced[0].get("bullet") or {}).get("nestingLevel", 0)))
                 planned.append((part, (kept, context[1])))
                 continue

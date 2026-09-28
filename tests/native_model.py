@@ -67,6 +67,7 @@ class NativeDoc:
         self.named = []  # [name, start, end]; name None once deleted
         self.lists = 0
         self.list_offsets = {}  # list -> extra level indent (see bullets)
+        self.list_starts = {}  # list -> a start number set in the Docs UI
         self.images = 0
         blocks = list(blocks) or [("p", "")]
         if blocks[0][0] == "t":
@@ -381,6 +382,8 @@ class NativeDoc:
             offset = self.list_offsets.get(int(list_id[1:]), 0)
             lists[list_id] = {"listProperties": {"nestingLevels": [{
                 **glyphs[k],
+                **({"startNumber": self.list_starts[int(list_id[1:])]}
+                   if int(list_id[1:]) in self.list_starts else {}),
                 "indentStart": {"magnitude": 36 * (k + 1) + offset, "unit": "PT"},
                 "indentFirstLine": {"magnitude": 36 * (k + 1) + offset - 18,
                                     "unit": "PT"},
