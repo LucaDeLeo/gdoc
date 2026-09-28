@@ -55,7 +55,15 @@ class TestInsertInlineImage:
                         "location": {"index": 19},
                         "uri": IMG_URL,
                     }
-                }
+                },
+                # An image after linked text must not inherit the link (R8-11).
+                {
+                    "updateTextStyle": {
+                        "range": {"startIndex": 19, "endIndex": 20},
+                        "textStyle": {},
+                        "fields": "link",
+                    }
+                },
             ]
         }
 

@@ -391,6 +391,25 @@ def test_whitespace_only_item_content_keeps_character_and_container(route, space
     assert text in route.ok("cat")
 
 
+def test_image_after_linked_text_is_not_linked(route):
+    """R8-11: the model assumes an inserted image takes the previous
+    character's style (unverified live); insert-image clears its link."""
+    doc = route.load(NativeDoc(("p", "See docs now"), ("p", "Next")))
+    start = 1 + "See docs now".index("docs")
+    doc.op_update_text_style({"range": {"startIndex": start, "endIndex": start + 4},
+                              "textStyle": {"link": {"url": "https://x.com"}},
+                              "fields": "link"})
+    route.ok("cat")
+    image = "https://example.com/a.png"
+    arguments = ({"old_text": image} if route.interface == "cli"
+                 else {"image": image})
+    route.ok("insert_image" if route.interface == "mcp" else "insert-image",
+             after="docs", **arguments)
+    read = route.ok("cat")
+    assert "[docs](https://x.com)![](gdoc-image:" in read
+    assert "[![" not in read
+
+
 def test_written_rule_still_reads_as_rule(route):
     route.load(NativeDoc(("p", "seed")))
     route.ok("cat")

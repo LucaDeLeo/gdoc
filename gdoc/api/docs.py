@@ -2323,7 +2323,12 @@ def insert_inline_image(
         size["height"] = {"magnitude": height_pt, "unit": "PT"}
     if size:
         request["objectSize"] = size
-    body: dict = {"requests": [{"insertInlineImage": request}]}
+    # An inserted element may take the previous character's text style; an
+    # image placed after linked text must not become a link.
+    body: dict = {"requests": [{"insertInlineImage": request}, {"updateTextStyle": {
+        "range": {"startIndex": index, "endIndex": index + 1,
+                  **({"tabId": tab_id} if tab_id else {})},
+        "textStyle": {}, "fields": "link"}}]}
     if revision_id:
         body["writeControl"] = {"requiredRevisionId": revision_id}
     try:
