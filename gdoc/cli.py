@@ -1425,20 +1425,34 @@ def cmd_nest(args) -> int:
         print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import (
+        StaleRevisionError,
         batch_update_pinned,
         get_document_with_tabs,
         resolve_raw_tab,
     )
     from gdoc.listnest import check_result, locate_item, plan_nesting
 
+    def reread_tab() -> dict | None:
+        """This tab in a fresh read, found by ID only (never by title)."""
+        def walk(ts):
+            for t in ts:
+                yield t
+                yield from walk(t.get("childTabs", []))
+        for t in walk(get_document_with_tabs(doc_id).get("tabs", [])):
+            if t.get("tabProperties", {}).get("tabId") == tab_id:
+                return t
+        return None
+
     doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
     if not revision_id:
         # Never write unpinned: the plan's indexes are only valid at the
-        # revision they were read from.
+        # revision they were read from. Docs returns a revision ID only to
+        # users who can edit.
         raise GdocError(
-            "the document read returned no revision ID; refusing to write "
-            "without a revision pin"
+            "the document read returned no revision ID, so it cannot be "
+            "edited safely (nesting needs edit access)",
+            exit_code=3,
         )
     tabs = doc.get("tabs", [])
     tab_name = getattr(args, "tab", None)
@@ -1458,7 +1472,21 @@ def cmd_nest(args) -> int:
     last = locate_item(body, args.to) if args.to else first
     plan = plan_nesting(document_tab, tab_id, first, last, delta)
 
-    batch_update_pinned(doc_id, plan.requests, revision_id)
+    try:
+        batch_update_pinned(doc_id, plan.requests, revision_id)
+    except StaleRevisionError:
+        # The HTTP client resends a POST once when the connection drops
+        # without a reply; if Google applied the first attempt, the resend
+        # fails the pin. Check before telling the caller to re-run, which
+        # would move the items again.
+        again = reread_tab()
+        if again is None or check_result(again.get("documentTab", {}), plan):
+            raise
+        print(
+            "WARN: the write reported a changed document, but the list is "
+            "already exactly as planned (a retried request); not re-applied",
+            file=sys.stderr,
+        )
 
     # From here the change is saved. A failed follow-up read must not be
     # reported as a failed write: a caller that retried would move the
@@ -1469,9 +1497,7 @@ def cmd_nest(args) -> int:
     # The rebuild relies on how createParagraphBullets assigns levels and
     # joins lists, so read the tab back and say so if it did not land.
     try:
-        after = resolve_raw_tab(
-            get_document_with_tabs(doc_id).get("tabs", []), tab_id,
-        )
+        after = reread_tab()
     except Exception as e:  # noqa: BLE001 — post-mutation, see above
         warnings.append(f"{verb} but the result could not be read back: {e}")
     else:

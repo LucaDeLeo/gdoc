@@ -1135,6 +1135,10 @@ def _raise_if_stale_revision(e: HttpError) -> None:
         )
 
 
+class StaleRevisionError(GdocError):
+    """The pinned revision was stale, so the batch was not applied."""
+
+
 def batch_update_pinned(
     doc_id: str, requests: list[dict], revision_id: str,
 ) -> None:
@@ -1161,7 +1165,10 @@ def batch_update_pinned(
             },
         ).execute()
     except HttpError as e:
-        _raise_if_stale_revision(e)
+        try:
+            _raise_if_stale_revision(e)
+        except GdocError as stale:
+            raise StaleRevisionError(str(stale)) from e
         if int(e.resp.status) >= 500:
             raise GdocError(
                 f"the write returned a server error ({int(e.resp.status)}: "

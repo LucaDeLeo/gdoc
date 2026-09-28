@@ -381,6 +381,16 @@ class TestRefusals:
         }
         self._refused(tab, "Bravo", -1, "formatted bullet or number")
 
+    def test_marker_style_that_follows_the_text_is_kept(self):
+        # A fully bold item has a bold number; the rebuilt marker takes the
+        # text's style again (live-tested), so it is not refused.
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"bold": True}
+        para["elements"][0]["textRun"]["textStyle"] = {"bold": True}
+        plan = _plan(tab, "Bravo", 1)
+        assert plan.markers == {2: {"bold": True}}
+
     def test_plain_marker_style_is_not_formatting(self):
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
@@ -416,6 +426,20 @@ class TestCheckResult:
         plan = _plan(tab, "Bravo", 1)
         after = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 1, "num"),
                      ("Charlie", 0, "num"), ("Outro", 0, None))
+        assert check_result(after, plan) == []
+
+    def test_lost_marker_formatting_is_reported(self):
+        tab = _tab(*STD)
+        para = tab["body"]["content"][3]["paragraph"]
+        para["bullet"]["textStyle"] = {"bold": True}
+        para["elements"][0]["textRun"]["textStyle"] = {"bold": True}
+        plan = _plan(tab, "Bravo", 1)
+        after = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 1, "num"),
+                     ("Charlie", 0, "num"), ("Outro", 0, None))
+        assert "formatting" in check_result(after, plan)[0]
+        after["body"]["content"][3]["paragraph"]["bullet"]["textStyle"] = {
+            "bold": True, "underline": False,
+        }
         assert check_result(after, plan) == []
 
     def test_wrong_level_or_list_is_reported(self):
@@ -547,9 +571,37 @@ class TestCommand:
 
     def test_missing_revision_refuses_to_write(self, api):
         api.get.side_effect = [_doc(_tab(*STD), revision="")]
-        with pytest.raises(GdocError, match="no revision ID"):
+        with pytest.raises(GdocError, match="needs edit access") as exc:
             cmd_nest(_args())
+        assert exc.value.exit_code == 3
         api.write.assert_not_called()
+
+    def test_stale_revision_after_an_applied_resend_is_success(self, api, capsys):
+        from gdoc.api.docs import StaleRevisionError
+
+        api.write.side_effect = StaleRevisionError("document changed")
+        assert cmd_nest(_args()) == 0
+        captured = capsys.readouterr()
+        assert captured.out == "OK nested 1 item by 1 level\n"
+        assert "already exactly as planned" in captured.err
+
+    def test_stale_revision_with_the_list_unchanged_says_re_run(self, api):
+        from gdoc.api.docs import StaleRevisionError
+
+        api.get.side_effect = [_doc(_tab(*STD)), _doc(_tab(*STD))]
+        api.write.side_effect = StaleRevisionError("document changed; re-run it")
+        with pytest.raises(StaleRevisionError, match="re-run"):
+            cmd_nest(_args())
+
+    def test_read_back_finds_the_tab_by_id_not_title(self, api):
+        # Another tab is titled like this tab's ID; the read-back must still
+        # check this tab.
+        decoy = {"tabProperties": {"tabId": "t.9", "title": TAB},
+                 "documentTab": _tab(("Nothing here", 0, None))}
+        second = _doc(NESTED)
+        second["tabs"].insert(0, decoy)
+        api.get.side_effect = [_doc(_tab(*STD)), second]
+        assert cmd_nest(_args()) == 0
 
     def test_parser(self):
         args = build_parser().parse_args(

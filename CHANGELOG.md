@@ -11,21 +11,26 @@ All notable changes to `gdoc` are documented here. This project follows
   list item, or a range of items (`--to TEXT`), with their sub-items by
   `--levels N` (default 1), like Tab and Shift-Tab in Google Docs. The items
   are rebuilt in place in one `requiredRevisionId`-pinned batch so they rejoin
-  their own native list: the list ID, a UI-restarted start number, text
-  styles, paragraph spacing and comment anchors are kept, and nothing else in
-  the tab is rewritten. The result is read back and any item that did not land
-  at its planned level and list is reported as an error. Refused before any
-  write (exit 3): ambiguous or missing text, non-list or in-table targets,
-  nesting a list's first item or skipping a level, unnesting past the top
-  level, checkbox, custom-glyph and edited-format lists (`1) a) i)`), items
-  starting with a tab, carrying a hand-set indent or a formatted marker, or
-  holding pending suggestions, and moves that would
-  merge, split or re-home lists (ranges across lists, items right after
-  another list's item, an unnest that would sweep in a deeper item of another
-  list, sub-items that are a separate list). A 5xx or dropped connection on
-  the write says the outcome is unknown, and failures after a saved write are
-  warnings, so a caller never retries a change that was applied. Honors `--tab` and `--account`; exposed over MCP
-  as `gdoc_nest` and `gdoc_unnest` (write tools).
+  their own native list: the list ID, a UI-restarted start number, text and
+  marker styles, paragraph spacing and comment anchors are kept, and nothing
+  else in the tab is rewritten. The result is read back, and any item not at
+  its planned level, list and marker style is reported as an error.
+  Refused before any write (exit 3):
+  - ambiguous or missing text, non-list or in-table targets;
+  - moves that would rebuild a list's first item, skip a level, or unnest past
+    the top level;
+  - checkbox, custom-glyph and edited-format lists (`1) a) i)`);
+  - items that start with a tab, carry a hand-set indent or a marker formatted
+    apart from their text, or hold pending suggestions;
+  - moves that would merge, split or re-home lists (ranges across lists, items
+    right after another list's item, an unnest that would sweep in a deeper
+    item of another list, sub-items that are a separate list).
+
+  A 5xx or dropped connection on the write says the outcome is unknown, a
+  stale-revision error is checked against the document before it says
+  "re-run", and failures after a saved write are warnings, so a caller never
+  retries a change that was applied. Honors `--tab` and `--account`; exposed
+  over MCP as `gdoc_nest` and `gdoc_unnest` (write tools).
 
 ## [0.21.0] — 2026-08-26
 

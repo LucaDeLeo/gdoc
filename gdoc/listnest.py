@@ -33,7 +33,7 @@ belong to the target's list: anything else would be merged into that list
 or split off from it, so it is refused.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from gdoc.util import GdocError
 
@@ -126,13 +126,32 @@ def _custom_indent(el: dict, lists: dict) -> bool:
         .get("listProperties", {}).get("nestingLevels", [])
     )
     level = levels[_level(el)] if _level(el) < len(levels) else {}
-    for field in ("indentStart", "indentFirstLine"):
-        if field in style:
-            own = style[field].get("magnitude", 0)
-            standard = level.get(field, {}).get("magnitude", 0)
+    for name in ("indentStart", "indentFirstLine"):
+        if name in style:
+            own = style[name].get("magnitude", 0)
+            standard = level.get(name, {}).get("magnitude", 0)
             if abs(own - standard) > 0.01:
                 return True
     return False
+
+
+def _set_fields(style: dict) -> dict:
+    """A text style without its false booleans (Docs reports
+    {"underline": false} on every plain bullet)."""
+    return {k: v for k, v in (style or {}).items() if v is not False}
+
+
+def _marker_style(el: dict) -> dict:
+    return _set_fields((_bullet(el) or {}).get("textStyle"))
+
+
+def _newline_style(el: dict) -> dict:
+    """Text style of the run that ends the paragraph (holds its newline)."""
+    for pe in reversed((_paragraph(el) or {}).get("elements", [])):
+        run = pe.get("textRun")
+        if run is not None and run.get("content", "").endswith("\n"):
+            return run.get("textStyle", {})
+    return {}
 
 
 def _label(el: dict) -> str:
@@ -186,7 +205,8 @@ class NestPlan:
     ``expected`` maps each list item in the rebuilt window (by index into
     the tab's body content, which the change does not shift) to its
     level afterwards; ``blanks`` are window paragraphs that must end
-    without a bullet.
+    without a bullet; ``markers`` holds each rebuilt item's marker style,
+    which must survive.
     """
 
     requests: list[dict]
@@ -194,6 +214,7 @@ class NestPlan:
     moved: int
     expected: dict[int, int]
     blanks: list[int]
+    markers: dict[int, dict] = field(default_factory=dict)
 
 
 def plan_nesting(
@@ -350,17 +371,16 @@ def plan_nesting(
             )
         if _text(el).startswith("\t"):
             raise _usage(f"{_label(el)} starts with a tab character")
-        marker_style = {
-            k: v for k, v in (_bullet(el).get("textStyle") or {}).items()
-            if v is not False
-        }
-        if marker_style:
-            # Docs reports {"underline": false} on every plain marker; any
-            # other field is formatting set on this item's bullet or number,
-            # which the rebuild would not carry over.
+        marker = _marker_style(el)
+        derived = _set_fields(_newline_style(el))
+        odd = sorted(k for k, v in marker.items() if derived.get(k) != v)
+        if odd:
+            # A rebuilt marker takes the style of the item's own text (a
+            # fully bold item gets a bold number, live-tested); formatting
+            # set on the marker alone would be lost.
             raise _usage(
                 f"{_label(el)} has a formatted bullet or number ("
-                + ", ".join(sorted(marker_style))
+                + ", ".join(odd)
                 + "); rebuilding it would reset that formatting"
             )
         if _custom_indent(el, lists):
@@ -433,6 +453,7 @@ def plan_nesting(
     return NestPlan(
         requests=requests, list_id=list_id, moved=len(moved),
         expected={i: lvl for i, lvl in levels.items()}, blanks=blanks,
+        markers={i: _marker_style(content[i]) for i in levels},
     )
 
 
@@ -452,6 +473,8 @@ def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
                 f"{_label(el)} is at level {bullet.get('nestingLevel', 0)}, "
                 f"expected {want}"
             )
+        elif _marker_style(el) != plan.markers.get(i, _marker_style(el)):
+            problems.append(f"{_label(el)} lost its bullet or number formatting")
     for i in plan.blanks:
         if i >= len(content) or _bullet(content[i]) is not None:
             problems.append("a blank line between items kept a bullet")

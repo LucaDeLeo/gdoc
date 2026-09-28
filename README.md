@@ -641,8 +641,10 @@ Refused before any write (exit 3), with a message naming the item:
 
 - text that matches no paragraph or several, is not a list item, or is inside
   a table;
-- nesting the first item of a list, or an item more than one level deeper than
-  the item above it; unnesting an item at the top level, or so far that the
+- any move that would rebuild a list's first item (the rebuilt items must
+  rejoin an item of their own list above them): nesting the first item, or
+  unnesting items right below it; nesting an item more than one level deeper
+  than the item above it; unnesting an item at the top level, or so far that the
   next item would sit two levels below it;
 - checkbox lists and lists with custom glyphs (only the default numbered
   `1. a. i.` and bullet `● ○ ■` lists are supported);
@@ -651,8 +653,8 @@ Refused before any write (exit 3), with a message naming the item:
   numbered sub-list), an unnest whose rebuild would take in a deeper item of
   another list above it, or an item whose sub-items are a separate list;
 - items that start with a tab character, carry a hand-set indent or a
-  formatted bullet or number (the rebuild would reset either to the list's
-  standard), or contain pending suggestions.
+  bullet or number formatted apart from the item's text (the rebuild would
+  reset either), or contain pending suggestions.
 
 Blank lines between items (loose lists) are kept, with their original
 indentation. Like `edit`, this is a partial write: the awareness state records
