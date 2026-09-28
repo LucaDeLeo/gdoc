@@ -655,10 +655,12 @@ Refused before any write (exit 3), with a message naming the item:
   directly after an item of another list (for example a bullet item after a
   numbered sub-list), an unnest whose rebuild would take in a deeper item of
   another list above it, or an item whose sub-items are a separate list;
-- items that start with a tab character, carry a hand-set indent, have a
-  bullet or number formatted differently from the item's text (the rebuild
-  would reset either; a bold number on a fully bold item is kept), or contain
-  pending suggestions.
+- items that start with a tab character, carry a hand-set indent, or contain
+  pending suggestions;
+- items whose bullet or number has its own formatting, which the rebuild
+  could change: any marker formatting other than bold on a fully bold item,
+  or a style (font, size, colour, italic, ...) that covers the whole item but
+  not its marker. Items with only some words formatted are fine.
 
 Blank lines between items (loose lists) are kept, with their original
 indentation. Like `edit`, this is a partial write: the awareness state records

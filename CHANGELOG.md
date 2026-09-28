@@ -21,8 +21,11 @@ All notable changes to `gdoc` are documented here. This project follows
     the top level;
   - checkbox and custom-glyph lists, and numbered presets other than
     `1. a. i.` (for example `1) a) i)`);
-  - items that start with a tab, carry a hand-set indent or a marker formatted
-    differently from their text, or hold pending suggestions;
+  - items that start with a tab, carry a hand-set indent, or hold pending
+    suggestions;
+  - items whose bullet or number has its own formatting (anything but bold on
+    a fully bold item), or a style covering the whole item but not its
+    marker;
   - moves that would merge, split or re-home lists (ranges across lists, items
     right after another list's item, an unnest that would sweep in a deeper
     item of another list, sub-items that are a separate list).
