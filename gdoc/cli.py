@@ -1499,6 +1499,39 @@ def _stale_recovery(doc_id: str, file_path: str) -> str:
     )
 
 
+def _replace_file_if_unchanged(
+    file_path: str, original: str, updated: str,
+) -> None:
+    """Swap updated content into file_path if it still holds original.
+
+    Raises OSError if the file changed on disk since it was read. The new
+    content goes to a sibling temp file that replaces the (symlink-resolved)
+    target, so a failed write never truncates the user's file.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    target = os.path.realpath(file_path)
+    with open(target, encoding="utf-8") as f:
+        if f.read() != original:
+            raise OSError("file changed on disk while gdoc was working")
+    fd, tmp = tempfile.mkstemp(
+        dir=os.path.dirname(target), prefix=".gdoc-", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(updated)
+        shutil.copymode(target, tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _advance_file_stamp(file_path: str, original: str, version) -> None:
     """Point a stamped file at the version its own upload produced.
 
@@ -1507,37 +1540,13 @@ def _advance_file_stamp(file_path: str, original: str, version) -> None:
     edit the file doesn't contain. The file is left alone if it changed
     on disk while the upload ran.
     """
-    import os
-    import shutil
-    import tempfile
-
     from gdoc.frontmatter import set_frontmatter_value
 
-    tmp = None
     try:
-        with open(file_path, encoding="utf-8") as f:
-            if f.read() != original:
-                raise OSError("file changed on disk during the upload")
         updated = set_frontmatter_value(original, _STAMP_KEY, str(version))
-        # Write a sibling and swap it in, so a failed write can never
-        # truncate the user's file.
-        fd, tmp = tempfile.mkstemp(
-            dir=os.path.dirname(os.path.abspath(file_path)),
-            prefix=".gdoc-stamp-", suffix=".tmp",
-        )
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(updated)
-        shutil.copymode(file_path, tmp)
-        os.replace(tmp, file_path)
-        tmp = None
+        _replace_file_if_unchanged(file_path, original, updated)
     except (OSError, ValueError) as e:
         _warn_stamp_kept(file_path, str(e))
-    finally:
-        if tmp is not None:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
 
 
 def _warn_stamp_kept(file_path: str, reason: str) -> None:
@@ -2095,8 +2104,17 @@ def cmd_pull_hook(args) -> int:
             front[_STAMP_KEY] = version
         new_content = add_frontmatter(markdown, front)
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+        if stamp is not None:
+            # The equality check above used the file as first read; don't
+            # replace a save that landed while the doc was being fetched.
+            try:
+                _replace_file_if_unchanged(file_path, content, new_content)
+            except OSError as e:
+                print(f"SYNC: {file_path} not refreshed ({e})", file=sys.stderr)
+                return 2
+        else:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
 
         print(
             f'SYNC: pulled "{title}" (v{version})',

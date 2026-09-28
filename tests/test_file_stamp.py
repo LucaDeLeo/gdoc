@@ -249,6 +249,18 @@ class TestCurrentStampUploads:
         assert [p.name for p in tmp_path.iterdir()] == ["draft.md"]
 
     @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=6)
+    @patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=5))
+    def test_stamp_advance_keeps_symlink(self, _pf, _upload, _state, tmp_path):
+        target = tmp_path / "canonical.md"
+        target.write_text(_stamped(5))
+        link = tmp_path / "linked.md"
+        link.symlink_to(target)
+        assert cmd_push(_push_args(link)) == 0
+        assert link.is_symlink()
+        assert _stamp_of(target) == "6"
+
+    @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 9})
     @patch("gdoc.api.docs.insert_markdown_into_tab", return_value={})
     @patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=5))
@@ -407,6 +419,28 @@ class TestPullStamp:
         assert f.read_bytes() == before
         err = capsys.readouterr().err
         assert "draft.latest.md" in err and "Left unchanged" in err
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_info", return_value={"name": "D", "version": 55})
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 55})
+    def test_pull_hook_keeps_save_made_during_fetch(
+        self, _ver, _info, _state, tmp_path, capsys,
+    ):
+        f = tmp_path / "draft.md"
+        f.write_text(_stamped(50, body="# Collaborator text\n"))
+        saved = _stamped(50, body="# Saved while fetching\n")
+
+        def export(doc_id, mime_type):
+            f.write_text(saved)
+            return "# Collaborator text\n"
+
+        with (
+            patch("gdoc.api.drive.export_doc", side_effect=export),
+            patch("sys.stdin", _hook_stdin(f)),
+        ):
+            assert cmd_pull_hook(SimpleNamespace(command="_pull-hook")) == 2
+        assert f.read_text() == saved
+        assert "not refreshed" in capsys.readouterr().err
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_info", return_value={"name": "D", "version": 55})
