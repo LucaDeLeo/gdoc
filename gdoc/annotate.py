@@ -84,7 +84,8 @@ def _find_all(text: str, key: str) -> list[int]:
 # Markdown that isn't visible text: an escape (keeps the escaped char), an
 # HTML entity (keeps the decoded char), a code span (keeps its contents),
 # an image, a link (keeps its label), a reference definition line, a
-# footnote reference, or an emphasis marker. Underscores inside a word are literal, as in CommonMark.
+# footnote reference, or an emphasis marker. Underscores inside a word
+# are literal, as in CommonMark.
 _MARKUP = re.compile(
     r"\\(?P<escaped>.)"
     r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)"
