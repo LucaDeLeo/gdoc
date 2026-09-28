@@ -45,12 +45,13 @@ from unittest.mock import Mock
 
 
 class Unit:
-    __slots__ = ("ch", "ts", "ps", "bullet", "kind", "cont")
+    __slots__ = ("ch", "ts", "ps", "bullet", "kind", "cont", "suggested")
 
     def __init__(self, ch, ts=None, ps=None, bullet=None, kind="text", cont=False):
         self.ch, self.kind, self.cont = ch, kind, cont
         self.ts, self.ps = dict(ts or {}), dict(ps or {})
         self.bullet = bullet
+        self.suggested = None  # a suggestion ID tests set on a character
 
 
 STRUCTURE = ("tstart", "row", "cell", "tend")
@@ -304,12 +305,13 @@ class NativeDoc:
                 runs.append(["IMG", index, index + 1, unit])
                 index += 1
                 continue
-            key = json.dumps(unit.ts, sort_keys=True)
+            key = json.dumps([unit.ts, unit.suggested], sort_keys=True)
             if runs and runs[-1][0] == "T" and runs[-1][4] == key:
                 runs[-1][3].append(unit.ch)
                 runs[-1][2] = index + 1
             else:
-                runs.append(["T", index, index + 1, [unit.ch], key, unit.ts])
+                runs.append(["T", index, index + 1, [unit.ch], key, unit.ts,
+                             unit.suggested])
             index += 1
             if unit.ch == "\n":
                 break
@@ -322,9 +324,11 @@ class NativeDoc:
                                  "inlineObjectElement": {"inlineObjectId": object_id,
                                                          "textStyle": run[3].ts}})
             else:
+                text_run = {"content": "".join(run[3]), "textStyle": run[5]}
+                if run[6]:
+                    text_run["suggestedInsertionIds"] = [run[6]]
                 elements.append({"startIndex": run[1], "endIndex": run[2],
-                                 "textRun": {"content": "".join(run[3]),
-                                             "textStyle": run[5]}})
+                                 "textRun": text_run})
         mark = self.units[index - 1]
         paragraph = {"elements": elements, "paragraphStyle": dict(mark.ps)}
         if mark.bullet:
