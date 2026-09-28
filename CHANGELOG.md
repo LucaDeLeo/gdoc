@@ -12,7 +12,8 @@ All notable changes to `gdoc` are documented here. This project follows
   `--levels N` (default 1), like Tab and Shift-Tab in Google Docs. The items
   are rebuilt in place in one `requiredRevisionId`-pinned batch so they rejoin
   their own native list: the list ID, a UI-restarted start number, text and
-  marker styles, paragraph spacing and comment anchors are kept, and nothing
+  marker styles, paragraph spacing, heading IDs, comment anchors and
+  bookmarks are kept, and nothing
   else in the tab is rewritten. The result is read back, and any item not at
   its planned level, list and marker style is reported as an error.
   Refused before any write (exit 3):
@@ -23,9 +24,9 @@ All notable changes to `gdoc` are documented here. This project follows
     `1. a. i.` (for example `1) a) i)`);
   - items that start with a tab, carry a hand-set indent, hold pending
     suggestions, anchor a floating image or drawing, or overlap a named range;
-  - items whose bullet or number has its own formatting (anything but bold on
-    a fully bold item), or a style covering the whole item but not its
-    marker;
+  - items whose bullet or number has its own formatting (anything but the
+    bold, font and size of a fully formatted item), or a style covering the
+    whole item but not its marker;
   - moves that would merge, split or re-home lists (ranges across lists, items
     right after another list's item, an unnest that would sweep in a deeper
     item of another list, sub-items that are a separate list).

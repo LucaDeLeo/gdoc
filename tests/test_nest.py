@@ -446,8 +446,23 @@ class TestRefusals:
         ]
         assert _plan(tab, "Bravo", 1).moved == 1
 
+    def test_marker_font_and_size_shared_by_the_whole_item_are_kept(self):
+        # Live: a fully Georgia 14 pt item keeps its Georgia 14 pt marker.
+        style = {"weightedFontFamily": {"fontFamily": "Georgia", "weight": 400},
+                 "fontSize": {"magnitude": 14, "unit": "PT"}}
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"underline": False, **style}
+        para["elements"][0]["textRun"]["textStyle"] = dict(style)
+        assert _plan(tab, "Bravo", 1).moved == 1
+
+    def test_marker_font_not_on_every_run_is_refused(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"fontSize": {"magnitude": 14, "unit": "PT"}}
+        self._refused(tab, "Bravo", 1, "formatted bullet or number \\(fontSize\\)")
+
     @pytest.mark.parametrize("style", [
-        {"weightedFontFamily": {"fontFamily": "Georgia", "weight": 400}},
         {"foregroundColor": {"color": {"rgbColor": {"red": 1}}}},
         {"italic": True},
     ])

@@ -659,9 +659,13 @@ Refused before any write (exit 3), with a message naming the item:
   pending suggestions, have a floating image or drawing anchored to them, or
   overlap a named range;
 - items whose bullet or number has its own formatting, which the rebuild
-  could change: any marker formatting other than bold on a fully bold item,
-  or a style (font, size, colour, italic, ...) that covers the whole item but
-  not its marker. Items with only some words formatted are fine.
+  could change: marker formatting other than the bold, font and size of a
+  fully formatted item (those are kept), or a style that covers the whole
+  item but not its marker. Items with only some words formatted are fine.
+
+Kept through a rebuild (tested live): list ID and a restarted start number,
+text styles and paragraph spacing, heading IDs, comment anchors and
+bookmarks, and the bold, font and size of a fully formatted item's marker.
 
 Blank lines between items (loose lists) are kept, with their original
 indentation. Like `edit`, this is a partial write: the awareness state records

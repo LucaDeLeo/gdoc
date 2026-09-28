@@ -145,11 +145,13 @@ def _marker_style(el: dict) -> dict:
     return _set_fields((_bullet(el) or {}).get("textStyle"))
 
 
-# Marker fields a rebuild is known to keep when the item's text carries
-# them too: live, a fully bold item's number is bold again afterwards. A
-# font is not (an item ending in Georgia keeps a plain marker), and
-# nothing else has been tested, so any other marker field is refused.
-_MARKER_FIELDS_KEPT = frozenset({"bold"})
+# Marker fields a rebuild is known to keep when every run of the item's
+# text carries them too. Live: a fully bold item's number is bold again
+# afterwards, and a fully Georgia 14 pt item keeps a Georgia 14 pt bullet
+# or number. (An item that only ends in Georgia has a plain marker, which
+# also stays plain.) Nothing else has been tested, so any other marker
+# field is refused.
+_MARKER_FIELDS_KEPT = frozenset({"bold", "weightedFontFamily", "fontSize"})
 
 
 def _marker_differences(el: dict) -> list[str]:
