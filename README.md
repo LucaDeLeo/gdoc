@@ -245,8 +245,8 @@ or when the quoted text isn't found in the document, it falls back
 transparently to the Drive API path: the comment is created unanchored
 (`anchored: false` in `--json`/`--plain`) with the quote stored as
 `quotedFileContent` metadata, which `cat --comments` places by matching that
-text but the Docs UI does not highlight. Same command either way — anchoring problems
-never fail the comment (though unrelated API errors, like a missing doc or
+text but the Docs UI does not highlight. Same command either way — anchoring
+problems never fail the comment (though unrelated API errors, like a missing doc or
 expired auth, still do).
 
 ### Other
