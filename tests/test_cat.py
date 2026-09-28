@@ -36,6 +36,14 @@ def _make_args(**overrides):
 def _doc_mime(doc_mime):
     """Keep spreadsheet detection on the Docs path for this module."""
 
+
+@pytest.fixture(autouse=True)
+def _no_live_anchors(monkeypatch):
+    """Keep `cat --comments` off the network: no comment has a live anchor."""
+    monkeypatch.setattr(
+        "gdoc.api.docs.get_comment_anchors", lambda doc_id: {},
+    )
+
 class TestCatMarkdown:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)

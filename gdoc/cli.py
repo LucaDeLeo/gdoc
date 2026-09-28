@@ -401,14 +401,34 @@ def cmd_cat(args) -> int:
             include_anchor=True,
         )
 
+        # Live anchors show whether each comment is still attached; Drive's
+        # quoted text alone can't (it never changes after an edit).
+        from gdoc.api.docs import get_comment_anchors
+        from gdoc.util import PreviewUnavailableError
+        try:
+            anchors = get_comment_anchors(doc_id)
+        except PreviewUnavailableError as e:
+            anchors = None
+            print(
+                f"WARN: live comment anchors unavailable ({e}); comments "
+                "are placed where their quoted text occurs, which does not "
+                "show whether they are still attached",
+                file=sys.stderr,
+            )
+
         from gdoc.annotate import annotate_markdown
-        annotated = annotate_markdown(markdown, comments, show_resolved=include_resolved)
+        annotated = annotate_markdown(
+            markdown, comments, show_resolved=include_resolved, anchors=anchors,
+        )
         annotated = _truncate_bytes(annotated, max_bytes)
 
         from gdoc.format import get_output_mode, format_json
         mode = get_output_mode(args)
         if mode == "json":
-            print(format_json(content=annotated))
+            print(format_json(
+                content=annotated,
+                anchors="live" if anchors is not None else "quoted_text",
+            ))
         else:
             print(annotated, end="")
 

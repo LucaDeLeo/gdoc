@@ -64,10 +64,40 @@ def _format_annotation_block(
     return lines
 
 
+def _line_of(markdown: str, start: int, length: int) -> int:
+    """0-based index of the line where a match starting at *start* ends."""
+    return markdown[:start + length].count("\n")
+
+
+def _find_all(text: str, key: str) -> list[int]:
+    starts, pos = [], text.find(key)
+    while pos != -1:
+        starts.append(pos)
+        pos = text.find(key, pos + 1)
+    return starts
+
+
+def _place_live(markdown: str, anchor: dict) -> int | None:
+    """Line index for a live anchor, or None when it can't be pinned down.
+
+    The anchor's key is found in the markdown; when it occurs more than
+    once, the anchor's own occurrence (counted in the document text) picks
+    one, provided the markdown has the same number of occurrences.
+    """
+    key = anchor.get("key", "")
+    if not key:
+        return None
+    starts = _find_all(markdown, key)
+    if not starts or len(starts) != anchor.get("occurrences"):
+        return None
+    return _line_of(markdown, starts[anchor["occurrence"]], len(key))
+
+
 def annotate_markdown(
     markdown: str,
     comments: list[dict],
     show_resolved: bool = False,
+    anchors: dict[str, dict | None] | None = None,
 ) -> str:
     """Produce line-numbered annotated output with inline comment annotations.
 
@@ -76,6 +106,12 @@ def annotate_markdown(
         comments: Comment dicts from list_comments(include_anchor=True).
         show_resolved: If True, include resolved comments. If False,
             filter them out (defensive — caller should pre-filter).
+        anchors: Live anchors from get_comment_anchors, or None when they
+            are unavailable. A comment with a live anchor is placed on the
+            line holding its anchored text, or marked detached. Any other
+            comment is placed where its quoted text occurs, which is only
+            a location guess: Drive keeps the quote after the anchor is
+            edited or detached.
 
     Returns:
         Annotated string with numbered content lines and un-numbered
@@ -84,18 +120,40 @@ def annotate_markdown(
     # Defensive resolved filtering
     if not show_resolved:
         comments = [c for c in comments if not c.get("resolved", False)]
+    if anchors is None:
+        anchors = {}
 
     lines = markdown.split("\n")
     # Remove trailing empty line from split if markdown ends with \n
     if lines and lines[-1] == "" and markdown.endswith("\n"):
         lines = lines[:-1]
 
-    # Classify comments: anchored vs unanchored
+    # Classify comments: placed on a line vs listed at the end
     # line_annotations: line_index (0-based) -> list of (comment, anchor_text, fallback_note)
     line_annotations: dict[int, list[tuple[dict, str, str]]] = {}
     unanchored: list[tuple[dict, str]] = []  # (comment, fallback_note)
 
+    def place(line_idx: int, c: dict, anchor_text: str, note: str) -> None:
+        # Clamp to valid range
+        if line_idx >= len(lines):
+            line_idx = len(lines) - 1 if lines else 0
+        line_annotations.setdefault(line_idx, []).append(
+            (c, anchor_text, note),
+        )
+
     for c in comments:
+        if c.get("id") in anchors:
+            live = anchors[c["id"]]
+            if live is None:
+                unanchored.append((c, "detached"))
+                continue
+            line_idx = _place_live(markdown, live)
+            if line_idx is None:
+                unanchored.append((c, "attached, location not found"))
+            else:
+                place(line_idx, c, live["text"], "")
+            continue
+
         qfc = c.get("quotedFileContent")
         if not qfc or not qfc.get("value"):
             # Unanchored comment
@@ -104,36 +162,23 @@ def annotate_markdown(
 
         anchor_text = qfc["value"]
 
-        # Short anchor check
         if len(anchor_text.strip()) < 4:
-            unanchored.append((c, "anchor too short"))
+            unanchored.append((c, "quoted text too short"))
             continue
 
-        # Find anchor in full markdown string
-        pos = markdown.find(anchor_text)
-        if pos == -1:
-            # Anchor text deleted
-            unanchored.append((c, "anchor deleted"))
+        starts = _find_all(markdown, anchor_text)
+        if not starts:
+            unanchored.append((c, "quoted text not found (edited or detached)"))
+            continue
+        if len(starts) > 1:
+            unanchored.append((c, "quoted text ambiguous"))
             continue
 
-        # Check for multiple matches
-        second_pos = markdown.find(anchor_text, pos + 1)
-        if second_pos != -1:
-            # Ambiguous
-            unanchored.append((c, "anchor ambiguous"))
-            continue
-
-        # Single match — find line number
-        # Count newlines up to end of match to find the last line of the span
-        match_end = pos + len(anchor_text)
-        line_idx = markdown[:match_end].count("\n")
-        # Clamp to valid range
-        if line_idx >= len(lines):
-            line_idx = len(lines) - 1 if lines else 0
-
-        if line_idx not in line_annotations:
-            line_annotations[line_idx] = []
-        line_annotations[line_idx].append((c, anchor_text, ""))
+        # Annotate after the last line of the match.
+        place(
+            _line_of(markdown, starts[0], len(anchor_text)),
+            c, anchor_text, "quoted text found",
+        )
 
     # Build output
     output_lines: list[str] = []
