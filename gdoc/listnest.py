@@ -133,24 +133,26 @@ def locate_item(body: dict, text: str) -> int:
         raise _usage(f"no match found for {text!r}" + (f"; {reason}" if reason else ""))
     content = body.get("content", [])
     found: set[int] = set()
+    in_container = 0
     for m in matches:
         for i, el in enumerate(content):
             if el.get("startIndex", 0) <= m["startIndex"] < el.get("endIndex", 0):
                 if _paragraph(el) is None:
-                    raise _usage(
-                        f"{text!r} is inside a table or other container; "
-                        "only list items in the tab body can be nested"
-                    )
-                if m["endIndex"] > el["endIndex"]:
+                    in_container += 1
+                elif m["endIndex"] > el["endIndex"]:
                     raise _usage(f"{text!r} spans more than one paragraph")
-                found.add(i)
+                else:
+                    found.add(i)
                 break
-    if not found:
-        raise _usage(f"{text!r} is not in a paragraph of the tab body")
-    if len(found) > 1:
+    if len(found) + in_container > 1:
         raise _usage(
-            f"{text!r} matches {len(found)} paragraphs; use text unique to "
-            "one list item"
+            f"{text!r} matches {len(found) + in_container} paragraphs; use "
+            "text unique to one list item"
+        )
+    if not found:
+        raise _usage(
+            f"{text!r} is inside a table or other container; only list "
+            "items in the tab body can be nested"
         )
     return found.pop()
 

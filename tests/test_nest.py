@@ -248,6 +248,17 @@ class TestRefusals:
         with pytest.raises(GdocError, match="inside a table"):
             _at(tab, "Cell")
 
+    def test_table_match_counts_toward_ambiguity(self):
+        tab = _tab(*STD)
+        cell_para = {"startIndex": 34, "endIndex": 40, "paragraph": {"elements": [{
+            "startIndex": 34, "endIndex": 40, "textRun": {"content": "Bravo\n"}}]}}
+        tab["body"]["content"].append({
+            "startIndex": 33, "endIndex": 41,
+            "table": {"tableRows": [{"tableCells": [{"content": [cell_para]}]}]},
+        })
+        with pytest.raises(GdocError, match="matches 2 paragraphs"):
+            _at(tab, "Bravo")
+
     def test_not_a_list_item(self):
         self._refused(_tab(*STD), "Intro", 1, "not a list item")
 
@@ -533,3 +544,55 @@ def test_mcp_call_runs_the_cli_handler_with_the_same_argv(mocker, command):
     args = seen["args"]
     assert (args.func, args.command, args.text, args.to, args.levels, args.tab,
             args.account) == (cmd_nest, command, "-Bravo", "Delta", 2, "Main", "work")
+
+
+# -- pinned write error classes -----------------------------------------
+
+
+def _http_error(status, content=b""):
+    import httplib2
+    from googleapiclient.errors import HttpError
+
+    return HttpError(httplib2.Response({"status": str(status)}), content)
+
+
+@pytest.fixture
+def execute(mocker):
+    svc = mocker.patch("gdoc.api.docs.get_docs_service")
+    return svc.return_value.documents.return_value.batchUpdate.return_value.execute
+
+
+class TestBatchUpdatePinned:
+    def test_sends_the_revision_pin(self, execute):
+        from gdoc.api.docs import batch_update_pinned, get_docs_service
+
+        batch_update_pinned("doc1", [{"x": 1}], "rev1")
+        body = get_docs_service().documents().batchUpdate.call_args.kwargs["body"]
+        assert body == {"requests": [{"x": 1}],
+                        "writeControl": {"requiredRevisionId": "rev1"}}
+
+    def test_stale_revision_says_re_run(self, execute):
+        from gdoc.api.docs import batch_update_pinned
+
+        execute.side_effect = _http_error(400, b"The required revision ID is stale")
+        with pytest.raises(GdocError, match="re-run it"):
+            batch_update_pinned("doc1", [], "rev1")
+
+    @pytest.mark.parametrize("error", [
+        _http_error(503), TimeoutError("timed out"), ConnectionResetError(),
+    ])
+    def test_server_or_transit_failure_is_an_unknown_outcome(self, execute, error):
+        from gdoc.api.docs import batch_update_pinned
+
+        execute.side_effect = error
+        with pytest.raises(GdocError, match="outcome is unknown"):
+            batch_update_pinned("doc1", [], "rev1")
+
+    def test_token_refresh_failure_changed_nothing(self, execute):
+        from google.auth.exceptions import TransportError
+
+        from gdoc.api.docs import batch_update_pinned
+
+        execute.side_effect = TransportError("dns")
+        with pytest.raises(GdocError, match="No change was made"):
+            batch_update_pinned("doc1", [], "rev1")

@@ -621,8 +621,8 @@ gdoc nest DOC "Bravo"                     # Bravo becomes a sub-item of the item
 gdoc unnest DOC "Bravo"                   # and back
 gdoc nest DOC "Bravo" --to "Delta"        # every item from Bravo through Delta
 gdoc unnest DOC "grandchild" --levels 2   # two levels out
-gdoc nest DOC --tab "Draft" "Bravo" --json
-# → {"ok": true, "moved": 1, "levels": 1}
+gdoc unnest DOC --tab "Draft" "Bravo" --json
+# → {"ok": true, "moved": 1, "levels": -1}   (levels is negative for unnest)
 ```
 
 `TEXT` is matched like `edit` (case-insensitive) and must fall inside exactly
@@ -648,8 +648,12 @@ Refused before any write (exit 3), with a message naming the item:
   `1. a. i.` and bullet `● ○ ■` lists are supported);
 - moves that would merge or split lists: a range spanning two lists, an item
   directly after an item of another list (for example a bullet item after a
-  numbered sub-list), or an item whose sub-items are a separate list;
+  numbered sub-list), an unnest whose rebuild would take in a deeper item of
+  another list above it, or an item whose sub-items are a separate list;
 - items that start with a tab character or contain pending suggestions.
+
+Rebuilt items take their list level's standard indent, as Tab does in Docs;
+an indent dragged by hand on one of those items is not kept.
 
 Blank lines between items (loose lists) are kept, with their original
 indentation. Like `edit`, this is a partial write: the awareness state records
