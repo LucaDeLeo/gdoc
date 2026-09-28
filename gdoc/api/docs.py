@@ -3002,12 +3002,6 @@ def insert_markdown_into_tab(
     original_insert_index = insert_index
 
     parsed = parse_markdown(markdown)
-    if parsed.non_default_list_starts:
-        import sys
-
-        print("WARN: Google Docs cannot set arbitrary native list starts; "
-              "the following lists will start at 1: "
-              + "; ".join(parsed.non_default_list_starts), file=sys.stderr)
     if parsed.deep_list_items:
         import sys
 
@@ -3050,6 +3044,7 @@ def insert_markdown_into_tab(
                                    last_bullet.get("listId", ""), 0)
         parsed.continues_list = ("NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered
                                  else "BULLET_DISC_CIRCLE_SQUARE")
+    _warn_list_starts(parsed)
     # An appended leading table splits the tab's last paragraph at its mark.
     # When that paragraph is empty and one of gdoc's ranges holds it (an
     # empty code line, a rule in a quote), the range has no text to keep
@@ -3479,6 +3474,19 @@ def _wording_contexts(body: dict, match: dict, markdown: str):
         _strip_trailing_newline_unless_hr(selected)
         result.append((part, _contextual_replacement(selected, line, part, body)))
     return result
+
+
+def _warn_list_starts(parsed) -> None:
+    """Warn about numbered starts the API resets to 1. A fragment whose
+    items all continue the list above shows the numbers it asks for."""
+    import sys
+
+    blocks = {s.list_block for s in parsed.styles if s.type == "bullets"}
+    if parsed.non_default_list_starts and not (
+            parsed.continues_list and len(blocks) == 1):
+        print("WARN: Google Docs cannot set arbitrary native list starts; "
+              "the following lists will start at 1: "
+              + "; ".join(parsed.non_default_list_starts), file=sys.stderr)
 
 
 def _continuing(parsed, body, found, source, tab_id):
@@ -4500,15 +4508,9 @@ def replace_formatted(
     contexts = {_match_key(part): context for part, context in planned}
     # Only list items the edit writes as lists reset their start, not
     # wording that merely looks like one.
-    starts = [start for selected, _ in contexts.values()
-              if any(s.type == "bullets" for s in selected.styles)
-              for start in selected.non_default_list_starts]
-    if starts:
-        import sys
-
-        print("WARN: Google Docs cannot set arbitrary native list starts; "
-              "the following lists will start at 1: " + "; ".join(starts),
-              file=sys.stderr)
+    for selected, _ in contexts.values():
+        if any(s.type == "bullets" for s in selected.styles):
+            _warn_list_starts(selected)
     # Table insertion after the main batch tracks index shifts for a single
     # block-path match only. Inline matches insert the table source literally
     # and never reach _insert_table, so they do not count.

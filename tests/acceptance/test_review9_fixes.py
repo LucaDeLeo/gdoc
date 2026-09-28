@@ -153,3 +153,13 @@ def test_appended_nested_item_continues_the_parent_list(route, base, inserted):
     route.ok("write", text=base)
     route.ok("insert", text=inserted, tab="t.0", position="end")
     assert (_read(route), styles(doc)) == expected
+
+
+def test_continuing_items_do_not_warn_about_their_start(route):
+    route.load(NativeDoc(("p", "a", "NORMAL_TEXT", NUMBERED),
+                         ("p", "b", "NORMAL_TEXT", NUMBERED),
+                         ("p", "c", "NORMAL_TEXT", NUMBERED)))
+    route.ok("cat")
+    code, output, error = route.call("edit", old_text="b", new_text="2. b2\n3. b3")
+    assert code == 0 and "start at 1" not in output + error
+    assert _read(route) == "1. a\n2. b2\n3. b3\n4. c\n"
