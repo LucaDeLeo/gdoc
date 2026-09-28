@@ -17,7 +17,12 @@ All notable changes to `gdoc` are documented here. This project follows
   than the content; `pull --revision` files get no stamp), and `push`,
   `write DOC FILE` (when the file's `gdoc:` names DOC), the sync hook,
   and MCP `write` use that stamp as the baseline: a mismatch refuses with
-  exit 3 unless `--force` or the doc already equals the file. After an
+  exit 3 unless `--force` or the doc already equals the file. The refusal
+  sends nothing, leaves the file untouched, and names a recovery that
+  pulls into a new path (`gdoc pull DOC draft.latest.md`, then `gdoc diff`),
+  since re-pulling the refused file would overwrite its edits. The sync
+  hook reports this refusal with exit 2 so Claude Code shows it to the
+  agent; its other skips stay silent. After an
   upload the stamp advances to the version in the upload response; a tab
   write, which reports no version of its own, leaves the stamp and warns.
   The pull hook stamps what it pulls and re-pulls when a file's stamp is

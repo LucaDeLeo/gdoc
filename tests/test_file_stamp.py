@@ -88,12 +88,21 @@ class TestStaleFileRefused:
     def test_push(self, _pf, mock_upload, tmp_path):
         f = tmp_path / "draft.md"
         f.write_text(_stamped(1))
+        before = f.read_bytes()
         with pytest.raises(GdocError) as exc:
             cmd_push(_push_args(f))
         assert exc.value.exit_code == 3
-        assert "pull" in str(exc.value) and "--force" in str(exc.value)
         mock_upload.assert_not_called()
-        assert _stamp_of(f) == "1"
+        assert f.read_bytes() == before
+
+        # Recovery pulls into a new path: re-pulling draft.md would
+        # overwrite the edits this refusal just protected.
+        msg = str(exc.value)
+        latest = tmp_path / "draft.latest.md"
+        assert f"gdoc pull {DOC} {latest}" in msg
+        assert f"gdoc pull {DOC} {f}" not in msg
+        assert f"gdoc diff {DOC} {f}" in msg
+        assert "Nothing was sent" in msg and "--force" in msg
 
     @patch("gdoc.api.drive.update_doc_content", return_value=3)
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 2})
@@ -124,11 +133,15 @@ class TestStaleFileRefused:
     def test_sync_hook(self, _ver, mock_upload, _state, tmp_path, capsys):
         f = tmp_path / "draft.md"
         f.write_text(_stamped(1))
+        before = f.read_bytes()
         with patch("sys.stdin", _hook_stdin(f)):
-            assert cmd_sync_hook(SimpleNamespace(command="_sync-hook")) == 0
+            # Exit 2 makes Claude Code show the hook's stderr to the agent.
+            assert cmd_sync_hook(SimpleNamespace(command="_sync-hook")) == 2
         mock_upload.assert_not_called()
+        assert f.read_bytes() == before
         err = capsys.readouterr().err
-        assert "SYNC: skipped" in err and "My Doc" in err
+        assert "not pushed" in err and "My Doc" in err
+        assert "draft.latest.md" in err
 
     @patch("gdoc.api.drive.update_doc_content", return_value=3)
     @patch("gdoc.notify.pre_flight", return_value=_machine_read(2))

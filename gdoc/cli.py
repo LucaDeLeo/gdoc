@@ -1465,11 +1465,29 @@ def _file_stamp(metadata: dict, doc_id: str) -> str | None:
     return stamp
 
 
-def _stale_file_error(stamp: str, current_version) -> GdocError:
+def _stale_file_error(
+    doc_id: str, file_path: str, stamp: str, current_version,
+) -> GdocError:
+    """Refusal for a stamped file whose doc has moved on.
+
+    The recovery pulls into a new path: `gdoc pull` overwrites its target,
+    so re-pulling the refused file would destroy the edits just protected.
+    """
+    import os
+    import shlex
+
+    root, ext = os.path.splitext(file_path)
+    latest = f"{root}.latest{ext or '.md'}"
+    f, new = shlex.quote(file_path), shlex.quote(latest)
     return GdocError(
-        f"file is older than the doc (file is from version {stamp}, "
-        f"doc is at version {current_version}). Re-pull with 'gdoc pull' "
-        "and reapply your edits, or use --force to overwrite.",
+        f"{file_path} is from doc version {stamp}; the doc is now at "
+        f"version {current_version}. Nothing was sent and {file_path} "
+        "is unchanged. To recover:\n"
+        f"  1. gdoc pull {doc_id} {new}   (fresh copy at the current version)\n"
+        f"  2. gdoc diff {doc_id} {f}   (what changed in the doc)\n"
+        f"  3. Carry your edits into {new} and push it, "
+        "or apply small changes with 'gdoc edit'.\n"
+        "  4. Use --force only to discard the newer changes in the doc.",
         exit_code=3,
     )
 
@@ -1498,14 +1516,14 @@ def _advance_file_stamp(file_path: str, original: str, version) -> None:
 def _warn_stamp_kept(file_path: str, reason: str) -> None:
     print(
         f"WARN: {_STAMP_KEY} in {file_path} not updated ({reason}); "
-        "the next push from this file will refuse until you re-pull.",
+        "the next push from this file will be refused as stale.",
         file=sys.stderr,
     )
 
 
 def _check_write_conflict(
     doc_id: str, quiet: bool, force: bool, body: str | None = None,
-    file_stamp: str | None = None,
+    file_stamp: str | None = None, file_path: str | None = None,
 ):
     """Run conflict detection for write-like commands.
 
@@ -1537,7 +1555,9 @@ def _check_write_conflict(
         if current_version is not None and str(current_version) != file_stamp:
             if body is not None and _doc_matches(doc_id, body):
                 return change_info, True
-            raise _stale_file_error(file_stamp, current_version)
+            raise _stale_file_error(
+                doc_id, file_path or "file", file_stamp, current_version,
+            )
         return change_info, False
 
     if not quiet:
@@ -1626,7 +1646,7 @@ def cmd_write(args) -> int:
     # writes — a tab write's body never equals the whole-doc export.
     change_info, in_sync = _check_write_conflict(
         doc_id, quiet, force, body=None if tab_name else content,
-        file_stamp=stamp,
+        file_stamp=stamp, file_path=file_path,
     )
     if in_sync:
         return _finish_noop_write(doc_id, change_info, args, quiet, command="write")
@@ -1829,6 +1849,7 @@ def cmd_push(args) -> int:
     # Conflict detection (reuse shared helper)
     change_info, in_sync = _check_write_conflict(
         doc_id, quiet, force, body=body, file_stamp=stamp,
+        file_path=file_path,
     )
     if in_sync:
         return _finish_noop_write(doc_id, change_info, args, quiet, command="push")
@@ -1918,11 +1939,14 @@ def cmd_sync_hook(args) -> int:
             try:
                 _, in_sync = _check_write_conflict(
                     doc_id, quiet=True, force=False, body=body,
-                    file_stamp=stamp,
+                    file_stamp=stamp, file_path=file_path,
                 )
             except GdocError as e:
-                print(f'SYNC: skipped "{title}" ({e})', file=sys.stderr)
-                return 0
+                # Exit 2 is how a Claude Code PostToolUse hook shows stderr
+                # to the agent; exit 0 would hide that its edit never
+                # reached the doc.
+                print(f'SYNC: not pushed to "{title}": {e}', file=sys.stderr)
+                return 2
             if in_sync:
                 return 0
 
