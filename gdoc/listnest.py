@@ -178,11 +178,15 @@ def _marker_differences(el: dict) -> list[str]:
             # Kept only when the whole item carries it (live: Docs gives a
             # marker bold only for a fully bold item).
             odd.append(key)
-    fully_bold = bool(runs) and all(r.get("bold") is True for r in runs)
-    if fully_bold and marker.get("bold") is not True:
-        # The mirror case: a fully bold item whose number was unbolded by
-        # hand would likely come back bold.
-        odd.append("bold")
+    # The mirror case: an item carrying a flag on every run while its marker
+    # lacks it. Docs bolds the marker of a fully bold item on its own, so a
+    # hand-unbolded one would likely come back bold; the other flags are
+    # untested and refused alike. Underline is exempt: every marker reports
+    # underline false, and a fully linked item is underlined.
+    for key in ("bold", "italic", "strikethrough", "smallCaps"):
+        on_every_run = bool(runs) and all(r.get(key) is True for r in runs)
+        if on_every_run and marker.get(key) is not True:
+            odd.append(key)
     return sorted(set(odd))
 
 

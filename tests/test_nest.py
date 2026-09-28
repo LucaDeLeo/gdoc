@@ -457,6 +457,22 @@ class TestRefusals:
         para["elements"][0]["textRun"]["textStyle"] = {"bold": True}
         self._refused(tab, "Bravo", 1, "formatted bullet or number \\(bold\\)")
 
+    def test_plain_marker_on_a_fully_italic_item_is_refused(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"underline": False}
+        para["elements"][0]["textRun"]["textStyle"] = {"italic": True}
+        self._refused(tab, "Bravo", 1, "formatted bullet or number \\(italic\\)")
+
+    def test_fully_linked_item_is_not_refused(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"underline": False}
+        para["elements"][0]["textRun"]["textStyle"] = {
+            "underline": True, "link": {"url": "https://example.com/"},
+        }
+        assert _plan(tab, "Bravo", 1).moved == 1
+
     def test_plain_marker_style_is_not_formatting(self):
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
