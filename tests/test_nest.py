@@ -555,6 +555,11 @@ class TestRefusals:
                    ("Bravo", 0, "num", {"suggestedBulletChanges": {"s.1": {}}}))
         self._refused(tab, "Bravo", 1, "pending suggestions")
 
+    def test_pending_suggestion_on_the_item_joined(self):
+        tab = _tab(("Alpha", 0, "num", {"suggestedBulletChanges": {"s.9": {}}}),
+                   ("", 0, None), ("Bravo", 0, "num"))
+        self._refused(tab, "Bravo", 1, "the item the moved items join")
+
     def test_zero_levels(self):
         with pytest.raises(GdocError, match="at least 1"):
             plan_nesting(_tab(*STD), TAB, 3, 3, 0)

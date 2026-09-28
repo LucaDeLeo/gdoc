@@ -470,6 +470,20 @@ def plan_nesting(
             + ", ".join(sorted(suggestions))
             + "); accept or reject them first"
         )
+    # The rebuilt bullets join the list of the item just above; if that
+    # item is itself a pending suggestion, rejecting it later would leave
+    # the rebuilt items anchored to a list that is no longer there.
+    anchor = start - 1
+    while anchor >= 0 and _is_blank(content[anchor]):
+        anchor -= 1
+    _walk_suggestion_ids(content[anchor], suggestions)
+    if suggestions:
+        raise _usage(
+            f"{_label(content[anchor])}, the item the moved items join, has "
+            "pending suggestions ("
+            + ", ".join(sorted(suggestions))
+            + "); accept or reject them first"
+        )
 
     blanks = [i for i in window if _is_blank(content[i])]
     s0 = content[start]["startIndex"]
