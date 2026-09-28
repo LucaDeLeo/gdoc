@@ -3566,17 +3566,22 @@ def _list_continuation(parsed, content, above, lists, same_list=False):
 
 
 def _default_preset(lists: dict, list_id: str) -> bool:
-    """Whether a list's first level looks like gdoc's default preset, the
-    only one createParagraphBullets can be relied on to join."""
+    """Whether a list's levels all look like gdoc's default preset, the only
+    one createParagraphBullets can be relied on to join: 1. a. i. repeating,
+    or ● ○ ■ repeating."""
     levels = lists.get(list_id, {}).get("listProperties", {}).get("nestingLevels", [])
-    first, second = (levels + [{}, {}])[:2]
-    if first.get("glyphType") == "DECIMAL":
-        # 1. / a. (not 1) or 1.1.)
-        return (first.get("glyphFormat", "%0.") == "%0."
-                and second.get("glyphType", "ALPHA") == "ALPHA"
-                and second.get("glyphFormat", "%1.") == "%1.")
-    return (first.get("glyphSymbol") == "●"
-            and second.get("glyphSymbol", "○") == "○")
+    if not levels:
+        return False
+    numbered = levels[0].get("glyphType") == "DECIMAL"
+    for k, level in enumerate(levels):
+        if numbered:
+            if (level.get("glyphType", ["DECIMAL", "ALPHA", "ROMAN"][k % 3])
+                    != ["DECIMAL", "ALPHA", "ROMAN"][k % 3]
+                    or level.get("glyphFormat", f"%{k}.") != f"%{k}."):
+                return False
+        elif level.get("glyphSymbol", "●○■"[k % 3]) != "●○■"[k % 3]:
+            return False
+    return True
 
 
 def _refuse_list_split(parsed, content, native, lists) -> None:
@@ -3655,7 +3660,7 @@ def _same_list_item(parsed, paragraph: dict, lists: dict):
     items = sorted((s for s in parsed.styles if s.type == "bullets"),
                    key=lambda s: s.start)
     if (not bullet or not items or parsed.tables or parsed.code_blocks
-            or len(items) != parsed.plain_text.rstrip("\n").count("\n") + 1
+            or len(items) != sum(s.type == "paragraph_style" for s in parsed.styles)
             or any(s.type == "markdown_prefix" for s in parsed.styles)):
         return None
     level = bullet.get("nestingLevel", 0)

@@ -490,3 +490,27 @@ def test_splits_that_renumber_later_items_are_refused(route, base, old, new):
     code, output, error = route.call("edit", old_text=old, new_text=new)
     assert code != 0 and "renumbering" in output + error
     assert len(route.service.batches) == batches
+
+
+def test_customized_deeper_level_is_not_the_default_preset():
+    """Round 5 (GPT 1): every level must match gdoc's preset (checked against
+    live list definitions)."""
+    from gdoc.api.docs import _default_preset
+
+    levels = [{"glyphType": t, "glyphFormat": f"%{k}."}
+              for k, t in enumerate(["DECIMAL", "ALPHA", "ROMAN"] * 3)]
+    lists = {"L": {"listProperties": {"nestingLevels": levels}}}
+    assert _default_preset(lists, "L")
+    levels[2] = {"glyphType": "ROMAN", "glyphFormat": "(%2)"}
+    assert not _default_preset(lists, "L")
+
+
+def test_expansion_ending_with_an_empty_item_keeps_the_list(route):
+    """Round 5 (GPT 2)."""
+    doc = route.load(NativeDoc(("p", "a", "NORMAL_TEXT", NUMBERED),
+                               ("p", "b", "NORMAL_TEXT", NUMBERED),
+                               ("p", "c", "NORMAL_TEXT", NUMBERED)))
+    route.ok("cat")
+    route.ok("edit", old_text="a", new_text="1. A\n2. ")
+    assert _read(route) == "1. A\n2. \n3. b\n4. c\n"
+    assert {bullet for _, _, bullet in styles(doc)} == {(1, 0)}
