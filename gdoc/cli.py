@@ -1442,22 +1442,105 @@ def _finish_noop_write(
     return 0
 
 
+# Frontmatter key `pull` stamps with the Drive `version` the file's
+# content came from. Uploads from a stamped file use it as the baseline.
+_STAMP_KEY = "gdoc-version"
+
+
+def _file_stamp(metadata: dict, doc_id: str) -> str | None:
+    """The version stamp a pulled file carries for doc_id, if any.
+
+    A stamp describes the doc named by the same frontmatter's `gdoc:` key,
+    so it is ignored when that key is missing or names another doc.
+    """
+    stamp = metadata.get(_STAMP_KEY)
+    target = metadata.get("gdoc")
+    if not stamp or not target:
+        return None
+    try:
+        if _resolve_doc_id(target) != doc_id:
+            return None
+    except GdocError:
+        return None
+    return stamp
+
+
+def _stale_file_error(stamp: str, current_version) -> GdocError:
+    return GdocError(
+        f"file is older than the doc (file is from version {stamp}, "
+        f"doc is at version {current_version}). Re-pull with 'gdoc pull' "
+        "and reapply your edits, or use --force to overwrite.",
+        exit_code=3,
+    )
+
+
+def _advance_file_stamp(file_path: str, original: str, version) -> None:
+    """Point a stamped file at the version its own upload produced.
+
+    `version` must come from the upload response itself: a separate read
+    afterwards could return a collaborator's newer version and bless an
+    edit the file doesn't contain. The file is left alone if it changed
+    on disk while the upload ran.
+    """
+    from gdoc.frontmatter import set_frontmatter_value
+
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            if f.read() != original:
+                raise OSError("file changed on disk during the upload")
+        updated = set_frontmatter_value(original, _STAMP_KEY, str(version))
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(updated)
+    except (OSError, ValueError) as e:
+        _warn_stamp_kept(file_path, str(e))
+
+
+def _warn_stamp_kept(file_path: str, reason: str) -> None:
+    print(
+        f"WARN: {_STAMP_KEY} in {file_path} not updated ({reason}); "
+        "the next push from this file will refuse until you re-pull.",
+        file=sys.stderr,
+    )
+
+
 def _check_write_conflict(
     doc_id: str, quiet: bool, force: bool, body: str | None = None,
+    file_stamp: str | None = None,
 ):
     """Run conflict detection for write-like commands.
+
+    The baseline is `file_stamp` (the `gdoc-version` a pulled file
+    carries) when given, else the version this machine last read.
 
     Returns (change_info, in_sync). in_sync is True when the version moved
     but the doc content already equals `body` (e.g. our own earlier write or
     a cosmetic Docs version bump) — the caller should skip the upload.
     Raises GdocError(exit_code=3) on a real conflict.
     """
+    change_info = None
     if not quiet:
         from gdoc.notify import pre_flight
 
         change_info = pre_flight(doc_id, quiet=False)
         _require_doc(doc_id, change_info)
 
+    if file_stamp is not None:
+        if force:
+            return change_info, False
+        current_version = (
+            change_info.current_version if change_info is not None else None
+        )
+        if current_version is None:
+            from gdoc.api.drive import get_file_version
+
+            current_version = get_file_version(doc_id).get("version")
+        if current_version is not None and str(current_version) != file_stamp:
+            if body is not None and _doc_matches(doc_id, body):
+                return change_info, True
+            raise _stale_file_error(file_stamp, current_version)
+        return change_info, False
+
+    if not quiet:
         if not force:
             if change_info.last_read_version is None:
                 if body is not None and _doc_matches(doc_id, body):
@@ -1535,12 +1618,15 @@ def cmd_write(args) -> int:
     # Strip frontmatter — pull prepends it, and leaving it in the upload
     # dumps visible YAML into the doc body.
     from gdoc.frontmatter import parse_frontmatter
-    _, content = parse_frontmatter(content)
+    original = content
+    front, content = parse_frontmatter(content)
+    stamp = _file_stamp(front, doc_id)
 
     # Conflict detection. Content comparison only applies to full-doc
     # writes — a tab write's body never equals the whole-doc export.
     change_info, in_sync = _check_write_conflict(
         doc_id, quiet, force, body=None if tab_name else content,
+        file_stamp=stamp,
     )
     if in_sync:
         return _finish_noop_write(doc_id, change_info, args, quiet, command="write")
@@ -1561,6 +1647,11 @@ def cmd_write(args) -> int:
         _print_tab_write_result(
             mode, doc_id, result, command_version, verb="wrote",
         )
+        if stamp is not None:
+            # command_version came from a separate read, not the write.
+            _warn_stamp_kept(
+                file_path, "a tab write reports no version of its own",
+            )
     else:
         # Refuse destructive multi-tab collapse unless the user opts in.
         if not force_collapse:
@@ -1577,6 +1668,8 @@ def cmd_write(args) -> int:
 
         from gdoc.api.drive import update_doc_content
         command_version = update_doc_content(doc_id, content)
+        if stamp is not None:
+            _advance_file_stamp(file_path, original, command_version)
 
         if mode == "json":
             print(format_json(written=True, version=command_version))
@@ -1611,9 +1704,13 @@ def cmd_pull(args) -> int:
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
 
-    # Export doc (or one past revision) as markdown
+    # Export doc (or one past revision) as markdown. The version is read
+    # before the export so the stamp can only be older than the content,
+    # never newer: an edit landing in between makes the next push refuse
+    # instead of letting it overwrite that edit.
     from gdoc.api.drive import export_doc, get_file_info
 
+    metadata = get_file_info(doc_id)
     rev = None
     if revision:
         from gdoc.api.revisions import export_revision
@@ -1625,7 +1722,6 @@ def cmd_pull(args) -> int:
         )
     else:
         markdown = export_doc(doc_id, mime_type="text/markdown")
-    metadata = get_file_info(doc_id)
     title = metadata.get("name", "")
 
     # Add frontmatter and write to local file. Revision pulls
@@ -1638,6 +1734,8 @@ def cmd_pull(args) -> int:
         front = {"source": doc_id, "revision": rev["id"], "title": title}
     else:
         front = {"gdoc": doc_id, "title": title}
+        if metadata.get("version") is not None:
+            front[_STAMP_KEY] = metadata["version"]
     content = add_frontmatter(markdown, front)
 
     try:
@@ -1726,9 +1824,12 @@ def cmd_push(args) -> int:
         )
 
     doc_id = _resolve_doc_id(metadata["gdoc"])
+    stamp = _file_stamp(metadata, doc_id)
 
     # Conflict detection (reuse shared helper)
-    change_info, in_sync = _check_write_conflict(doc_id, quiet, force, body=body)
+    change_info, in_sync = _check_write_conflict(
+        doc_id, quiet, force, body=body, file_stamp=stamp,
+    )
     if in_sync:
         return _finish_noop_write(doc_id, change_info, args, quiet, command="push")
 
@@ -1752,6 +1853,8 @@ def cmd_push(args) -> int:
     from gdoc.api.drive import update_doc_content
 
     command_version = update_doc_content(doc_id, body)
+    if stamp is not None:
+        _advance_file_stamp(file_path, content, command_version)
 
     # Output
     from gdoc.format import format_json, get_output_mode
@@ -1806,6 +1909,22 @@ def cmd_sync_hook(args) -> int:
             return 0
 
         doc_id = _resolve_doc_id(metadata["gdoc"])
+        title = metadata.get("title", doc_id)
+
+        # A stamped file must not overwrite edits made after it was
+        # pulled. Unstamped files keep the hook's unconditional push.
+        stamp = _file_stamp(metadata, doc_id)
+        if stamp is not None:
+            try:
+                _, in_sync = _check_write_conflict(
+                    doc_id, quiet=True, force=False, body=body,
+                    file_stamp=stamp,
+                )
+            except GdocError as e:
+                print(f'SYNC: skipped "{title}" ({e})', file=sys.stderr)
+                return 0
+            if in_sync:
+                return 0
 
         # Refuse to silently flatten a multi-tab doc. The hook runs
         # without user attention on every matching file edit, so there
@@ -1813,7 +1932,6 @@ def cmd_sync_hook(args) -> int:
         # entirely and log to stderr.
         from gdoc.api.docs import count_document_tabs
         if count_document_tabs(doc_id) > 1:
-            title = metadata.get("title", doc_id)
             print(
                 f'SYNC: skipped "{title}" (multi-tab doc; sync would '
                 "collapse tabs). Use `gdoc edit --tab` or "
@@ -1825,8 +1943,9 @@ def cmd_sync_hook(args) -> int:
         from gdoc.api.drive import update_doc_content
 
         command_version = update_doc_content(doc_id, body)
+        if stamp is not None:
+            _advance_file_stamp(file_path, content, command_version)
 
-        title = metadata.get("title", doc_id)
         print(
             f'SYNC: pushed to "{title}" (v{command_version})',
             file=sys.stderr,
@@ -1881,17 +2000,24 @@ def cmd_pull_hook(args) -> int:
         version_data = get_file_version(doc_id)
         current_version = version_data.get("version")
 
-        from gdoc.state import load_state
+        # A stamped file is current when its stamp matches; otherwise
+        # fall back to what this machine last saw.
+        stamp = _file_stamp(metadata, doc_id)
+        if stamp is not None:
+            if str(current_version) == stamp:
+                return 0
+        else:
+            from gdoc.state import load_state
 
-        state = load_state(doc_id)
-        if state is not None and state.last_version == current_version:
-            return 0  # No remote changes
+            state = load_state(doc_id)
+            if state is not None and state.last_version == current_version:
+                return 0  # No remote changes
 
-        # Pull fresh content
+        # Pull fresh content (version first, as in `gdoc pull`)
         from gdoc.api.drive import export_doc, get_file_info
 
-        markdown = export_doc(doc_id, mime_type="text/markdown")
         file_metadata = get_file_info(doc_id)
+        markdown = export_doc(doc_id, mime_type="text/markdown")
         title = file_metadata.get("name", "")
         version = file_metadata.get("version")
         if version is not None:
@@ -1899,7 +2025,10 @@ def cmd_pull_hook(args) -> int:
 
         from gdoc.frontmatter import add_frontmatter
 
-        new_content = add_frontmatter(markdown, {"gdoc": doc_id, "title": title})
+        front = {"gdoc": doc_id, "title": title}
+        if version is not None:
+            front[_STAMP_KEY] = version
+        new_content = add_frontmatter(markdown, front)
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
