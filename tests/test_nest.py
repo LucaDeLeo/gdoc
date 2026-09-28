@@ -286,6 +286,11 @@ class TestRefusals:
                    ("a-three", 2, "num"))
         self._refused(tab, "a-two", -2, "more than one level below")
 
+    def test_unnest_that_would_strand_a_next_item_of_another_list(self):
+        tab = _tab(("Alpha", 0, "num"), ("a-one", 1, "num"), ("a-two", 2, "num"),
+                   ("a-three", 2, "bul"))
+        self._refused(tab, "a-two", -2, "more than one level below")
+
     def test_levels_past_the_deepest(self):
         lines = [("L0", 0, "num")] + [(f"L{i}", i - 1, "num") for i in range(1, 10)]
         tab = _tab(*[(t, min(lvl, 8), lid) for t, lvl, lid in lines])

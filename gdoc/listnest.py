@@ -388,7 +388,9 @@ def plan_nesting(
             )
     below = neighbour(end, 1)
     if (
-        below is not None and _in_list(below, list_id)
+        # Any list item, including one of another list (a mixed sub-list),
+        # would be left dangling below the moved item.
+        below is not None and _bullet(below)
         and _level(below) > target[end] + 1
     ):
         raise _usage(
