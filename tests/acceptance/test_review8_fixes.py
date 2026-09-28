@@ -279,6 +279,46 @@ def test_non_utf8_input_file_is_a_usage_error(monkeypatch, tmp_path, command):
     assert not route.service.batches
 
 
+class _RacingService(NativeService):
+    """A collaborator edit lands between a staged write's first two batches."""
+
+    calls = 0
+
+    def batchUpdate(self, documentId, body):  # noqa: N802, N803 (Docs API names)
+        import httplib2
+        from googleapiclient.errors import HttpError
+
+        inner = super().batchUpdate(documentId, body)
+        service = self
+
+        class Request:
+            def execute(self, **kwargs):
+                service.calls += 1
+                if service.calls == 2:
+                    service.revision += 1
+                    raise HttpError(httplib2.Response({"status": "400"}), (
+                        b'{"error":{"message":"The required revision does '
+                        b'not match"}}'))
+                return inner.execute(**kwargs)
+
+        return Request()
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_rebased_write_says_so(route, as_json):
+    """R8-13: a write whose later stage rebased warns and reports it."""
+    route.service = _RacingService(NativeDoc(("p", "Old.")))
+    route.ok("cat")
+    arguments = {"json": True} if as_json else {}
+    code, output, error = route.call(
+        "write", text="Intro.\n\n| h |\n| --- |\n| v |\n\nAfter.\n", **arguments)
+    assert code == 0, output + error
+    assert route.service.calls >= 3
+    assert "were rebased onto it" in error
+    if as_json:
+        assert '"rebased": true' in output
+
+
 def test_written_rule_still_reads_as_rule(route):
     route.load(NativeDoc(("p", "seed")))
     route.ok("cat")

@@ -687,6 +687,7 @@ def _print_tab_write_result(
             "tab_id": result["tab_id"],
             "tab_title": title,
             "version": version,
+            **({"rebased": True} if result.get("rebased") else {}),
         }))
     elif mode == "plain":
         print(f"id\t{doc_id}")
@@ -1402,7 +1403,9 @@ def cmd_edit(args) -> int:
                 key = match["tabId"]
                 counts[key] = counts.get(key, 0) + 1
     if mode == "json":
-        print(format_json(replaced=occurrences, **({"tabs": counts} if counts else {})))
+        print(format_json(replaced=occurrences, **({"tabs": counts} if counts else {}),
+                          **({"rebased": True} if result_details.get("rebased")
+                             else {})))
     elif mode == "plain":
         print(f"id\t{doc_id}")
         print("status\tupdated")
@@ -1804,6 +1807,8 @@ def _write_native_markdown(
         }
         if version is not None:
             result["version"] = version
+        if details.get("rebased"):
+            result["rebased"] = True
         if command == "push":
             result["file"] = args.file
         print(format_json(**result))
@@ -3401,6 +3406,10 @@ def _record_acknowledged_write(doc_id, **provenance):
         print("WARN: write saved, but content provenance could not be recorded: "
               f"{error}",
               file=sys.stderr)
+    if provenance.get("rebased"):
+        print("WARN: another edit landed during this write, and its later "
+              "stages were rebased onto it. Read the tab again (`cat` or "
+              "`pull`) before the next write.", file=sys.stderr)
 
 
 def cmd_insert_image(args) -> int:
