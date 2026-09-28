@@ -575,6 +575,16 @@ class TestRefusals:
                    ("", 0, None), ("Bravo", 0, "num"))
         self._refused(tab, "Bravo", 1, "the item the moved items join")
 
+    @pytest.mark.parametrize("field", [
+        {"suggestedListPropertiesChanges": {"s.1": {}}},
+        {"suggestedDeletionIds": ["s.1"]},
+        {"suggestedInsertionId": "s.1"},
+    ])
+    def test_pending_suggestion_on_the_list_itself(self, field):
+        tab = _tab(*STD)
+        tab["lists"] = {**LISTS, "num": {**LISTS["num"], **field}}
+        self._refused(tab, "Bravo", 1, "the list itself has pending suggestions")
+
     def test_zero_levels(self):
         with pytest.raises(GdocError, match="at least 1"):
             plan_nesting(_tab(*STD), TAB, 3, 3, 0)

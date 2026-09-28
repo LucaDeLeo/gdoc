@@ -200,6 +200,25 @@ def _marker_differences(el: dict) -> list[str]:
     return sorted(set(odd))
 
 
+def _walk_suggestions(node, out: set[str]) -> None:
+    """Every suggestion ID under *node*, including string-valued fields
+    such as a list's ``suggestedInsertionId``."""
+    from gdoc.api.docs import _walk_suggestion_ids
+
+    _walk_suggestion_ids(node, out)
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for key, value in cur.items():
+                if key.startswith("suggested") and isinstance(value, str):
+                    out.add(value)
+                elif isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(cur, list):
+            stack.extend(cur)
+
+
 def _label(el: dict) -> str:
     text = _text(el).strip()
     return repr(text[:40] + ("..." if len(text) > 40 else ""))
@@ -462,10 +481,8 @@ def plan_nesting(
                 f"{_label(el)} has a hand-set indent; rebuilding it would "
                 "reset the indent to the list's standard one"
             )
-    from gdoc.api.docs import _walk_suggestion_ids
-
     suggestions: set[str] = set()
-    _walk_suggestion_ids([content[i] for i in window], suggestions)
+    _walk_suggestions([content[i] for i in window], suggestions)
     if suggestions:
         raise _usage(
             "the items to move contain pending suggestions ("
@@ -478,11 +495,20 @@ def plan_nesting(
     anchor = start - 1
     while anchor >= 0 and _is_blank(content[anchor]):
         anchor -= 1
-    _walk_suggestion_ids(content[anchor], suggestions)
+    _walk_suggestions(content[anchor], suggestions)
     if suggestions:
         raise _usage(
             f"{_label(content[anchor])}, the item the moved items join, has "
             "pending suggestions ("
+            + ", ".join(sorted(suggestions))
+            + "); accept or reject them first"
+        )
+    # A pending change to the list itself (its properties, insertion or
+    # deletion) could later alter the list the items rejoin.
+    _walk_suggestions(lists.get(list_id, {}), suggestions)
+    if suggestions:
+        raise _usage(
+            "the list itself has pending suggestions ("
             + ", ".join(sorted(suggestions))
             + "); accept or reject them first"
         )
