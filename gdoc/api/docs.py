@@ -3562,8 +3562,14 @@ def _default_preset(lists: dict, list_id: str) -> bool:
     """Whether a list's first level looks like gdoc's default preset, the
     only one createParagraphBullets can be relied on to join."""
     levels = lists.get(list_id, {}).get("listProperties", {}).get("nestingLevels", [])
-    first = levels[0] if levels else {}
-    return first.get("glyphType") == "DECIMAL" or first.get("glyphSymbol") == "●"
+    first, second = (levels + [{}, {}])[:2]
+    if first.get("glyphType") == "DECIMAL":
+        # 1. / a. (not 1) or 1.1.)
+        return (first.get("glyphFormat", "%0.") == "%0."
+                and second.get("glyphType", "ALPHA") == "ALPHA"
+                and second.get("glyphFormat", "%1.") == "%1.")
+    return (first.get("glyphSymbol") == "●"
+            and second.get("glyphSymbol", "○") == "○")
 
 
 def _refuse_list_split(parsed, content, first, last, lists) -> None:
@@ -3609,6 +3615,20 @@ def _flat_paragraphs(content):
                 yield from _flat_paragraphs(cell.get("content", []))
 
 
+def _each_item_kept(native, markdown, body, source, tab_id) -> bool:
+    """Whether each line replaces a list item of one list as an item of its
+    own kind and level, so each keeps its bullet paragraph by paragraph."""
+    from gdoc.mdparse import parse_markdown
+
+    lines = markdown.rstrip("\n").split("\n")
+    if (body is None or len(native) != len(lines)
+            or len({(p.get("bullet") or {}).get("listId") for p, _, _ in native}) != 1):
+        return False
+    lists = (_snapshot_tab(source, tab_id) or {}).get("lists", {})
+    return all(_same_list_item(parse_markdown(line), paragraph, lists)
+               for (paragraph, _, _), line in zip(native, lines))
+
+
 def _same_list_item(parsed, paragraph: dict, lists: dict):
     """The items' wording without markers, when every paragraph of ``parsed``
     is a list item of the same kind (numbered or bullet) and level as
@@ -3624,7 +3644,8 @@ def _same_list_item(parsed, paragraph: dict, lists: dict):
         return None
     level = bullet.get("nestingLevel", 0)
     ordered = _list_is_ordered(lists, bullet.get("listId", ""), level)
-    if any(item.list_depth != level
+    # One Markdown list at the item's level: a restart is another list.
+    if any(item.list_depth != level or item.list_group != items[0].list_group
            or item.style["bulletPreset"].startswith("NUMBERED") != ordered
            for item in items):
         return None
@@ -3642,8 +3663,10 @@ def _same_list_item(parsed, paragraph: dict, lists: dict):
                if s.type == "paragraph_style" else s.style))
         for s in parsed.styles if s.type != "bullets"]
     styles = [s for s in styles if s.type != "paragraph_style" or s.style]
+    images = [dataclasses.replace(image, plain_text_offset=moved(
+        image.plain_text_offset), removed_tabs_before=0) for image in parsed.images]
     return dataclasses.replace(
-        parsed, plain_text=text, styles=styles, removed_tabs=0,
+        parsed, plain_text=text, styles=styles, images=images, removed_tabs=0,
         non_default_list_starts=[], non_default_start_items=[])
 
 
@@ -4518,8 +4541,8 @@ def replace_formatted(
             # Items replacing as many existing items stay per paragraph,
             # where each keeps its native bullet.
             listed = sum(s.type == "bullets" for s in parsed.styles) > 1 and not (
-                all(p.get("bullet") for p, _, _ in native)
-                and len(native) == len(new_markdown.rstrip("\n").split("\n")))
+                _each_item_kept(native, new_markdown, body, source,
+                                match.get("tabId", tab_id)))
             contextual = body is not None and not ((parsed.tables or listed) and whole)
         if (body is not None and not new_markdown and not replace_paragraphs
                 and _removes_whole_paragraphs(body.get("content", []), match)):
@@ -4584,7 +4607,8 @@ def replace_formatted(
                 # keeps the native bullet, so the list and its numbering stay;
                 # new items split from it inherit the bullet.
                 _warn_list_starts(context[0], _continued_numbers(
-                    context[0], _list_number(body.get("content", []), replaced[1]) - 1))
+                    context[0], _list_number(body.get("content", []), replaced[1]) - 1,
+                    (replaced[0].get("bullet") or {}).get("nestingLevel", 0)))
                 planned.append((part, (kept, context[1])))
                 continue
             explicit = any(s.type in ("paragraph_style", "bullets")

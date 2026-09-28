@@ -367,14 +367,20 @@ class NativeDoc:
         lists = {}
         for list_id, preset in list_presets.items():
             # gdoc's two presets; any other (made in the Docs UI) differs.
-            glyph = ({"glyphType": "DECIMAL"}
-                     if preset == "NUMBERED_DECIMAL_ALPHA_ROMAN"
-                     else {"glyphType": "UPPER_ROMAN"} if preset.startswith("NUMBERED")
-                     else {"glyphSymbol": "●"} if preset == "BULLET_DISC_CIRCLE_SQUARE"
-                     else {"glyphSymbol": "❖"})
+            # gdoc's two presets, by level; any other (made in the Docs UI)
+            # differs, like 1) lists: DECIMAL with another format.
+            glyphs = {
+                "NUMBERED_DECIMAL_ALPHA_ROMAN": [
+                    {"glyphType": t, "glyphFormat": f"%{k}."}
+                    for k, t in enumerate(["DECIMAL", "ALPHA", "ROMAN"] * 3)],
+                "BULLET_DISC_CIRCLE_SQUARE": [
+                    {"glyphSymbol": c} for c in "●○■" * 3],
+            }.get(preset, [{"glyphType": "DECIMAL", "glyphFormat": f"%{k})"}
+                           if preset.startswith("NUMBERED") else {"glyphSymbol": "❖"}
+                           for k in range(9)])
             offset = self.list_offsets.get(int(list_id[1:]), 0)
             lists[list_id] = {"listProperties": {"nestingLevels": [{
-                **glyph,
+                **glyphs[k],
                 "indentStart": {"magnitude": 36 * (k + 1) + offset, "unit": "PT"},
                 "indentFirstLine": {"magnitude": 36 * (k + 1) + offset - 18,
                                     "unit": "PT"},

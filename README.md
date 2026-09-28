@@ -875,6 +875,21 @@ replacement. Write `[label](url)` in the replacement to set a link explicitly.
 Wording that does not keep a link also loses Docs' default link colour and
 underline; a custom colour on the linked text stays.
 
+### Editing list items
+
+Replacing whole list items with items of the same kind (numbered or bullet) and
+level keeps them in their native list, so `edit DOC "b" "2. b2\n3. b3"` in
+`1. a / 2. b / 3. c` gives `1. a / 2. b2 / 3. b3 / 4. c`. New items directly
+after a list item continue its list where writing the whole Markdown would: a
+deeper item nests under it, and an item at its level continues it (for a
+numbered item, when it asks for the next number). The same applies to `insert`
+at the end. This works for lists with gdoc's default bullet and number styles;
+after a list styled in Docs another way, the new items start their own list and
+gdoc warns. An edit that would start a new list of the same kind in front of the
+rest of the list it replaces items of, such as a nested item added under the
+first item, is refused, because the untouched items after it would renumber;
+reword each item keeping its level, or rewrite the tab with `write --tab`.
+
 ### Deleting across paragraphs
 
 An empty replacement removes complete matched paragraphs, and only those: every

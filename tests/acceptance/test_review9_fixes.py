@@ -347,3 +347,84 @@ def test_nested_item_continues_a_nested_item_above(route):
                                      position="end")
     assert code == 0 and "start at 1" not in output + error
     assert (_read(route), styles(doc)) == expected
+
+
+@pytest.mark.parametrize("base,old,new,expected", [
+    ("- p\n  - c\n    - a\n", "a", "    - X![](https://example.test/i.png)",
+     "- p\n  - c\n    - X![]"),
+    ("- p\n  - a\n", "a", "  - A\n  - B![](https://example.test/i.png)",
+     "- p\n  - A\n  - B![]"),
+])
+def test_images_in_kept_nested_items_keep_their_text(route, base, old, new, expected):
+    """Round 4 (Codex R4-1): image positions follow the removed nesting tabs."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    route.ok("edit", old_text=old, new_text=new)
+    assert _read(route).startswith(expected)
+
+
+@pytest.mark.parametrize("base", ["- a\n1. b\n", "1. a\n\n1. b\n"])
+def test_items_from_separate_lists_become_one_list(route, base):
+    """Round 4 (Codex R4-2)."""
+    doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    old = "a\n\nb" if "\n\n" in base else "a\nb"
+    route.ok("edit", old_text=old, new_text="1. A\n\n2. B" if "\n\n" in base
+             else "1. A\n2. B")
+    assert "1. A" in _read(route) and "2. B" in _read(route)
+    assert len({bullet[0] for _, _, bullet in styles(doc) if bullet}) == 1
+
+
+def test_expansion_with_a_restart_keeps_the_restart(route):
+    """Round 4 (Codex R4-3)."""
+    doc = route.load(NativeDoc(("p", "one", "NORMAL_TEXT", NUMBERED), ("p", "Tail")))
+    route.ok("cat")
+    route.ok("edit", old_text="one", new_text="1. A\n1. B")
+    assert _read(route) == "1. A\n1. B\nTail\n"
+    assert len({bullet[0] for _, _, bullet in styles(doc) if bullet}) == 2
+
+
+def test_kept_nested_item_with_its_own_number_does_not_warn(route):
+    """Round 4 (Codex R4-4)."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="1. p\n  1. one\n  2. two\n")
+    code, output, error = route.call("edit", old_text="two", new_text="  2. TWO")
+    assert code == 0 and "start at 1" not in output + error
+    assert _read(route) == "1. p\n  1. one\n  2. TWO\n"
+
+
+@pytest.mark.parametrize("base,old,new,expected", [
+    ("- a\n- b\n- c\n", "a\nb\nc", "1. x\n2. y\n3. z", "1. x\n2. y\n3. z\n"),
+    ("1. a\n2. b\n3. c\n4. d\n", "b\nc", "- x\n- y", None),
+    ("1. a\n  1. b\n  2. c\n2. d\n", "b\nc", "2. x\n3. y", "1. a\n2. x\n3. y\n4. d\n"),
+])
+def test_same_count_edits_changing_kind_or_level_make_one_list(
+        route, base, old, new, expected):
+    """Round 4 (Claude R4-1): a same-count edit that changes the items' kind
+    or level compiles as one list."""
+    doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    route.ok("edit", old_text=old, new_text=new)
+    if expected:
+        assert _read(route) == expected
+    lists = {}
+    for text, _, bullet in styles(doc):
+        if bullet:
+            lists.setdefault(text in ("x", "y", "z"), set()).add(bullet[0])
+    assert len(lists[True]) == 1
+
+
+def test_append_after_a_parenthesized_list_warns(route):
+    """Round 4 (Claude R4-3): a 1) list is not gdoc's preset; no join is
+    assumed, and the reset warns."""
+    parens = {"preset": "NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS", "list": 1, "nest": 0}
+    route.load(NativeDoc(("p", "a", "NORMAL_TEXT", parens),
+                         ("p", "b", "NORMAL_TEXT", parens)))
+    route.ok("cat")
+    code, output, error = route.call("insert", text="3. c\n", tab="t.0",
+                                     position="end")
+    assert code == 0 and "start at 1" in output + error
