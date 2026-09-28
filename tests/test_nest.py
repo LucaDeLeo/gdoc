@@ -513,6 +513,15 @@ class TestRefusals:
         ]
         assert _plan(tab, "Bravo", 1).moved == 1
 
+    def test_explicitly_unbolded_marker_with_inherited_bold_is_refused(self):
+        # A heading style may make the text bold with no bold field on the
+        # runs; the marker's explicit false is refused regardless.
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"bold": False, "underline": False}
+        para["paragraphStyle"] = {"namedStyleType": "HEADING_2"}
+        self._refused(tab, "Bravo", 1, "formatted bullet or number \\(bold\\)")
+
     def test_plain_marker_style_is_not_formatting(self):
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {

@@ -156,12 +156,11 @@ def _marker_differences(el: dict) -> list[str]:
     """Formatting on the item's bullet or number that a rebuild could drop.
 
     Refused: a marker field outside ``_MARKER_FIELDS_KEPT``, a kept field
-    the item's end-of-text style does not share, and an explicit false
-    (say an unbolded number on bold text) that the text contradicts.
+    not carried by every text run, any explicit false (a hand-set
+    override), and a style every run carries that the marker lacks.
     ``underline: false`` is on every plain marker and is ignored.
     """
     marker = (_bullet(el) or {}).get("textStyle") or {}
-    text = _newline_style(el)
     runs = [
         pe["textRun"].get("textStyle", {})
         for pe in (_paragraph(el) or {}).get("elements", [])
@@ -170,7 +169,10 @@ def _marker_differences(el: dict) -> list[str]:
     odd = []
     for key, m in marker.items():
         if m is False:
-            if key != "underline" and text.get(key) is True:
+            # Only underline:false is on every plain marker. Any other
+            # explicit false is a hand-set override whose survival depends
+            # on the text's effective (possibly inherited) style: refuse.
+            if key != "underline":
                 odd.append(key)
         elif key not in _MARKER_FIELDS_KEPT or not runs or any(
             r.get(key) != m for r in runs
@@ -194,15 +196,6 @@ def _marker_differences(el: dict) -> list[str]:
         if marker.get(key) != values[0]:
             odd.append(key)
     return sorted(set(odd))
-
-
-def _newline_style(el: dict) -> dict:
-    """Text style of the run that ends the paragraph (holds its newline)."""
-    for pe in reversed((_paragraph(el) or {}).get("elements", [])):
-        run = pe.get("textRun")
-        if run is not None and run.get("content", "").endswith("\n"):
-            return run.get("textStyle", {})
-    return {}
 
 
 def _label(el: dict) -> str:
