@@ -236,3 +236,35 @@ def test_top_level_item_after_a_nested_last_item_warns(route):
     code, output, error = route.call("insert", text="2. q\n", tab="t.0",
                                      position="end")
     assert code == 0 and "start at 1" in output + error
+
+
+def test_mixed_item_and_prose_become_one_list(route):
+    """Round 3 (R3-1): an item and a prose paragraph replaced by two items
+    make one list."""
+    doc = route.load(NativeDoc(("p", "one", "NORMAL_TEXT", NUMBERED),
+                               ("p", "two")))
+    route.ok("cat")
+    route.ok("edit", old_text="one\ntwo", new_text="1. NEW\n2. AGAIN")
+    assert _read(route) == "1. NEW\n2. AGAIN\n"
+    assert len({bullet[0] for _, _, bullet in styles(doc) if bullet}) == 1
+
+
+def test_heading_requested_on_an_item_is_applied(route):
+    """Round 3 (R3-2): the keep-bullet shortcut does not drop a heading."""
+    doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="- one\n- two\n")
+    route.ok("edit", old_text="one", new_text="- ## NEW")
+    assert _read(route) == "- ## NEW\n- two\n"
+    assert styles(doc)[0][1] == "HEADING_2"
+
+
+def test_restart_inside_an_appended_fragment_still_warns(route):
+    """Round 3 (R3-3): only the continuing list's numbers are predicted."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="1. a\n")
+    code, output, error = route.call(
+        "insert", text="2. b\n1. restart\n4. requested\n", tab="t.0",
+        position="end")
+    assert code == 0 and "starts at 4" in output + error

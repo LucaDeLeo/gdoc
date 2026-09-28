@@ -3551,7 +3551,10 @@ def _list_continuation(parsed, content, above, lists, same_list=False):
 def _continued_numbers(parsed, above: int) -> dict:
     """The numbers the fragment's top-level items show when they continue a
     list whose item above shows ``above``."""
-    top = [s for s in parsed.styles if s.type == "bullets" and not s.list_depth]
+    top = sorted((s for s in parsed.styles if s.type == "bullets"
+                  and not s.list_depth), key=lambda s: s.start)
+    # Only the first top-level list continues; a restart ends it.
+    top = [s for s in top if top and s.list_group == top[0].list_group]
     return {item.start: above + k for k, item in enumerate(top, 1)}
 
 
@@ -3575,7 +3578,11 @@ def _same_list_item(parsed, paragraph: dict, lists: dict):
                    key=lambda s: s.start)
     if (not bullet or not items or parsed.tables or parsed.code_blocks
             or len(items) != parsed.plain_text.rstrip("\n").count("\n") + 1
-            or any(s.type == "markdown_prefix" for s in parsed.styles)):
+            or any(s.type == "markdown_prefix" for s in parsed.styles)
+            # A heading requested on an item is a style change to apply.
+            or any(s.type == "paragraph_style" and s.style.get(
+                "namedStyleType", "NORMAL_TEXT") != "NORMAL_TEXT"
+                for s in parsed.styles)):
         return None
     level = bullet.get("nestingLevel", 0)
     ordered = _list_is_ordered(lists, bullet.get("listId", ""), level)
@@ -4468,7 +4475,7 @@ def replace_formatted(
             # Items replacing as many existing items stay per paragraph,
             # where each keeps its native bullet.
             listed = sum(s.type == "bullets" for s in parsed.styles) > 1 and not (
-                any(p.get("bullet") for p, _, _ in native)
+                all(p.get("bullet") for p, _, _ in native)
                 and len(native) == len(new_markdown.rstrip("\n").split("\n")))
             contextual = body is not None and not ((parsed.tables or listed) and whole)
         if (body is not None and not new_markdown and not replace_paragraphs
