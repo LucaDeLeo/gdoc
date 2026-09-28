@@ -2,6 +2,7 @@
 
 import html
 import re
+from array import array
 
 
 def _format_author(author_dict: dict) -> str:
@@ -102,10 +103,10 @@ _MARKUP = re.compile(
 )
 
 
-def _visible_text(markdown: str) -> tuple[str, list[int]]:
+def _visible_text(markdown: str) -> tuple[str, array]:
     """The markdown's visible text, and each char's index in *markdown*."""
     chars: list[str] = []
-    where: list[int] = []
+    where = array("q")  # one compact int per char
 
     def keep(start: int, end: int) -> None:
         chars.extend(markdown[start:end])
@@ -135,7 +136,7 @@ def _visible_text(markdown: str) -> tuple[str, list[int]]:
 
 
 def _place_live(
-    markdown: str, visible: tuple[str, list[int]], anchor: dict,
+    markdown: str, visible: tuple[str, array], anchor: dict,
 ) -> int | None:
     """Line index for a live anchor, or None when it can't be pinned down.
 

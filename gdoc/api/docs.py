@@ -1,8 +1,11 @@
 """Google Docs API v1 wrapper functions with error translation."""
 
 import re
+from array import array
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import pairwise
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -452,6 +455,23 @@ def get_document(doc_id: str) -> dict:
 def _utf16_len(ch: str) -> int:
     """Width of one code point in UTF-16 code units (Docs API indices)."""
     return 2 if ord(ch) > 0xFFFF else 1
+
+
+def _text_runs(content: list[dict]):
+    """(start index, text) of every text run, tables included, in order."""
+    for element in content:
+        paragraph = element.get("paragraph")
+        if paragraph is not None:
+            for pe in paragraph.get("elements", []):
+                text_run = pe.get("textRun")
+                if text_run is not None:
+                    yield pe.get("startIndex", 0), text_run.get("content", "")
+            continue
+        table = element.get("table")
+        if table is not None:
+            for row in table.get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    yield from _text_runs(cell.get("content", []))
 
 
 def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
@@ -2117,7 +2137,8 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     # disagrees with the markdown leaves the comment unplaced, not misplaced.
     tabs = list(walk(document.get("tabs", [])))
     text_parts: list[str] = []
-    position: dict[str, dict[int, int]] = {}
+    # tab ID -> (position of the tab's first char, each char's doc index)
+    position: dict[str, tuple[int, array]] = {}
     ranges_by_anchor: dict[str, list[tuple[str, int, int]]] = {}
     offset = 0
     for tab in tabs:
@@ -2127,18 +2148,31 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
             text_parts.append(title + "\n")
             offset += len(title) + 1
         doc_tab = tab.get("documentTab", {})
-        chars = sorted(
-            pair
-            for segment in _collect_segments(
-                doc_tab.get("body", {}).get("content", [])
-            )
-            for pair in segment
-        )
-        tab_position = position.setdefault(tab_id, {})
-        for i, (index, ch) in enumerate(chars):
-            tab_position[index] = offset + i
-        text_parts.append("".join(ch for _index, ch in chars))
-        offset += len(chars)
+        # One compact int per char (a per-char dict of tuples costs ~200
+        # bytes a char on a book-length document).
+        indices = array("q")
+        pieces: list[str] = []
+        for start, run in _text_runs(
+            doc_tab.get("body", {}).get("content", []),
+        ):
+            if len(run.encode("utf-16-le")) == 2 * len(run):
+                indices.extend(range(start, start + len(run)))
+            else:
+                # Doc indices are UTF-16 units: an emoji advances by 2.
+                i = start
+                for ch in run:
+                    indices.append(i)
+                    i += _utf16_len(ch)
+            pieces.append(run)
+        tab_text = "".join(pieces)
+        if any(b <= a for a, b in pairwise(indices)):
+            # Runs out of document order: sort chars by doc index.
+            order = sorted(range(len(indices)), key=indices.__getitem__)
+            indices = array("q", (indices[i] for i in order))
+            tab_text = "".join(tab_text[i] for i in order)
+        position[tab_id] = (offset, indices)
+        text_parts.append(tab_text)
+        offset += len(tab_text)
         for anchor_id, anchor in doc_tab.get("commentAnchors", {}).items():
             for r in anchor.get("ranges", []):
                 # A range in a header, footer or footnote (segmentId) is
@@ -2165,14 +2199,18 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
         anchor_id = comment.get("anchorId")
         if not comment_id or not anchor_id:
             continue
-        # Doc indices are UTF-16 units: the second unit of an emoji has no
-        # position of its own and is skipped.
-        spots = sorted(
-            position.get(tab_id, {})[i]
-            for tab_id, start, end in ranges_by_anchor.get(anchor_id, [])
-            for i in range(start, end)
-            if i in position.get(tab_id, {})
-        )
+        # Chars whose doc index falls in a range; the second UTF-16 unit
+        # of an emoji has no char of its own.
+        spots: list[int] = []
+        for tab_id, start, end in ranges_by_anchor.get(anchor_id, []):
+            if tab_id not in position:
+                continue
+            base, indices = position[tab_id]
+            spots.extend(range(
+                base + bisect_left(indices, start),
+                base + bisect_left(indices, end),
+            ))
+        spots.sort()
         if anchor_id not in ranges_by_anchor:
             anchors[comment_id] = None
             continue

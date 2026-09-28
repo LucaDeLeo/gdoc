@@ -96,8 +96,8 @@ Comments not placed inline go at the bottom, with a note when there is one:
 `[detached]` means the anchored text is all gone (Docs shows "Original content
 deleted"). `[attached, location not found]` means the comment is attached but
 its text can't be pinned to one line: it is on an image, on footnote text, or on
-heading text that a table of contents repeats, or the document changed while it
-was being read. `--json` reports the source as `"anchors"`: `live`,
+heading text that a table of contents may repeat, or the document changed while
+it was being read. `--json` reports the source as `"anchors"`: `live`,
 `live_no_locations` (status known, lines dropped), `quoted_text`, or `none` (no
 comments). When live anchors can't be read (no preview access, no comment
 access, or the request fails), the CLI warns and places every comment by its

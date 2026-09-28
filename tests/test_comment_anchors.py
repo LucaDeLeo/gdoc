@@ -239,6 +239,22 @@ class TestGetCommentAnchors:
         )
         assert _anchors(doc)["c1"]["key"] == "second"
 
+    def test_runs_out_of_document_order_are_sorted(self):
+        tab = _tab("t.1", [], {})
+        tab["documentTab"]["body"]["content"] = [
+            {"paragraph": {"elements": [
+                {"startIndex": 8, "textRun": {"content": "second\n"}},
+            ]}},
+            {"paragraph": {"elements": [
+                {"startIndex": 1, "textRun": {"content": "first.\n"}},
+            ]}},
+        ]
+        tab["documentTab"]["commentAnchors"] = {"kix.a": {"ranges": [
+            {"startIndex": 1, "endIndex": 6, "tabId": "t.1"},
+        ]}}
+        anchors = _anchors(_document([tab], {"c1": "kix.a"}))
+        assert anchors["c1"]["text"] == "first"
+
     def test_request_uses_the_preview_view(self):
         session = MagicMock()
         session.get.return_value = _response(body=_document([], {}))
