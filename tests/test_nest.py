@@ -529,6 +529,27 @@ class TestRefusals:
         }
         assert _plan(tab, "Bravo", 1).moved == 1
 
+    def test_floating_object_on_a_rebuilt_item(self):
+        tab = _tab(("Alpha", 0, "num"),
+                   ("Bravo", 0, "num", {"positionedObjectIds": ["kix.obj1"]}))
+        self._refused(tab, "Bravo", 1, "floating image or drawing")
+
+    def test_named_range_over_the_rebuilt_items(self):
+        tab = _tab(*STD)
+        tab["namedRanges"] = {"anchor": {"name": "anchor", "namedRanges": [
+            {"namedRangeId": "n1", "name": "anchor",
+             "ranges": [{"startIndex": 14, "endIndex": 17}]},
+        ]}}
+        self._refused(tab, "Bravo", 1, "named range 'anchor'")
+
+    def test_named_range_elsewhere_is_fine(self):
+        tab = _tab(*STD)
+        tab["namedRanges"] = {"intro": {"name": "intro", "namedRanges": [
+            {"namedRangeId": "n1", "name": "intro",
+             "ranges": [{"startIndex": 1, "endIndex": 5}]},
+        ]}}
+        assert _plan(tab, "Bravo", 1).moved == 1
+
     def test_pending_suggestion(self):
         tab = _tab(("Alpha", 0, "num"),
                    ("Bravo", 0, "num", {"suggestedBulletChanges": {"s.1": {}}}))

@@ -475,6 +475,25 @@ def plan_nesting(
     s0 = content[start]["startIndex"]
     e0 = content[end]["endIndex"]
 
+    # The rebuild inserts and later deletes a paragraph break at the window
+    # start; the Docs API warns that deleting across a paragraph boundary
+    # can move positioned objects and change named ranges. Untested, so
+    # refused.
+    for i in window:
+        if (_paragraph(content[i]) or {}).get("positionedObjectIds"):
+            raise _usage(
+                f"{_label(content[i])} has a floating image or drawing "
+                "anchored to it, which the rebuild could move"
+            )
+    for name, named in (document_tab.get("namedRanges") or {}).items():
+        for nr in named.get("namedRanges", []):
+            for r in nr.get("ranges", []):
+                if r.get("startIndex", 0) <= e0 and r.get("endIndex", 0) >= s0:
+                    raise _usage(
+                        f"the items to rebuild overlap the named range {name!r}, "
+                        "which the rebuild could change"
+                    )
+
     def rng(s: int, e: int) -> dict:
         return {"startIndex": s, "endIndex": e, "tabId": tab_id}
 

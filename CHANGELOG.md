@@ -21,8 +21,8 @@ All notable changes to `gdoc` are documented here. This project follows
     the top level;
   - checkbox and custom-glyph lists, and numbered presets other than
     `1. a. i.` (for example `1) a) i)`);
-  - items that start with a tab, carry a hand-set indent, or hold pending
-    suggestions;
+  - items that start with a tab, carry a hand-set indent, hold pending
+    suggestions, anchor a floating image or drawing, or overlap a named range;
   - items whose bullet or number has its own formatting (anything but bold on
     a fully bold item), or a style covering the whole item but not its
     marker;
