@@ -68,6 +68,18 @@ All notable changes to `gdoc` are documented here. This project follows
 
 - A list quoted inside a nested list item keeps its own bullets or numbering;
   the enclosing list no longer absorbs it.
+- Nested list items get their native nesting level, not only an indent: a
+  nested restart, an orphan nested item or a nested list under another bullet
+  type no longer reads back flat. A later nested numbered list no longer
+  continues an earlier sublist's numbering.
+- `edit OLD ""` removes exactly the matched paragraphs. Removing the last
+  paragraph, or one before a table, no longer also deletes an empty paragraph,
+  rule or code line above it, and it no longer refuses after a list item. It is
+  refused when it would delete a paragraph break carrying a suggestion.
+- A whole-paragraph replacement with a table inside list-item content stays in
+  the item instead of reading back as quotes, and a table replacing a paragraph
+  between blank lines adds no extra blank paragraph.
+- A rule or empty heading between two tables keeps its own quote or item.
 - Whitespace between differently styled runs in a document with an explicit
   font reads as plain whitespace, not doubled spaces or empty `**` markers.
 - An empty paragraph reads as `---` only when its bottom border is visible.

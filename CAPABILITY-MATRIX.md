@@ -40,5 +40,6 @@ reported with the replacement PR; task timings distinguish offline execution fro
 Google latency.
 
 Root and nested restarts at 1, continuation across prose and mixed lists, and literal
-tabs passed a combined live readback. Independent same-style interleaved lists that
+tabs passed a combined live readback. Each item's native nesting level matches its
+Markdown depth, including restarted, orphan and mixed nested lists, checked live. Independent same-style interleaved lists that
 require a new non-1 start remain within the explicit numbering shortfall.

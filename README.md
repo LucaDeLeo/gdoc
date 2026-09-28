@@ -877,12 +877,22 @@ underline; a custom colour on the linked text stays.
 
 ### Deleting across paragraphs
 
-An empty replacement removes complete matched paragraphs. A match that starts or
-ends inside a paragraph and spans a paragraph break joins the remaining text into
-one paragraph, which always keeps the first paragraph's style. Matches are on the
+An empty replacement removes complete matched paragraphs, and only those: every
+other paragraph keeps its style, list and container. A match that starts or ends
+inside a paragraph and spans a paragraph break joins the remaining text into one
+paragraph, which keeps the first paragraph's style and list. Matches are on the
 document's text, so `edit DOC "lo\nwor" ""` on the paragraph `Hello` followed by
-the heading `world` leaves the paragraph `Helld`. A join that would move a list
-item's text off its list is refused; use `write --tab` for that change.
+the heading `world` leaves the paragraph `Helld`. A join that starts at a list
+item's first character is refused when the paragraph it joins has another list
+state, because Docs would give the result that paragraph's list.
+
+Docs cannot delete a tab's last paragraph break or the one before a table, so
+removing the paragraphs there deletes the break of the paragraph above instead;
+that paragraph keeps its own style and list. Two such removals are refused, with
+nothing sent: one with no paragraph above (use `write --tab`), and one whose
+paragraph above is an empty list item of another list, which cannot be kept.
+A removal that would delete any character or paragraph break carrying a pending
+suggestion, including a break outside the matched text, is refused too.
 
 ### Multi-line arguments from stdin
 
