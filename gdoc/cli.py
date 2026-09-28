@@ -406,7 +406,8 @@ def cmd_cat(args) -> int:
         from gdoc.api.docs import get_comment_anchors
         from gdoc.util import PreviewUnavailableError
         try:
-            anchors = get_comment_anchors(doc_id)
+            # No comments, nothing to place: skip the full-document read.
+            anchors = get_comment_anchors(doc_id) if comments else {}
         except PreviewUnavailableError as e:
             anchors = None
             print(

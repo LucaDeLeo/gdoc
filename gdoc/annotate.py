@@ -1,5 +1,6 @@
 """Line-numbered comment annotation engine for cat --comments."""
 
+import html
 import re
 
 
@@ -79,12 +80,13 @@ def _find_all(text: str, key: str) -> list[int]:
     return starts
 
 
-# Markdown that isn't visible text: an escape (keeps the escaped char), a
-# code span (keeps its contents), an image, a link (keeps its label), a
-# reference definition line, or an emphasis marker. Underscores inside a
-# word are literal, as in CommonMark.
+# Markdown that isn't visible text: an escape (keeps the escaped char), an
+# HTML entity (keeps the decoded char), a code span (keeps its contents),
+# an image, a link (keeps its label), a reference definition line, or an
+# emphasis marker. Underscores inside a word are literal, as in CommonMark.
 _MARKUP = re.compile(
     r"\\(.)"
+    r"|(&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)"
     r"|(`+)(.+?)\2"
     r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
     r"|\[((?:\\.|[^\]\\])*)\]\([^)]*\)"
@@ -109,10 +111,14 @@ def _visible_text(markdown: str) -> tuple[str, list[int]]:
             keep(pos, m.start())
             if m.group(1) is not None:
                 keep(m.start(1), m.end(1))
-            elif m.group(3) is not None:
-                keep(m.start(3), m.end(3))
+            elif m.group(2) is not None:
+                decoded = html.unescape(m.group(2))
+                chars.extend(decoded)
+                where.extend([m.start(2)] * len(decoded))
             elif m.group(4) is not None:
-                scan(m.start(4), m.end(4))
+                keep(m.start(4), m.end(4))
+            elif m.group(5) is not None:
+                scan(m.start(5), m.end(5))
             pos = m.end()
         keep(pos, end)
 
@@ -120,10 +126,12 @@ def _visible_text(markdown: str) -> tuple[str, list[int]]:
     return "".join(chars), where
 
 
-def _place_live(markdown: str, anchor: dict) -> int | None:
+def _place_live(
+    markdown: str, visible: tuple[str, list[int]], anchor: dict,
+) -> int | None:
     """Line index for a live anchor, or None when it can't be pinned down.
 
-    The anchor's key is found in the markdown's visible text, so emphasis
+    The anchor's key is found in the markdown's *visible* text, so emphasis
     markers, escapes and link targets neither hide nor fake a match. When
     the key occurs more than once, the anchor's own occurrence (counted in
     the document text) picks one, provided the markdown has the same
@@ -132,12 +140,13 @@ def _place_live(markdown: str, anchor: dict) -> int | None:
     key = anchor.get("key", "")
     if not key:
         return None
-    visible, where = _visible_text(markdown)
-    starts = _find_all(visible, key)
-    if not starts or len(starts) != anchor.get("occurrences"):
-        return None
-    last = where[starts[anchor["occurrence"]] + len(key) - 1]
-    return markdown.count("\n", 0, last)
+    text, where = visible
+    starts = _find_all(text, key)
+    for occurrence, occurrences in anchor.get("counts", []):
+        if starts and len(starts) == occurrences:
+            last = where[starts[occurrence] + len(key) - 1]
+            return markdown.count("\n", 0, last)
+    return None
 
 
 def annotate_markdown(
@@ -188,13 +197,16 @@ def annotate_markdown(
             (c, anchor_text, note),
         )
 
+    visible = None  # built on first use
     for c in comments:
         if c.get("id") in anchors:
             live = anchors[c["id"]]
             if live is None:
                 unanchored.append((c, "detached"))
                 continue
-            line_idx = _place_live(markdown, live)
+            if visible is None:
+                visible = _visible_text(markdown)
+            line_idx = _place_live(markdown, visible, live)
             if line_idx is None:
                 unanchored.append((c, "attached, location not found"))
             else:

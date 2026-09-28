@@ -2050,9 +2050,11 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
       anchor covers only non-text content such as an image.
     - ``key``: the anchored text in the paragraph where the anchor ends,
       stripped — the text ``cat --comments`` looks for to pick a line.
-    - ``occurrence`` / ``occurrences``: which occurrence of ``key`` this is
-      (0-based) and how many there are, counted over every tab's text in
-      tab order.
+    - ``counts``: ``(occurrence, occurrences)`` pairs — which occurrence
+      of ``key`` this is (0-based) and how many there are, over every tab's
+      text in tab order; then, if tab titles also contain ``key``, the same
+      counted with each title before its tab, as the markdown export of a
+      tabbed document heads each tab. Empty when ``key`` can't be located.
 
     Comments missing from the result have no live anchor (for example,
     comments created through the Drive API with only a quote).
@@ -2108,14 +2110,21 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
             yield t
             yield from walk(t.get("childTabs", []))
 
-    # Every tab's text as one string, tab after tab, plus each tab's map
-    # from doc index to position in that string.
+    # Every tab's title and text as one string, tab after tab, plus each
+    # tab's map from doc index to position in that string. The markdown
+    # export of a tabbed document heads each tab with its title.
     text_parts: list[str] = []
     position: dict[str, dict[int, int]] = {}
+    title_spans: list[tuple[int, int]] = []
     ranges_by_anchor: dict[str, list[tuple[str, int, int]]] = {}
     offset = 0
     for tab in walk(document.get("tabs", [])):
         tab_id = tab.get("tabProperties", {}).get("tabId", "")
+        title = tab.get("tabProperties", {}).get("title", "")
+        if title:
+            text_parts.append(title + "\n")
+            title_spans.append((offset, offset + len(title)))
+            offset += len(title) + 1
         doc_tab = tab.get("documentTab", {})
         chars = sorted(
             pair
@@ -2127,7 +2136,7 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
         tab_position = position.setdefault(tab_id, {})
         for i, (index, ch) in enumerate(chars):
             tab_position[index] = offset + i
-            text_parts.append(ch)
+        text_parts.append("".join(ch for _index, ch in chars))
         offset += len(chars)
         for anchor_id, anchor in doc_tab.get("commentAnchors", {}).items():
             for r in anchor.get("ranges", []):
@@ -2168,9 +2177,7 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
             continue
         if not spots:
             # Still attached, but only to non-text content (an image).
-            anchors[comment_id] = {
-                "text": "", "key": "", "occurrence": 0, "occurrences": 0,
-            }
+            anchors[comment_id] = {"text": "", "key": "", "counts": []}
             continue
         text = "".join(full_text[p] for p in spots)
         # A soft line break (vertical tab) ends a markdown line too.
@@ -2185,20 +2192,24 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
                 break
             line_start = cut
         key = part.strip()
-        occurrence = occurrences = 0
+        counts: list[tuple[int, int]] = []
         if key:
             key_pos = spots[cut + 1 + (len(part) - len(part.lstrip()))]
             starts = find_all(key)
             # Split ranges can make key text that never occurs as one run;
-            # zero occurrences leaves the comment unplaced.
+            # no counts leaves the comment unplaced.
             if key_pos in starts:
-                occurrence = starts.index(key_pos)
-                occurrences = len(starts)
+                body = [
+                    p for p in starts
+                    if not any(a <= p < b for a, b in title_spans)
+                ]
+                counts.append((body.index(key_pos), len(body)))
+                if len(body) != len(starts):
+                    counts.append((starts.index(key_pos), len(starts)))
         anchors[comment_id] = {
             "text": text,
             "key": key,
-            "occurrence": occurrence,
-            "occurrences": occurrences,
+            "counts": counts,
         }
     return anchors
 

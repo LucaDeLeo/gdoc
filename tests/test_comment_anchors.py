@@ -113,7 +113,7 @@ class TestGetCommentAnchors:
         )
         assert _anchors(doc) == {
             "c1": {"text": "quick red fox", "key": "quick red fox",
-                   "occurrence": 0, "occurrences": 1},
+                   "counts": [(0, 1)]},
             "c2": None,
         }
 
@@ -147,8 +147,20 @@ class TestGetCommentAnchors:
             ],
             {"c1": "kix.a"},
         )
-        anchor = _anchors(doc)["c1"]
-        assert (anchor["occurrence"], anchor["occurrences"]) == (2, 3)
+        assert _anchors(doc)["c1"]["counts"] == [(2, 3)]
+
+    def test_tab_titles_add_a_second_count(self):
+        # The export heads each tab with its title, so "Budget" in the
+        # body is the second occurrence once titles are counted.
+        tab = _tab("t.1", ["Budget"], {"kix.a": ["Budget"]})
+        tab["tabProperties"]["title"] = "Budget"
+        doc = _document([tab], {"c1": "kix.a"})
+        assert _anchors(doc)["c1"]["counts"] == [(0, 1), (1, 2)]
+        result = annotate_markdown(
+            "# Budget\n\nBudget\n", [_comment("c1", "Budget")],
+            anchors=_anchors(doc),
+        )
+        assert _annotation_line(result, "c1") == 3
 
     def test_child_tabs_are_searched(self):
         child = _tab("t.child", ["Nested text here."], {"kix.a": ["Nested"]})
@@ -183,9 +195,7 @@ class TestGetCommentAnchors:
             {"startIndex": 1, "endIndex": 2, "tabId": "t.1"},
         ]}}
         anchors = _anchors(_document([tab], {"c1": "kix.a"}))
-        assert anchors["c1"] == {
-            "text": "", "key": "", "occurrence": 0, "occurrences": 0,
-        }
+        assert anchors["c1"] == {"text": "", "key": "", "counts": []}
         result = annotate_markdown(
             "![](image.png)\n", [_comment("c1", "x")], anchors=anchors,
         )
@@ -423,8 +433,9 @@ class TestProbeScenarios:
         ("5*3 today", "[5\\*3 today](https://example.com)"),
         ("bold and italic", "**bold** and _italic_"),
         ("~5 minutes", "~5 minutes"),
+        ("Q&A <draft>", "Q&amp;A &lt;draft&gt;"),
     ], ids=["code-span", "intraword-underscore", "escape-in-link",
-            "emphasis", "tilde"])
+            "emphasis", "tilde", "html-entities"])
     def test_literal_characters_survive_the_visible_text(
         self, text, markdown,
     ):
@@ -435,6 +446,16 @@ class TestProbeScenarios:
             markdown + "\n", [_comment("c1", text)], anchors=_anchors(doc),
         )
         assert _annotation_line(result, "c1") == 1
+
+    def test_visible_text_is_built_once_per_call(self):
+        from gdoc import annotate
+
+        anchors = _anchors(EDITS_DOC)
+        with patch.object(
+            annotate, "_visible_text", wraps=annotate._visible_text,
+        ) as spy:
+            annotate_markdown(EDITS_MD, EDITS_COMMENTS, anchors=anchors)
+        assert spy.call_count == 1
 
     def test_comment_without_live_anchor_uses_its_quote(self):
         result = annotate_markdown(
@@ -526,6 +547,18 @@ class TestCatOutput:
         )
         assert "[#control open] [quoted text found]" in captured.out
         assert "[quoted text not found (edited or detached)]" in captured.out
+
+    def test_no_comments_skips_the_anchor_read(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        monkeypatch.setattr(
+            "gdoc.api.comments.list_comments", lambda *a, **k: [],
+        )
+        _no_preview(monkeypatch)  # would WARN if it were called
+        assert cmd_cat(_cat_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert json.loads(captured.out)["anchors"] == "live"
 
     def test_fallback_json(self, edited_doc, monkeypatch, capsys):
         _no_preview(monkeypatch)
