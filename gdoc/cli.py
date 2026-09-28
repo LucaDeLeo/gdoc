@@ -260,27 +260,42 @@ def cmd_revisions(args) -> int:
 def _export_with_anchors(
     doc_id: str, want_anchors: bool,
 ) -> tuple[str, dict | None]:
-    """The markdown export and the live comment anchors at the same revision.
+    """The markdown export and the live comment anchors from one version.
 
     Live anchors show whether each comment is still attached; Drive's
     quoted text alone can't (it never changes after an edit). Anchors are
     placed by counting occurrences of their text, so they must come from
-    the revision that was exported: the revision is checked after the
-    export and the pair re-read once if a collaborator edited in between.
-    If it keeps changing, comments keep their attached/detached status but
-    lose their line. Returns anchors None when they can't be read (the
-    caller falls back to quoted text); {} when *want_anchors* is False.
+    the version that was exported: the Drive file version (visible to any
+    reader) is checked before and after, and the pair re-read once if it
+    changed. If it keeps changing, or can't be confirmed, comments keep
+    their attached/detached status but lose their line. Returns anchors
+    None when they can't be read (the caller falls back to quoted text);
+    {} when *want_anchors* is False.
     """
-    from gdoc.api.docs import get_comment_anchors, get_revision_id
-    from gdoc.api.drive import export_doc
+    from google.auth.exceptions import TransportError
+    from httplib2 import HttpLib2Error
+
+    from gdoc.api.docs import get_comment_anchors
+    from gdoc.api.drive import export_doc, get_file_version
     from gdoc.util import AuthError, PreviewUnavailableError
 
     if not want_anchors:
         # No comments, nothing to place: skip the full-document read.
         return export_doc(doc_id, mime_type="text/markdown"), {}
-    for _attempt in range(2):
+
+    def version():
         try:
-            anchors, revision = get_comment_anchors(doc_id)
+            return get_file_version(doc_id).get("version")
+        except AuthError:
+            raise
+        except (GdocError, HttpLib2Error, TransportError, OSError):
+            return None
+
+    problem = "the document changed while it was being read"
+    for _attempt in range(2):
+        before = version()
+        try:
+            anchors = get_comment_anchors(doc_id)
         except PreviewUnavailableError as e:
             print(
                 f"WARN: live comment anchors unavailable ({e}); comments "
@@ -290,16 +305,14 @@ def _export_with_anchors(
             )
             return export_doc(doc_id, mime_type="text/markdown"), None
         markdown = export_doc(doc_id, mime_type="text/markdown")
-        try:
-            if revision and get_revision_id(doc_id) == revision:
-                return markdown, anchors
-        except AuthError:
-            raise
-        except GdocError:
-            break  # can't confirm the revision: same as a mismatch
+        after = version()
+        if before is None or after is None:
+            problem = "could not confirm the document's version"
+            break
+        if before == after:
+            return markdown, anchors
     print(
-        "WARN: the document changed while it was being read; attached "
-        "comments are listed without a location",
+        f"WARN: {problem}; attached comments are listed without a location",
         file=sys.stderr,
     )
     return markdown, {

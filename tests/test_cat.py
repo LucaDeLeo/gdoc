@@ -41,9 +41,8 @@ def _doc_mime(doc_mime):
 def _no_live_anchors(monkeypatch):
     """Keep `cat --comments` off the network: no comment has a live anchor."""
     monkeypatch.setattr(
-        "gdoc.api.docs.get_comment_anchors", lambda doc_id: ({}, "r1"),
+        "gdoc.api.docs.get_comment_anchors", lambda doc_id: {},
     )
-    monkeypatch.setattr("gdoc.api.docs.get_revision_id", lambda doc_id: "r1")
 
 class TestCatMarkdown:
     @patch("gdoc.state.update_state_after_command")

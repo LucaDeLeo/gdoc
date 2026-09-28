@@ -2032,32 +2032,7 @@ def check_suggest_preview_access(doc_id: str) -> None:
     raise GdocError(f"API error ({status}): {resp.reason}")
 
 
-def get_revision_id(doc_id: str) -> str:
-    """The document's current revisionId (a cheap documents.get).
-
-    Transport failures (timeouts, DNS, a network error while refreshing
-    the token) are raised as GdocError so callers can treat the revision
-    as unconfirmed; credentials that can't be refreshed are AuthError.
-    """
-    from google.auth.exceptions import GoogleAuthError, TransportError
-    from httplib2 import HttpLib2Error
-
-    try:
-        service = get_docs_service()
-        return service.documents().get(
-            documentId=doc_id, fields="revisionId",
-        ).execute().get("revisionId", "")
-    except HttpError as e:
-        _translate_http_error(e, doc_id)
-    except (TransportError, HttpLib2Error, OSError) as e:
-        raise GdocError(f"network error: {e}")
-    except GoogleAuthError as e:
-        raise AuthError(f"Authentication expired ({e}). Run `gdoc auth`.")
-
-
-def get_comment_anchors(
-    doc_id: str,
-) -> tuple[dict[str, dict | None], str]:
+def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     """Live comment anchors, from the Docs API Developer Preview.
 
     Drive's comment fields (``anchor``, ``quotedFileContent``) never change
@@ -2067,8 +2042,7 @@ def get_comment_anchors(
     the Docs UI highlights. A comment with an anchor ID but no range left
     is detached (the UI says "Original content deleted").
 
-    Returns ``(anchors, revision_id)``: the revision the anchors were read
-    at, and ``{comment_id: anchor}`` for every comment the preview reports
+    Returns ``{comment_id: anchor}`` for every comment the preview reports
     with an anchor ID. ``anchor`` is None when detached (no range left),
     otherwise:
 
@@ -2234,7 +2208,7 @@ def get_comment_anchors(
             "occurrence": occurrence,
             "occurrences": occurrences,
         }
-    return anchors, document.get("revisionId", "")
+    return anchors
 
 
 def _reject_overlapping_matches(matches: list[dict]) -> None:

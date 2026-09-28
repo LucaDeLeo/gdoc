@@ -16,7 +16,7 @@ import pytest
 
 from gdoc import mcp
 from gdoc.annotate import annotate_markdown
-from gdoc.api.docs import get_comment_anchors, get_revision_id
+from gdoc.api.docs import get_comment_anchors
 from gdoc.cli import cmd_cat
 from gdoc.util import AuthError, GdocError, PreviewUnavailableError
 
@@ -90,8 +90,7 @@ def _response(status=200, body=None, text="", reason="OK"):
 def _anchors(document: dict) -> dict:
     with patch("gdoc.api.docs._comments_view_get",
                return_value=_response(body=document)):
-        anchors, _revision = get_comment_anchors("doc1")
-    return anchors
+        return get_comment_anchors("doc1")
 
 
 def _comment(cid: str, quote: str, content: str = "note") -> dict:
@@ -248,7 +247,7 @@ class TestGetCommentAnchors:
              patch("gdoc.auth.get_credentials", return_value="creds"), \
              patch("google.auth.transport.requests.AuthorizedSession",
                    return_value=session):
-            assert get_comment_anchors("doc1") == ({}, "")
+            assert get_comment_anchors("doc1") == {}
         params = session.get.call_args.kwargs["params"]
         assert params == {
             "includeTabsContent": "true",
@@ -565,6 +564,11 @@ def _cat_args(**overrides):
 @pytest.fixture
 def edited_doc(monkeypatch, doc_mime):
     """The targeted-edits scenario behind the API boundary."""
+    # Mime detection would otherwise take a turn of get_file_version.
+    monkeypatch.setattr(
+        "gdoc.cli._file_mime",
+        lambda *a, **k: "application/vnd.google-apps.document",
+    )
     monkeypatch.setattr("gdoc.notify.pre_flight", lambda *a, **k: None)
     monkeypatch.setattr(
         "gdoc.state.update_state_after_command", lambda *a, **k: None,
@@ -577,9 +581,8 @@ def edited_doc(monkeypatch, doc_mime):
     )
     anchors = _anchors(EDITS_DOC)
     monkeypatch.setattr(
-        "gdoc.api.docs.get_comment_anchors", lambda doc_id: (anchors, "r1"),
+        "gdoc.api.docs.get_comment_anchors", lambda doc_id: anchors,
     )
-    monkeypatch.setattr("gdoc.api.docs.get_revision_id", lambda doc_id: "r1")
 
 
 def _no_preview(monkeypatch):
@@ -627,14 +630,26 @@ class TestCatOutput:
         assert captured.err == ""
         assert json.loads(captured.out)["anchors"] == "live"
 
+    @staticmethod
+    def _versions(monkeypatch, *values):
+        """Drive file versions returned in turn (an Exception is raised)."""
+        seq = iter(values)
+
+        def get_file_version(doc_id):
+            value = next(seq)
+            if isinstance(value, Exception):
+                raise value
+            return {"mimeType": "application/vnd.google-apps.document",
+                    "version": value}
+
+        monkeypatch.setattr("gdoc.api.drive.get_file_version", get_file_version)
+
     def test_edit_during_the_read_is_retried(
         self, edited_doc, monkeypatch, capsys,
     ):
-        revisions = iter(["r2", "r1"])  # changed once, then stable
-        monkeypatch.setattr(
-            "gdoc.api.docs.get_revision_id", lambda doc_id: next(revisions),
-        )
-        assert cmd_cat(_cat_args()) == 0
+        # changed across the first read, stable across the second
+        self._versions(monkeypatch, 5, 6, 6, 6)
+        assert cmd_cat(_cat_args(quiet=True)) == 0
         captured = capsys.readouterr()
         assert captured.err == ""
         assert _annotation_line(captured.out, "reword") == 1
@@ -642,9 +657,7 @@ class TestCatOutput:
     def test_document_that_keeps_changing_loses_locations_only(
         self, edited_doc, monkeypatch, capsys,
     ):
-        monkeypatch.setattr(
-            "gdoc.api.docs.get_revision_id", lambda doc_id: "r9",
-        )
+        self._versions(monkeypatch, 5, 6, 7, 8)
         assert cmd_cat(_cat_args()) == 0
         captured = capsys.readouterr()
         assert "WARN: the document changed while it was being read" in (
@@ -653,56 +666,33 @@ class TestCatOutput:
         assert "[#reword open] [attached, location not found]" in captured.out
         assert "[#deleted open] [detached]" in captured.out
 
-    def test_unconfirmed_revision_loses_locations_only(
-        self, edited_doc, monkeypatch, capsys,
-    ):
-        def fails(doc_id):
-            raise GdocError("API error (503): backend")
-
-        monkeypatch.setattr("gdoc.api.docs.get_revision_id", fails)
-        assert cmd_cat(_cat_args()) == 0
-        captured = capsys.readouterr()
-        assert "WARN: the document changed" in captured.err
-        assert "[#control open] [attached, location not found]" in (
-            captured.out
-        )
-
     @pytest.mark.parametrize("error", [
+        GdocError("API error (503): backend"),
         TimeoutError("read timed out"),
         __import__("httplib2").ServerNotFoundError("DNS failed"),
         __import__("google.auth.exceptions", fromlist=["x"]).TransportError(
             "refresh connection failed",
         ),
-    ], ids=["timeout", "dns", "refresh-transport"])
-    def test_revision_check_transport_failure_loses_locations_only(
+    ], ids=["api-error", "timeout", "dns", "refresh-transport"])
+    def test_unconfirmed_version_loses_locations_only(
         self, edited_doc, monkeypatch, capsys, error,
     ):
-        from gdoc.api import docs as docs_api
-
-        # The real revision check, with the Docs service failing under it.
-        monkeypatch.setattr(docs_api, "get_revision_id", get_revision_id)
-        service = MagicMock()
-        service.documents.return_value.get.return_value.execute.side_effect = (
-            error
-        )
-        monkeypatch.setattr(docs_api, "get_docs_service", lambda: service)
+        self._versions(monkeypatch, 5, error)
         assert cmd_cat(_cat_args()) == 0
         captured = capsys.readouterr()
-        assert "WARN: the document changed" in captured.err
+        assert "WARN: could not confirm the document's version" in (
+            captured.err
+        )
         assert "[#control open] [attached, location not found]" in (
             captured.out
         )
 
-    def test_revision_check_refresh_failure_is_an_auth_error(self):
-        from google.auth.exceptions import RefreshError
-
-        service = MagicMock()
-        service.documents.return_value.get.return_value.execute.side_effect = (
-            RefreshError("invalid_grant")
-        )
-        with patch("gdoc.api.docs.get_docs_service", return_value=service):
-            with pytest.raises(AuthError):
-                get_revision_id("doc1")
+    def test_version_check_auth_failure_propagates(
+        self, edited_doc, monkeypatch,
+    ):
+        self._versions(monkeypatch, AuthError("expired"))
+        with pytest.raises(AuthError):
+            cmd_cat(_cat_args())
 
     def test_fallback_json(self, edited_doc, monkeypatch, capsys):
         _no_preview(monkeypatch)
