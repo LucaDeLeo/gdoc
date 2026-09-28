@@ -3484,8 +3484,8 @@ def _warn_list_starts(parsed, shown=None) -> None:
         if shown.get(offset) != number]
     if messages:
         print("WARN: Google Docs cannot set arbitrary native list starts; "
-              "the following lists will start at 1: " + "; ".join(messages),
-              file=sys.stderr)
+              "the following lists will start at 1 or continue their list: "
+              + "; ".join(messages), file=sys.stderr)
 
 
 def _list_number(content: list[dict], start: int, lists: dict | None = None) -> int:
@@ -3579,22 +3579,27 @@ def _default_preset(lists: dict, list_id: str) -> bool:
             and second.get("glyphSymbol", "○") == "○")
 
 
-def _refuse_list_split(parsed, content, first, last, lists) -> None:
-    """Refuse list items that would start a new list in the middle of the
-    list they replace items of: the untouched items after them would
-    renumber. Continuing that list from its start needs a route gdoc does
-    not have, so nothing is sent."""
-    bullet = first[0].get("bullet") or {}
+def _refuse_list_split(parsed, content, native, lists) -> None:
+    """Refuse list items that would leave a list they replace items of to
+    continue without them: that list's untouched items after the match
+    would renumber. Continuing it from inside needs a route gdoc does not
+    have, so nothing is sent. Items of another kind are their own list, as
+    in a write, and a list the new items continue keeps its items."""
     items = [s for s in parsed.styles if s.type == "bullets"]
-    if parsed.continues_list or not bullet or not items:
+    if not items or not native:
         return
-    ordered = _list_is_ordered(lists, bullet.get("listId", ""),
-                               bullet.get("nestingLevel", 0))
-    if items[0].style["bulletPreset"].startswith("NUMBERED") != ordered:
-        return  # another kind of list is its own list, as in a write
-    after = next((e["paragraph"] for e in _flat_paragraphs(content)
-                  if e.get("startIndex") == last[2] + 1), None)
-    if ((after or {}).get("bullet") or {}).get("listId") == bullet.get("listId"):
+    numbered = items[0].style["bulletPreset"].startswith("NUMBERED")
+    ids = {bullet.get("listId") for p, _, _ in native
+           for bullet in [p.get("bullet")] if bullet
+           and _list_is_ordered(lists, bullet.get("listId", ""),
+                                bullet.get("nestingLevel", 0)) == numbered}
+    if parsed.continues_list:
+        above = next((e["paragraph"] for e in _flat_paragraphs(content)
+                      if e.get("endIndex") == native[0][1]), {})
+        ids.discard((above.get("bullet") or {}).get("listId"))
+    end = native[-1][2]
+    if any((e["paragraph"].get("bullet") or {}).get("listId") in ids
+           for e in _flat_paragraphs(content) if e.get("startIndex", 0) > end):
         raise GdocError(
             "these list items would start a new list before the rest of the "
             "list they replace items of, renumbering the items after them; "
@@ -4643,15 +4648,19 @@ def replace_formatted(
             elif explicit and (
                 (replace_paragraphs and not contextual)
                 or (found and found[0].get("bullet"))
+                # Paragraphs the new items leave unbulleted must not keep
+                # the bullet inherited from a replaced item's mark.
+                or (not found and any(p.get("bullet") for p, _, _ in native))
             ):
                 reset_bullets.add(_match_key(part))
                 _reset_list_indents(context[0])
-            if (replaced and not replace_paragraphs
+            first = found or (native[0] if native else None)
+            if (first and not replace_paragraphs
                     and any(s.type == "bullets" for s in context[0].styles)):
                 context = (_continuing(context[0], body.get("content", []),
-                                       replaced, lists), context[1])
-                _refuse_list_split(context[0], body.get("content", []), replaced,
-                                   native[-1] if native else replaced, lists)
+                                       first, lists), context[1])
+                _refuse_list_split(context[0], body.get("content", []),
+                                   [found] if found else native, lists)
             planned.append((part, context))
     if removals:
         from gdoc.mdparse import ParsedMarkdown

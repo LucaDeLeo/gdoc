@@ -457,3 +457,36 @@ def test_same_count_restart_is_kept(route, base, old, new, expected):
     route.ok("write", text=base)
     route.ok("edit", old_text=old, new_text=new)
     assert _read(route) == expected
+
+
+@pytest.mark.parametrize("base,old,new,expected", [
+    ("1. a\n2. b\n3. c\n", "a\nb\nc", "1. x\n2. y\n\nprose", "1. x\n2. y\n\nprose\n"),
+    ("1. a\n2. b\n3. c\n", "b\nc", "2. b2\n3. c2\n## Head",
+     "1. a\n2. b2\n3. c2\n## Head\n"),
+    ("1. a\n2. b\npara\n", "b\npara", "2. b2\n3. c", "1. a\n2. b2\n3. c\n"),
+])
+def test_multi_item_replacements_reset_inherited_bullets(
+        route, base, old, new, expected):
+    """Round 5 (Claude F1, F3): prose after new items loses the replaced
+    items' bullet; replacing the last item and the paragraph after it
+    continues the list."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    route.ok("edit", old_text=old, new_text=new)
+    assert _read(route) == expected
+
+
+@pytest.mark.parametrize("base,old,new", [
+    ("1. a\n2. b\n\nprose\n\n3. c\n", "a\nb", "1. a2\n  1. sub"),
+    ("para\n1. a\n2. b\n", "para\na", "1. p\n2. a2"),
+])
+def test_splits_that_renumber_later_items_are_refused(route, base, old, new):
+    """Round 5 (Claude F2)."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    batches = len(route.service.batches)
+    code, output, error = route.call("edit", old_text=old, new_text=new)
+    assert code != 0 and "renumbering" in output + error
+    assert len(route.service.batches) == batches
