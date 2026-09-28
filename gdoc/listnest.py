@@ -634,12 +634,9 @@ def _offset(content: list, plan: NestPlan) -> int | None:
             for i, want in plan.texts.items()
         )
 
-    if fits(0):
-        return 0
-    hits = [
-        d for d in range(-first, len(content) - last)
-        if d != 0 and fits(d)
-    ]
+    # Every offset is checked, the unmoved one included: a copy of the run
+    # pasted at the old position must not pass for the rebuilt items.
+    hits = [d for d in range(-first, len(content) - last) if fits(d)]
     return hits[0] if len(hits) == 1 else None
 
 

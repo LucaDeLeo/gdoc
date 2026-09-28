@@ -647,6 +647,15 @@ class TestCheckResult:
                       ("Bravo", 1, "num"), ("Charlie", 0, "num"), ("Outro", 0, None))
         assert verify(edited, plan) == (True, [])
 
+    def test_duplicate_run_at_the_old_position_is_unverified(self):
+        # A copy of Alpha/Bravo pasted where the originals were: two runs
+        # match, so neither is trusted, even the one at the old position.
+        plan = _plan(_tab(*STD), "Bravo", 1)
+        pasted = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 1, "num"),
+                      ("Alpha", 0, "num"), ("Bravo", 0, None), ("Charlie", 0, "num"))
+        found, _ = verify(pasted, plan)
+        assert not found
+
     def test_items_that_cannot_be_found_are_unverified(self):
         plan = _plan(_tab(*STD), "Bravo", 1)
         rewritten = _tab(("Intro", 0, None), ("Alpha changed", 0, "num"),
@@ -889,6 +898,17 @@ class TestCommand:
         api.write.side_effect = StaleRevisionError("document changed; re-run it")
         with pytest.raises(StaleRevisionError, match="re-run"):
             cmd_nest(_args())
+
+    def test_stale_revision_with_a_duplicate_run_is_an_unknown_outcome(self, api):
+        from gdoc.api.docs import StaleRevisionError
+
+        pasted = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 0, "num"),
+                      ("Alpha", 0, "num"), ("Bravo", 1, "num"), ("Charlie", 0, "num"))
+        api.get.side_effect = [_doc(_tab(*STD)), _doc(pasted)]
+        api.write.side_effect = StaleRevisionError("document changed; re-run it")
+        with pytest.raises(GdocError, match="may already be applied") as exc:
+            cmd_nest(_args())
+        assert not isinstance(exc.value, StaleRevisionError)
 
     def test_stale_revision_with_the_list_unchanged_says_re_run(self, api):
         from gdoc.api.docs import StaleRevisionError
