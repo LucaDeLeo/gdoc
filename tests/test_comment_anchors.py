@@ -16,7 +16,7 @@ import pytest
 
 from gdoc import mcp
 from gdoc.annotate import annotate_markdown
-from gdoc.api.docs import get_comment_anchors
+from gdoc.api.docs import get_comment_anchors, get_revision_id
 from gdoc.cli import cmd_cat
 from gdoc.util import AuthError, GdocError, PreviewUnavailableError
 
@@ -666,6 +666,43 @@ class TestCatOutput:
         assert "[#control open] [attached, location not found]" in (
             captured.out
         )
+
+    @pytest.mark.parametrize("error", [
+        TimeoutError("read timed out"),
+        __import__("httplib2").ServerNotFoundError("DNS failed"),
+        __import__("google.auth.exceptions", fromlist=["x"]).TransportError(
+            "refresh connection failed",
+        ),
+    ], ids=["timeout", "dns", "refresh-transport"])
+    def test_revision_check_transport_failure_loses_locations_only(
+        self, edited_doc, monkeypatch, capsys, error,
+    ):
+        from gdoc.api import docs as docs_api
+
+        # The real revision check, with the Docs service failing under it.
+        monkeypatch.setattr(docs_api, "get_revision_id", get_revision_id)
+        service = MagicMock()
+        service.documents.return_value.get.return_value.execute.side_effect = (
+            error
+        )
+        monkeypatch.setattr(docs_api, "get_docs_service", lambda: service)
+        assert cmd_cat(_cat_args()) == 0
+        captured = capsys.readouterr()
+        assert "WARN: the document changed" in captured.err
+        assert "[#control open] [attached, location not found]" in (
+            captured.out
+        )
+
+    def test_revision_check_refresh_failure_is_an_auth_error(self):
+        from google.auth.exceptions import RefreshError
+
+        service = MagicMock()
+        service.documents.return_value.get.return_value.execute.side_effect = (
+            RefreshError("invalid_grant")
+        )
+        with patch("gdoc.api.docs.get_docs_service", return_value=service):
+            with pytest.raises(AuthError):
+                get_revision_id("doc1")
 
     def test_fallback_json(self, edited_doc, monkeypatch, capsys):
         _no_preview(monkeypatch)

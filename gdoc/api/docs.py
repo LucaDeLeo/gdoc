@@ -2033,7 +2033,15 @@ def check_suggest_preview_access(doc_id: str) -> None:
 
 
 def get_revision_id(doc_id: str) -> str:
-    """The document's current revisionId (a cheap documents.get)."""
+    """The document's current revisionId (a cheap documents.get).
+
+    Transport failures (timeouts, DNS, a network error while refreshing
+    the token) are raised as GdocError so callers can treat the revision
+    as unconfirmed; credentials that can't be refreshed are AuthError.
+    """
+    from google.auth.exceptions import GoogleAuthError, TransportError
+    from httplib2 import HttpLib2Error
+
     try:
         service = get_docs_service()
         return service.documents().get(
@@ -2041,6 +2049,10 @@ def get_revision_id(doc_id: str) -> str:
         ).execute().get("revisionId", "")
     except HttpError as e:
         _translate_http_error(e, doc_id)
+    except (TransportError, HttpLib2Error, OSError) as e:
+        raise GdocError(f"network error: {e}")
+    except GoogleAuthError as e:
+        raise AuthError(f"Authentication expired ({e}). Run `gdoc auth`.")
 
 
 def get_comment_anchors(
