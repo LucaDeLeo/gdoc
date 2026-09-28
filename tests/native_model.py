@@ -5,24 +5,34 @@ list entry, and fails loudly on requests Docs rejects:
 
 - A paragraph's style and list membership belong to its paragraph mark (the
   newline). Inserting a newline splits a paragraph and gives both halves its
-  style.
-- Which paragraph's style survives when a deletion removes a mark has not
-  been probed directly. ``merge="mark"`` (the default) keeps the surviving
-  mark's style; ``merge="first"`` gives the merged paragraph the style of
-  the paragraph where the deletion starts. Tests that depend on a merge run
-  under both. One shape is observed rather than assumed: deleting one whole
-  empty paragraph, ``[start, start + 1)`` at a paragraph start, left the
-  following paragraph's style and list membership intact in a live write of
-  nested numbered restarts (source dda5741, which removed each temporary
-  empty separator paragraph that way). ``merge="first"``
-  therefore applies to every other deletion that removes a mark, including
-  one that removes several empty paragraphs at once.
+  style and list membership (observed live for named styles, indents,
+  borders, alignment, spacing and bullets at every split position).
+- A deletion that removes one or more marks merges what remains into one
+  paragraph, which keeps the style and list membership of the paragraph
+  where the deletion starts, unless the deletion starts at that paragraph's
+  first index (so none of it survives); then the paragraph where the
+  deletion ends keeps its own. The surviving newline keeps its own text
+  style either way. (Live probes P1a-P1o, J1-J10, X5, X7.)
+- createParagraphBullets sets levels relative to the range, not from
+  absolute tab counts. A paragraph's effective indent is its leading tabs
+  plus its indentStart in 36pt steps (the indent a removed bullet leaves
+  behind); its level is the range's base plus its effective indent minus the
+  smallest one in the range. The range joins the list of the paragraph just
+  before it when that paragraph has the same preset, and the base is then
+  that paragraph's level; otherwise it starts a new list at base 0. Bulleted
+  paragraphs get the list level's indents, and deleteParagraphBullets keeps
+  them. A range over a paragraph that already has a bullet converts or joins
+  that list (live), which gdoc never intends, so the model refuses it.
 - insertTable inserts a newline, which splits the paragraph at the location,
   then the table. The newline directly before a table and the segment's
-  final newline cannot be deleted.
-- Inserted text takes the text style of the character before it, or of the
-  character after it at a paragraph start.
-- A named range grows when text is inserted strictly inside it.
+  final newline cannot be deleted, unless the same deletion removes the
+  table too.
+- Inserted text, including insertTable's newline, takes the text style of
+  the character before it, or of the character after it at a paragraph
+  start. A newline inserted directly before a mark also restyles that mark's
+  text to match (the empty paragraph a split at the end leaves).
+- A named range grows only when text is inserted strictly inside it. A
+  deletion clips it; a deletion that leaves it empty removes it.
 
 It is not a full Docs emulator: it exists so tests can check the document a
 request sequence produces instead of only the requests' shape.
@@ -47,16 +57,15 @@ STRUCTURE = ("tstart", "row", "cell", "tend")
 
 
 class NativeDoc:
-    def __init__(self, *blocks, merge="mark"):
+    def __init__(self, *blocks):
         """Build a body from ``("p", text, style, bullet)`` / ``("t", rows)``.
 
         A body starting or ending with a table gets the empty paragraph Docs
         keeps there.
         """
-        assert merge in ("mark", "first")
-        self.merge = merge
         self.named = []  # [name, start, end]; name None once deleted
         self.lists = 0
+        self.list_offsets = {}  # list -> extra level indent (see bullets)
         self.images = 0
         blocks = list(blocks) or [("p", "")]
         if blocks[0][0] == "t":
@@ -145,6 +154,8 @@ class NativeDoc:
         ts = before.ts if text_before else self.units[index].ts
         end = self._paragraph_end(index)
         new = self._units(text, ts, self.units[end].ps, self.units[end].bullet)
+        if end == index and text.endswith("\n") and text_before:
+            self.units[end].ts = dict(ts)
         self.units[index:index] = new
         self._shift_named(index, len(new))
 
@@ -159,18 +170,21 @@ class NativeDoc:
                 "delete includes the newline before a table")
         first = self._paragraph_end(start)
         inherited = (self.units[first].ps, self.units[first].bullet)
-        observed = (end == start + 1 and self.units[start].ch == "\n"
-                    and any(a == start for a, _ in self.paragraphs()))
+        para_start = max(a for a, _ in self.paragraphs() if a <= start)
         del self.units[start:end]
-        if self.merge == "first" and first < end and not observed:
+        if first < end and start != para_start and self.units[first].kind == "text":
             mark = self.units[self._paragraph_end(start)]
             mark.ps, mark.bullet = dict(inherited[0]), copy.deepcopy(inherited[1])
         for named in self.named:
+            if named[0] is None:
+                continue
             for k in (1, 2):
                 if named[k] >= end:
                     named[k] -= end - start
                 elif named[k] > start:
                     named[k] = start
+            if named[1] >= named[2]:
+                named[0] = None
 
     def op_update_paragraph_style(self, v):
         start, end = v["range"]["startIndex"], v["range"]["endIndex"]
@@ -205,18 +219,34 @@ class NativeDoc:
         preset = v["bulletPreset"]
         paragraphs = self._paragraphs_in(start, end)
         assert paragraphs, "createParagraphBullets without paragraphs"
+        assert not any(self.units[mark].bullet for _, mark in paragraphs), (
+            "createParagraphBullets over a paragraph that already has a bullet")
         first = paragraphs[0][0]
         prior = self.units[first - 1].bullet if first > 1 else None
-        if prior and prior["preset"] == preset:
-            list_id = prior["list"]
-        else:
-            self.lists += 1
-            list_id = self.lists
-        for a, mark in reversed(paragraphs):
+        effective = []
+        for a, mark in paragraphs:
             tabs = 0
             while self.units[a + tabs].ch == "\t":
                 tabs += 1
-            self.units[mark].bullet = {"preset": preset, "list": list_id, "nest": tabs}
+            indent = self.units[mark].ps.get("indentStart", {}).get("magnitude", 0)
+            effective.append((tabs, tabs + round(indent / 36)))
+        least = min(e for _, e in effective)
+        if prior and prior["preset"] == preset:
+            list_id, base = prior["list"], prior["nest"]
+        else:
+            # A new list's level indents start at the range's least indent,
+            # so nesting simulated by tabs alone shows no native level (live).
+            self.lists += 1
+            list_id, base = self.lists, 0
+            self.list_offsets[list_id] = 36 * least
+        offset = self.list_offsets.get(list_id, 0)
+        for (a, mark), (tabs, e) in reversed(list(zip(paragraphs, effective))):
+            nest = min(8, base + e - least)
+            self.units[mark].bullet = {"preset": preset, "list": list_id, "nest": nest}
+            self.units[mark].ps.update({
+                "indentStart": {"magnitude": 36 * (nest + 1) + offset, "unit": "PT"},
+                "indentFirstLine": {"magnitude": 36 * (nest + 1) + offset - 18,
+                                    "unit": "PT"}})
             if tabs:
                 self.op_delete_content_range(
                     {"range": {"startIndex": a, "endIndex": a + tabs}})
@@ -246,7 +276,10 @@ class NativeDoc:
         index = v["location"]["index"]
         self._check(index, "insertTable")
         end = self._paragraph_end(index)
-        new = [Unit("\n", ts=self.units[index - 1].ts, ps=self.units[end].ps,
+        before = self.units[index - 1]
+        ts = (before.ts if before.kind == "text" and before.ch != "\n"
+              else self.units[index].ts)
+        new = [Unit("\n", ts=ts, ps=self.units[end].ps,
                     bullet=copy.deepcopy(self.units[end].bullet))]
         new.append(Unit("", kind="tstart"))
         for _ in range(v["rows"]):
@@ -329,9 +362,15 @@ class NativeDoc:
                 content.append(paragraph)
         lists = {}
         for list_id, preset in list_presets.items():
-            level = ({"glyphType": "DECIMAL"} if preset.startswith("NUMBERED")
+            glyph = ({"glyphType": "DECIMAL"} if preset.startswith("NUMBERED")
                      else {"glyphSymbol": "●"})
-            lists[list_id] = {"listProperties": {"nestingLevels": [dict(level)] * 9}}
+            offset = self.list_offsets.get(int(list_id[1:]), 0)
+            lists[list_id] = {"listProperties": {"nestingLevels": [{
+                **glyph,
+                "indentStart": {"magnitude": 36 * (k + 1) + offset, "unit": "PT"},
+                "indentFirstLine": {"magnitude": 36 * (k + 1) + offset - 18,
+                                    "unit": "PT"},
+            } for k in range(9)]}}
         named = {}
         for k, (name, start, end) in enumerate(self.named):
             if name is not None:

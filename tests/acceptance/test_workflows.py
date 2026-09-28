@@ -93,7 +93,9 @@ def test_t03_move_section_insert_section_request_order(scenario):
         scenario,
         "# Second\nMoved paragraph\n- Cargo\n# New\nNew paragraph\n# First\nTail\n",
     )
-    inserted = "".join(
+    # The body's text is one insert; later ones are the list's temporary
+    # separator and anchor, removed in the same batch.
+    inserted = next(
         r["insertText"]["text"] for r in requests(scenario) if "insertText" in r
     )
     assert inserted == "Second\nMoved paragraph\nCargo\nNew\nNew paragraph\nFirst\nTail"

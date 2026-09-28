@@ -274,6 +274,31 @@ def test_inline_exact_batch(mocker, replacement, inserted, baseline, extra):
     })
 
 
+def _new_list(item, preset):
+    """One level-0 item's list: a temporary separator and anchor fix its
+    identity and level, and are removed right after the bullet request."""
+    start, end = item["startIndex"], item["endIndex"]
+    zero = {"magnitude": 0, "unit": "PT"}
+    return [
+        {"insertText": {"location": {"index": start}, "text": "\n\n"}},
+        {"deleteParagraphBullets": {"range": {"startIndex": start,
+                                              "endIndex": end + 2}}},
+        {"updateParagraphStyle": {"range": {"startIndex": start, "endIndex": end + 2},
+                                  "paragraphStyle": {"indentStart": zero,
+                                                     "indentFirstLine": zero},
+                                  "fields": "indentStart,indentFirstLine"}},
+        {"createParagraphBullets": {"range": {"startIndex": start + 1,
+                                              "endIndex": end + 2},
+                                    "bulletPreset": preset}},
+        {"deleteContentRange": {"range": {"startIndex": start,
+                                          "endIndex": start + 2}}},
+        {"updateParagraphStyle": {"range": item, "paragraphStyle": {
+            "indentStart": {"magnitude": 36, "unit": "PT"},
+            "indentFirstLine": {"magnitude": 18, "unit": "PT"}},
+            "fields": "indentStart,indentFirstLine"}},
+    ]
+
+
 @pytest.mark.parametrize("replacement,inserted,structural", [
     ("New label", "New label", False),
     ("1. Archive the sample", "Archive the sample", True),
@@ -294,9 +319,7 @@ def test_complete_heading_exact_batch(mocker, replacement, inserted, structural)
                                       "paragraphStyle": {
                                           "namedStyleType": "NORMAL_TEXT"},
                                       "fields": "namedStyleType"}},
-            {"createParagraphBullets": {"range": target,
-                                        "bulletPreset":
-                                            "NUMBERED_DECIMAL_ALPHA_ROMAN"}},
+            *_new_list(target, "NUMBERED_DECIMAL_ALPHA_ROMAN"),
         ])
     replace_formatted("sample-doc", [{"startIndex": 1, "endIndex": 10}],
                       replacement, "rev-a", body=body)
@@ -515,10 +538,8 @@ def test_all_can_mix_inline_and_complete_paragraphs(mocker):
                 "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
                 "fields": "namedStyleType",
             }},
-            {"createParagraphBullets": {
-                "range": {"startIndex": 13, "endIndex": 17},
-                "bulletPreset": "NUMBERED_DECIMAL_ALPHA_ROMAN",
-            }},
+            *_new_list({"startIndex": 13, "endIndex": 17},
+                       "NUMBERED_DECIMAL_ALPHA_ROMAN"),
             {"deleteContentRange": {"range": matches[0]}},
             {"insertText": {"location": {"index": 9}, "text": "1. item"}},
         ],

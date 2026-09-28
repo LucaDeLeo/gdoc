@@ -7,7 +7,7 @@ checks the native paragraphs the requests produced.
 import pytest
 
 from gdoc.frontmatter import parse_frontmatter
-from tests.acceptance.test_round5_workflows import MERGES, NativeRoute
+from tests.acceptance.test_round5_workflows import NativeRoute
 from tests.native_model import NativeDoc, styles
 
 
@@ -20,8 +20,8 @@ def _read(route):
     return parse_frontmatter(route.ok("cat"))[1]
 
 
-def _written(route, markdown, merge="mark"):
-    doc = route.load(NativeDoc(merge=merge))
+def _written(route, markdown):
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=markdown)
     return doc
@@ -89,16 +89,15 @@ def test_prose_replacement_is_still_markdown(route):
     assert _read(route) == "Call `fn_x` *soon*\n"
 
 
-@MERGES
 @pytest.mark.parametrize("markdown", [
     "1. a\n\n   ```\n   \tx\n   ```\n2. b\n",
     "- a\n\n  ```\n  \tt\n  \t\tu\n  ```\n- b\n  - c\n",
     "1. a\n\n   ```\n   \tx\n   ```\n2. b\n  1. c\n\n"
     "      | h |\n      | --- |\n      | v |\n",
 ])
-def test_list_contained_code_keeps_its_tabs(route, markdown, merge):
+def test_list_contained_code_keeps_its_tabs(route, markdown):
     """R5-3: bullet requests spanning code never consume its leading tabs."""
-    doc = _written(route, markdown, merge)
+    doc = _written(route, markdown)
     first = _read(route)
     assert first.strip("\n") == markdown.strip("\n")
     _rewrite(route, doc, first, "a\n", "a2\n")
@@ -107,22 +106,22 @@ def test_list_contained_code_keeps_its_tabs(route, markdown, merge):
 def _model_after_delete(start, end):
     doc = NativeDoc(("p", "a", "HEADING_2"), ("p", ""), ("p", ""),
                     ("p", "b", "NORMAL_TEXT", {"preset": "NUMBERED", "list": 1,
-                                               "nest": 0}), merge="first")
+                                               "nest": 0}))
     doc.op_delete_content_range({"range": {"startIndex": start, "endIndex": end}})
     return styles(doc)
 
 
-def test_first_merge_model_is_narrowed_only_to_the_observed_shape():
-    """R5-10: only one whole empty paragraph per deletion keeps its successor."""
+def test_merge_model_matches_the_observed_rule():
+    """Live probes J1-J10, P1a-P1o: the paragraph where a deletion starts
+    keeps its style and list, unless the deletion starts at its first index."""
     # Units: 1 'a', 2 LF(H2), 3 LF, 4 LF, 5 'b', 6 LF(list).
     assert _model_after_delete(3, 4)[-1] == ("b", "NORMAL_TEXT", (1, 0))
-    # Two empty paragraphs at once, or a deletion starting mid-paragraph,
-    # still take the first paragraph's style under the adversarial model.
-    assert _model_after_delete(3, 5)[-1] == ("b", "NORMAL_TEXT", None)
+    # Starting at an empty paragraph removes it whole: 'b' keeps its own.
+    assert _model_after_delete(3, 5)[-1] == ("b", "NORMAL_TEXT", (1, 0))
+    # Starting inside 'a' (at its newline) keeps 'a's heading, no list.
     assert _model_after_delete(2, 5)[-1] == ("ab", "HEADING_2", None)
 
 
-@MERGES
 @pytest.mark.parametrize("markdown", [
     "```\nx c\n```\n\n| h |\n| --- |\n| x v |\n- x item\n",
     "- x a\n\n  ```\n  x c\n  ```\n\n  | h |\n  | --- |\n  | x v |\n- x b\n",
@@ -130,9 +129,9 @@ def test_first_merge_model_is_narrowed_only_to_the_observed_shape():
     "x p\n\n| h |\n| --- |\n| x v |\n1. x one\n2. x two\n",
 ])
 def test_blank_line_between_a_container_and_a_table_stays_outside(
-        route, markdown, merge):
+        route, markdown):
     """R5-2: the blank paragraph before a table never joins a code range."""
-    doc = _written(route, markdown, merge)
+    doc = _written(route, markdown)
     assert _read(route) == markdown
     text = _rewrite(route, doc, markdown, "x", "y")
     _rewrite(route, doc, text, "y", "z")
@@ -141,7 +140,6 @@ def test_blank_line_between_a_container_and_a_table_stays_outside(
 TABLE_MD = "| a |\n| --- |\n| b |\n"
 
 
-@MERGES
 @pytest.mark.parametrize("existing,inserted,expected", [
     ("## H\n", TABLE_MD, "## H\n" + TABLE_MD + "\n"),
     ("- item\n", TABLE_MD, "- item\n" + TABLE_MD + "\n"),
@@ -152,15 +150,14 @@ TABLE_MD = "| a |\n| --- |\n| b |\n"
     ("## H\n", TABLE_MD + "after\n", "## H\n" + TABLE_MD + "after\n"),
 ])
 def test_appending_leaves_no_stray_styled_paragraph(route, existing, inserted,
-                                                    expected, merge):
+                                                    expected):
     """R5-8: the retained final mark takes the Markdown's style, not the old."""
-    _written(route, existing, merge)
+    _written(route, existing)
     route.ok("cat", tab="Main")
     route.ok("insert", text=inserted, tab="Main", position="end")
     assert _read(route) == expected
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,old,expected", [
     ("first\n## H\nx\n", "first", "## H\nx\n"),
     ("x\n## H\n- a\n", "H", "x\n- a\n"),
@@ -168,14 +165,13 @@ def test_appending_leaves_no_stray_styled_paragraph(route, existing, inserted,
     ("- a\n- gone\n1. b\n", "gone", "- a\n1. b\n"),
 ])
 def test_removing_a_middle_paragraph_keeps_its_successor(route, markdown, old,
-                                                         expected, merge):
+                                                         expected):
     """R5-10: a middle paragraph is emptied, then its empty paragraph removed."""
-    _written(route, markdown, merge)
+    _written(route, markdown)
     route.ok("edit", old_text=old, new_text="")
     assert _read(route) == expected
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,old,expected", [
     ("Hello\n## world\ntail\n", "lo\nwor", "Helld\ntail\n"),
     ("## Hello\nworld\ntail\n", "lo\nwor", "## Helld\ntail\n"),
@@ -184,21 +180,18 @@ def test_removing_a_middle_paragraph_keeps_its_successor(route, markdown, old,
     ("- a b\n- c d\n", "b\nc", "- a  d\n"),
 ])
 def test_empty_replacement_across_paragraphs_joins_them(route, markdown, old,
-                                                        expected, merge):
+                                                        expected):
     """R5-6: the joined paragraph keeps the first paragraph's style."""
-    _written(route, markdown, merge)
+    _written(route, markdown)
     route.ok("edit", old_text=old, new_text="")
     assert _read(route) == expected
 
 
-def test_join_that_would_move_a_list_item_is_refused(route):
-    """R5-6: the API cannot give the joined text the item's list back."""
+def test_join_keeps_the_list_item(route):
+    """R5-6: Docs keeps the first paragraph's list on a join (observed)."""
     _written(route, "- a b\nc d\n")
-    batches = len(route.service.batches)
-    code, output, error = route.call("edit", old_text="b\nc", new_text="")
-    assert code != 0 and "list item" in output + error
-    assert len(route.service.batches) == batches
-    assert _read(route) == "- a b\nc d\n"
+    route.ok("edit", old_text="b\nc", new_text="")
+    assert _read(route) == "- a  d\n"
 
 
 def _run(text, start, **extra):
@@ -284,7 +277,6 @@ def test_unlinked_wording_loses_the_link_appearance(route, old, new, expected):
                    for u in plain)
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,edits", [
     ("1. item\n\n   > quoted\n2. next\n", [("quoted", "quoted two")]),
     ("- item\n\n  > quoted\n- next\n", [("quoted", "said"), ("next", "then")]),
@@ -299,9 +291,9 @@ def test_unlinked_wording_loses_the_link_appearance(route, old, new, expected):
     ("1. a\n\n   > | h |\n   > | --- |\n   > | v |\n2. b\n",
      [("| v |", "| w |"), ("b\n", "be\n")]),
 ])
-def test_quote_inside_a_list_item_stays_in_the_item(route, markdown, edits, merge):
+def test_quote_inside_a_list_item_stays_in_the_item(route, markdown, edits):
     """R5-4: a quote nested in a list item keeps the item's indent and list."""
-    doc = _written(route, markdown, merge)
+    doc = _written(route, markdown)
     assert _read(route) == markdown
     text = markdown
     for old, new in edits:

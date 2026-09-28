@@ -81,10 +81,6 @@ def route(request, monkeypatch, tmp_path):
     return NativeRoute(request.param, monkeypatch, tmp_path)
 
 
-# Which paragraph's style Docs keeps when a deletion removes a mark is not
-# probed live, so every route here must hold under both plausible outcomes.
-MERGES = pytest.mark.parametrize("merge", ["mark", "first"])
-
 
 def _bullet(list_id=1, preset="BULLET_DISC_CIRCLE_SQUARE", nest=0):
     return {"preset": preset, "list": list_id, "nest": nest}
@@ -101,12 +97,11 @@ def _shape(paragraphs, edited):
             for text, style, bullet in paragraphs if text not in edited]
 
 
-@MERGES
 @pytest.mark.parametrize("layout", [
     "heading-table", "item-table", "table-heading", "table-item",
     "heading-table-end", "empty-heading-table",
 ])
-def test_rewrite_keeps_styles_at_table_boundaries(route, layout, merge):
+def test_rewrite_keeps_styles_at_table_boundaries(route, layout):
     """F1: exporter-shaped tables directly beside styled paragraphs survive."""
     bullet = _bullet()
     blocks = {
@@ -123,7 +118,7 @@ def test_rewrite_keeps_styles_at_table_boundaries(route, layout, merge):
         "empty-heading-table": [("p", "after"), ("p", "", "HEADING_2"),
                                 ("t", TABLE), ("p", "tail")],
     }[layout]
-    doc = route.load(NativeDoc(*blocks, merge=merge))
+    doc = route.load(NativeDoc(*blocks))
     before = styles(doc)
     markdown = route.ok("cat")
     edited = markdown.replace("after", "after edited")
@@ -135,9 +130,8 @@ def test_rewrite_keeps_styles_at_table_boundaries(route, layout, merge):
     assert route.ok("cat") == edited
 
 
-@MERGES
 @pytest.mark.parametrize("last", ["heading", "item", "numbered"])
-def test_appending_a_leading_table_keeps_the_last_paragraph(route, last, merge):
+def test_appending_a_leading_table_keeps_the_last_paragraph(route, last):
     """F2: the tab's last paragraph keeps its style when a table is appended."""
     final = {
         "heading": [("p", "Heading", "HEADING_2")],
@@ -145,7 +139,7 @@ def test_appending_a_leading_table_keeps_the_last_paragraph(route, last, merge):
         "numbered": [("p", "one", "NORMAL_TEXT", _bullet(1, NUMBERED)),
                      ("p", "two", "NORMAL_TEXT", _bullet(1, NUMBERED))],
     }[last]
-    doc = route.load(NativeDoc(("p", "intro"), *final, merge=merge))
+    doc = route.load(NativeDoc(("p", "intro"), *final))
     before = styles(doc)
     route.ok("cat", tab="Main")
     route.ok("insert", text="| a |\n|---|\n| c |\n\nafter", tab="Main",
@@ -158,7 +152,6 @@ def test_appending_a_leading_table_keeps_the_last_paragraph(route, last, merge):
                               ("after", "NORMAL_TEXT", None)]
 
 
-@MERGES
 @pytest.mark.parametrize("markdown", [
     "## Heading\n| h |\n| --- |\n| v |\nafter\n",
     "```\ncode\n```\n| h |\n| --- |\n| v |\nafter\n",
@@ -171,9 +164,9 @@ def test_appending_a_leading_table_keeps_the_last_paragraph(route, last, merge):
     "**bold end**\n| h |\n| --- |\n| v |\n\n\n| k |\n| --- |\n| w |\n## After\n",
     "## Heading\n\n| h |\n| --- |\n| v |\n\nafter\n",
 ])
-def test_written_table_layouts_read_back_unchanged(route, markdown, merge):
+def test_written_table_layouts_read_back_unchanged(route, markdown):
     """F1: a table directly beside a heading, code, quote or list reads back."""
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=markdown)
     first = route.ok("cat")
@@ -198,9 +191,8 @@ def test_written_table_layouts_read_back_unchanged(route, markdown, merge):
     assert all(not start < table < end for name, start, end in doc.named if name)
 
 
-@MERGES
 @pytest.mark.parametrize("layout", ["final", "before-table", "heading-over-item"])
-def test_removing_a_boundary_paragraph_keeps_the_one_before(route, layout, merge):
+def test_removing_a_boundary_paragraph_keeps_the_one_before(route, layout):
     """P-1: the paragraph whose mark is borrowed keeps its own style."""
     blocks, expected = {
         "final": ([("p", "Body"), ("p", "Obsolete", "HEADING_2")],
@@ -214,15 +206,26 @@ def test_removing_a_boundary_paragraph_keeps_the_one_before(route, layout, merge
             [("p", "Title", "HEADING_1"), ("p", "Obsolete", "NORMAL_TEXT", _bullet())],
             [("Title", "HEADING_1", None)]),
     }[layout]
-    doc = route.load(NativeDoc(*blocks, merge=merge))
+    doc = route.load(NativeDoc(*blocks))
     route.ok("cat")
     route.ok("edit", old_text="Obsolete", new_text="")
     assert styles(doc) == expected
 
 
-def test_removing_a_paragraph_after_a_list_item_is_refused(route):
-    """P-1: a list item's membership cannot be restored, so nothing is sent."""
+def test_removing_a_paragraph_after_a_list_item_keeps_the_item(route):
+    """P-1: Docs keeps the item's list on the borrowed-mark merge (observed)."""
     doc = route.load(NativeDoc(("p", "item", "NORMAL_TEXT", _bullet()),
+                               ("p", "Obsolete", "HEADING_2")))
+    before = styles(doc)
+    route.ok("cat")
+    route.ok("edit", old_text="Obsolete", new_text="")
+    assert styles(doc) == before[:1]
+
+
+def test_removing_a_paragraph_after_an_empty_list_item_is_refused(route):
+    """An empty item is removed whole by the merge; its list cannot return."""
+    doc = route.load(NativeDoc(("p", "item", "NORMAL_TEXT", _bullet()),
+                               ("p", "", "NORMAL_TEXT", _bullet()),
                                ("p", "Obsolete", "HEADING_2")))
     before = styles(doc)
     route.ok("cat")
@@ -250,7 +253,6 @@ def test_literal_list_tabs_survive_a_trailing_rule(route, markdown):
 DIFFERENT_LISTS = "- a\n| h |\n| --- |\n| v |\n1. b\n"
 
 
-@MERGES
 @pytest.mark.parametrize("markdown", [
     "before\n| h |\n| --- |\n| v |\n- item\n- next\n",
     "## Heading\n| h |\n| --- |\n| v |\n1. one\n2. two\n",
@@ -261,14 +263,14 @@ DIFFERENT_LISTS = "- a\n| h |\n| --- |\n| v |\n1. b\n"
     "---\n| h |\n| --- |\n| v |\n1. one\n",
     DIFFERENT_LISTS,
 ])
-def test_list_item_after_a_table_keeps_its_list(route, markdown, merge):
+def test_list_item_after_a_table_keeps_its_list(route, markdown):
     """F1: a list item directly after a table never merges through its mark.
 
     DIFFERENT_LISTS relies on the one observed merge shape (see
     tests/native_model.py): the fill stage removes each emptied paragraph
     after the table with its own single-paragraph deletion.
     """
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=markdown)
     # A tab starting with a table or rule reads with Docs' leading paragraph
@@ -285,13 +287,12 @@ def test_list_item_after_a_table_keeps_its_list(route, markdown, merge):
                for name, start, end in doc.named if name)
 
 
-@MERGES
 @pytest.mark.parametrize("between", [
     "| x |\n| --- |\n| y |\n", "![](https://example.test/i.png)\n",
 ])
-def test_numbering_continues_across_a_table_or_image(route, between, merge):
+def test_numbering_continues_across_a_table_or_image(route, between):
     """F6: a numbered list interrupted by a table or image keeps counting."""
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     markdown = f"1. a\n2. b\n\n{between}\n3. c\n"
     code, output, error = route.call("write", text=markdown)
@@ -312,17 +313,15 @@ def test_an_arbitrary_start_after_a_table_still_warns(route):
     assert "cannot set arbitrary native list starts" in output + error
 
 
-@MERGES
 @pytest.mark.parametrize("position", ["start", "end"])
 @pytest.mark.parametrize("existing", [
     "> quoted\n", "---\n", "**bold**\n", "[link](https://example.test/)\n",
     "`code`\n", "## \n",
 ])
 def test_inserted_markdown_does_not_inherit_its_neighbor(
-    route, existing, position, merge,
-):
+    route, existing, position, ):
     """F7, F17, F18: inserted text is only what its Markdown says."""
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=existing)
     route.ok("cat", tab="Main")

@@ -4,14 +4,14 @@ Inserting Markdown at the start or end of a tab must produce the same native
 document as writing the concatenated Markdown: the tab's last or only
 paragraph keeps its quote, list, rule or code membership, appended content
 does not inherit it, and an appended numbered list is its own list. Through
-CLI and MCP under both merge models, checking native paragraph styles, list
+CLI and MCP, checking native paragraph styles, list
 identity and gdoc ranges, not only the Markdown readback.
 """
 
 import pytest
 
 from gdoc.frontmatter import parse_frontmatter
-from tests.acceptance.test_round5_workflows import MERGES, NativeRoute
+from tests.acceptance.test_round5_workflows import NativeRoute
 from tests.native_model import NativeDoc
 
 
@@ -48,8 +48,8 @@ def _native(doc):
     return paragraphs, ranges
 
 
-def _written(route, merge, markdown):
-    doc = route.load(NativeDoc(merge=merge))
+def _written(route, markdown):
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=markdown)
     return doc
@@ -91,19 +91,18 @@ CASES = [
 ]
 
 
-@MERGES
 @pytest.mark.parametrize("base,inserted,position", CASES)
 def test_insert_matches_writing_the_concatenation(
-    route, merge, base, inserted, position,
+    route, base, inserted, position,
 ):
-    expected_doc = _written(route, merge, base)
+    expected_doc = _written(route, base)
     base_read = _read(route)
     concatenated = (base_read + inserted if position == "end"
                     else inserted + base_read)
-    expected_doc = _written(route, merge, concatenated)
+    expected_doc = _written(route, concatenated)
     expected = (_read(route), _native(expected_doc))
 
-    doc = _written(route, merge, base)
+    doc = _written(route, base)
     assert _read(route) == base_read
     original = _native(doc)[0]
     batches = len(route.service.batches)

@@ -1014,8 +1014,14 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
                      if low <= r.get("startIndex", -1) < high), ())
 
     def blank_paragraph(element):
+        # Scaffolding is empty and unstyled (I5): a rule or an empty heading
+        # between tables is content, not the paragraph Docs requires there.
         paragraph = element.get("paragraph")
-        return paragraph is not None and not paragraph.get("bullet") and all(
+        style = (paragraph or {}).get("paragraphStyle", {})
+        return paragraph is not None and not paragraph.get("bullet") and (
+            style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
+            and not style.get("borderBottom", {}).get("width", {}).get("magnitude")
+        ) and all(
             not run.get("textRun", {}).get("content", "\n").strip("\n")
             and "textRun" in run for run in paragraph.get("elements", []))
 
@@ -1048,9 +1054,12 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
                 marker = None
             # Docs keeps a paragraph between adjacent tables. Blank paragraphs
             # there belong to the tables' container, so the separator logic
-            # below counts them in that container.
+            # below counts them in that container. A blank recorded in a
+            # container of its own, not one enclosing the tables, is content.
             if (markdown and marker is None and table_run is not None
-                    and prefix != table_run and blank_paragraph(element)
+                    and prefix != table_run
+                    and tuple(table_run[:len(prefix)]) == tuple(prefix)
+                    and blank_paragraph(element)
                     and next_table_prefix(position) == table_run):
                 prefix = table_run
         if (marker != active_code or prefix != active_prefix
@@ -2886,14 +2895,18 @@ def _owned_range_requests(tab, tab_id, parts, *, keep_after=True,
     ranges keep it, even when the paragraph has no text of its own.
     Returns ``(deletions, creations)`` for one revision-pinned batch.
     """
-    parts = sorted(parts)
+    # A part may carry its physical deletion span as a fifth item when it
+    # differs from the logical one (a borrowed paragraph mark): Docs clips
+    # ranges by the physical span, pieces are rebuilt from the logical one.
+    physical = [p[4] if len(p) > 4 else (p[0], p[1]) for p in parts]
+    parts = sorted(p[:4] for p in parts)
     deletions, creations = [], []
     for named_id, name, spans in _owned_named_ranges(tab, tab_id):
         def overlaps(part, a, b):
             s, e = part[0], part[1]
             return (s < b and e > a) or (s == e and a <= s < b)
 
-        if not any(overlaps(p, a, b) for p in parts for a, b in spans):
+        if not any(overlaps(p, a, b) for p in parts + physical for a, b in spans):
             continue
         deletions.append(_delete_owned_range(named_id, tab_id))
         for a, b in spans:
@@ -3049,29 +3062,6 @@ def insert_markdown_into_tab(
         # At start, the parser's final newline separates the inserted text
         # from the existing first paragraph; do not strip it.
 
-    # createParagraphBullets joins a preceding list of the same preset, so an
-    # appended numbered list would continue the tab's last list (even one
-    # inside a quote). An unbulleted separator paragraph keeps it a list of
-    # its own, as in the concatenated Markdown; it is removed in the same
-    # batch once the bullets exist.
-    separator_index = None
-    first_item = next((s for s in parsed.styles if s.type == "bullets"), None)
-    last_paragraph = next((e["paragraph"] for e in reversed(body.get("content", []))
-                           if "paragraph" in e), {})
-    if (appending and not leading_table and first_item is not None
-            and first_item.start == 0 and first_item.list_depth == 0
-            and first_item.style["bulletPreset"].startswith("NUMBERED")
-            and last_paragraph.get("bullet")):
-        separator_index = insert_index
-        separator = {"startIndex": insert_index, "endIndex": insert_index + 1,
-                     "tabId": tab_id}
-        requests.extend([
-            {"insertText": {"location": {"index": insert_index, "tabId": tab_id},
-                            "text": "\n"}},
-            {"deleteParagraphBullets": {"range": dict(separator)}},
-        ])
-        insert_index += 1
-
     owned_deletions = []
     if replace:
         # The replaced body's code and container markers would otherwise
@@ -3216,11 +3206,6 @@ def insert_markdown_into_tab(
         }})
     insertion.extend(_code_range_requests(parsed, insert_index, tab_id))
     requests.extend(insertion)
-    if separator_index is not None:
-        requests.append({"deleteContentRange": {"range": {
-            "startIndex": separator_index, "endIndex": separator_index + 1,
-            "tabId": tab_id}}})
-        insert_index -= 1
     if not replace and (requests or parsed.tables):
         # Existing markers at the insertion point must not absorb new text.
         # List compilation also sends temporary tabs and separators that later
@@ -3471,63 +3456,200 @@ def _wording_contexts(body: dict, match: dict, markdown: str):
     return result
 
 
-def _empty_paragraph_range(content: list[dict], match: dict):
-    """Remove complete paragraphs, retaining native anchors and the final LF."""
-    # A merged group is re-planned from its span, not from a member's plan.
-    match = {k: v for k, v in match.items()
-             if k not in ("emptiedMark", "retainedMarkRestore")}
+def _table_between_blanks(content, match, parsed):
+    """Plan a table-only replacement so the table reuses blank separators (I5).
+
+    ``write`` of ``A / blank / table / blank / B`` keeps one empty paragraph
+    on each side of the table: Docs' mandatory paragraph before a table and
+    the separator after it. insertTable always adds one paragraph mark, so
+    replacing whole paragraphs that sit between two blank paragraphs removes
+    the paragraphs and the blank after them with their own marks, and
+    inserts the table at the blank before them (tableBack). That blank splits
+    into the mandatory paragraph and the separator, both keeping its style.
+    Any other shape returns None and keeps the general plan.
+    """
+    if (len(parsed.tables) != 1 or parsed.plain_text.strip("\n")
+            or any(s.type != "paragraph_style" for s in parsed.styles)):
+        return None
+    paragraphs = [e for e in content if "paragraph" in e or "table" in e]
+    end = max(match["endIndex"], match["startIndex"] + 1)
+    covered = [i for i, e in enumerate(paragraphs) if "paragraph" in e
+               and e.get("startIndex", 0) < end
+               and e["endIndex"] > match["startIndex"]]
+    if not covered:
+        return None
+    first, last = covered[0], covered[-1]
+    if first < 1 or last + 2 >= len(paragraphs):
+        return None
+    before, after = paragraphs[first - 1], paragraphs[last + 1]
+    following = paragraphs[last + 2]
+    if (paragraphs[first].get("startIndex", 0) != match["startIndex"]
+            or not all(_is_empty_paragraph(e) for e in (before, after))
+            or any(e["paragraph"].get("bullet") for e in (before, after))
+            or "table" in following):
+        return None
+    return {**match, "endIndex": after["endIndex"], "tableBack": 1}
+
+
+def _contained_parse(parsed, tab, tab_id, match):
+    """Write whole-paragraph Markdown inside the container it replaces (I3).
+
+    Paragraphs replacing the content of one quote or list item stay in that
+    container, as ``write`` of the indented Markdown would place them: each
+    non-blank top-level paragraph and each table gets the container's path.
+    Blank separators start clean (I4): they would otherwise keep the
+    container's indent from the split mark and read back as quotes.
+    """
+    import copy
+
+    from gdoc.mdparse import StyleRange, legacy_prefix
+
+    if (any(s.type in ("markdown_prefix", "bullets") for s in parsed.styles)
+            or parsed.code_blocks or any(t.path for t in parsed.tables)):
+        return parsed
+    paths = {path for _, name, spans in _owned_named_ranges(tab, tab_id)
+             if (path := _parse_prefix_range_name(name))
+             and any(a <= match["startIndex"] and match["endIndex"] < b
+                     for a, b in spans)}
+    if len(paths) != 1:
+        return parsed
+    (path,), contained = paths, copy.deepcopy(parsed)
+    legacy = legacy_prefix(path)
+    marker = ({"quote": legacy[0], "indent": legacy[1]} if legacy else {})
+    zero = {"magnitude": 0, "unit": "PT"}
+    for style in list(contained.styles):
+        if style.type != "paragraph_style" or style.path:
+            continue
+        if contained.plain_text[style.start:style.end].strip("\n"):
+            contained.styles.append(StyleRange(
+                style.start, style.end, dict(marker), "markdown_prefix",
+                path=path))
+        else:
+            style.style = {**style.style, "indentStart": zero,
+                           "indentFirstLine": zero}
+    for table in contained.tables:
+        table.path = path
+    return contained
+
+
+def _removes_whole_paragraphs(content: list[dict], match: dict) -> bool:
+    """True when an empty replacement of the match removes its paragraphs.
+
+    The match starts at its first paragraph's first index and reaches the
+    last paragraph's text end. A paragraph anchoring a positioned object
+    keeps its mark, so only its wording can go.
+    """
     paragraphs = list(_replacement_paragraphs(content, match))
-    if not paragraphs:
-        return match
-    # Positioned objects have no searchable character; their paragraph mark
-    # must survive even when all of the paragraph's wording is deleted.
-    if any(p.get("positionedObjectIds") for p, _, _ in paragraphs):
-        return None
-    first, last = paragraphs[0], paragraphs[-1]
-    if match["startIndex"] != first[1] or match["endIndex"] < last[2]:
-        return None
+    return bool(paragraphs) and (
+        match["startIndex"] == paragraphs[0][1]
+        and match["endIndex"] >= paragraphs[-1][2]
+        and not any(p.get("positionedObjectIds") for p, _, _ in paragraphs)
+    )
+
+
+def _paragraph_siblings(content: list[dict], start: int):
+    """The element list holding the paragraph that starts at ``start``, and
+    its position there (a tab body, or a table cell's content)."""
     for i, element in enumerate(content):
-        if element.get("startIndex", 0) == last[1] and "paragraph" in element:
-            start, end = first[1], last[2] + 1
-            # Docs cannot delete the paragraph mark before a table either, so
-            # that paragraph is removed like the final one.
-            before_table = i + 1 < len(content) and "table" in content[i + 1]
-            if i == len(content) - 1 or before_table:
-                end -= 1
-                previous = next((e for e in content
-                                 if e.get("endIndex") == start), None)
-                if previous and "paragraph" in previous:
-                    if not previous["paragraph"].get("positionedObjectIds"):
-                        start -= 1
-                        restore = _retained_mark_restore(
-                            previous["paragraph"], last[0])
-                        if restore:
-                            return {**match, "startIndex": start, "endIndex": end,
-                                    "retainedMarkRestore": restore}
-                elif previous and "table" in previous and not before_table:
-                    raise GdocError(
-                        "cannot remove the mandatory final paragraph after a table; "
-                        "replace its wording instead", exit_code=3,
-                    )
-                elif before_table:
-                    raise GdocError(
-                        "cannot remove the paragraph directly before a table "
-                        "when no paragraph precedes it; replace its wording, or "
-                        "rewrite the tab with write --tab", exit_code=3,
-                    )
-            if end == last[2] + 1:
-                # Empty the paragraphs first, then remove the one empty
-                # paragraph left: the merge shape observed live to leave the
-                # following paragraph's style and list membership intact.
-                return {**match, "startIndex": start, "endIndex": end,
-                        "emptiedMark": last[2]}
-            return {**match, "startIndex": start, "endIndex": end}
+        if "paragraph" in element and element.get("startIndex", 0) == start:
+            return content, i
         for row in element.get("table", {}).get("tableRows", []):
             for cell in row.get("tableCells", []):
-                if any(p[1] == first[1] for p in _replacement_paragraphs(
-                        cell.get("content", []), match)):
-                    return _empty_paragraph_range(cell.get("content", []), match)
+                found = _paragraph_siblings(cell.get("content", []), start)
+                if found:
+                    return found
     return None
+
+
+def _plan_paragraph_removals(source, removals: list[dict]) -> list[dict]:
+    """Plan removing whole paragraphs, once per run of consecutive ones.
+
+    ``removals`` are matches that each remove whole paragraphs. They may be
+    adjacent or overlap (``--all``, or several paragraphs of one match), so
+    their paragraphs are merged into maximal runs of consecutive paragraphs
+    in one element list, and each run is planned once from its paragraphs.
+    Every character a plan deletes, beyond the matched text too, must carry
+    no suggestion: a direct deletion silently settles one (observed live).
+    """
+    runs: dict = {}
+    for match in removals:
+        body = _replacement_body(source, match)
+        for _, start, _ in _replacement_paragraphs(body.get("content", []), match):
+            siblings, index = _paragraph_siblings(body["content"], start)
+            key = (_match_space(match), id(siblings))
+            runs.setdefault(key, (match, body, siblings, set()))[3].add(index)
+    plans = []
+    for match, body, siblings, indexes in runs.values():
+        indexes = sorted(indexes)
+        first = indexes[0]
+        for previous, index in zip(indexes, indexes[1:] + [None]):
+            if index is not None and index == previous + 1:
+                continue
+            plan = _plan_paragraph_run(siblings, first, previous, match)
+            overlapping = find_suggestions_in_range(
+                body, plan["startIndex"], plan["endIndex"])
+            if overlapping:
+                raise GdocError(
+                    "removing these paragraphs would also delete text or a "
+                    "paragraph break that carries suggestion(s) "
+                    + ", ".join(sorted(overlapping)) + "; accept or reject "
+                    "them in Docs first. Nothing was changed.", exit_code=3,
+                )
+            plans.append(plan)
+            first = index
+    return plans
+
+
+def _plan_paragraph_run(siblings: list[dict], first: int, last: int,
+                        match: dict) -> dict:
+    """The deletion that removes paragraphs ``first..last`` of ``siblings``.
+
+    Docs merges what a deletion leaves into the paragraph where it starts,
+    keeping that paragraph's style and list, unless it starts at that
+    paragraph's first index; then the paragraph where it ends keeps its own
+    (observed live). Removing a run with its own marks therefore leaves the
+    next paragraph untouched. A segment's last mark and the mark before a
+    table cannot be deleted, so a run ending there borrows the previous
+    paragraph K's mark instead: K's text then ends on the run's last mark and
+    keeps its own style, except when K is empty, which the deletion removes
+    whole; its style is then restored on the retained mark.
+    """
+    run = siblings[first:last + 1]
+    start = run[0].get("startIndex", 0)
+    text_end = run[-1]["endIndex"] - 1
+    plan = {k: v for k, v in match.items()
+            if k not in ("startIndex", "endIndex")}
+    before_table = last + 1 < len(siblings) and "table" in siblings[last + 1]
+    if last + 1 < len(siblings) and not before_table:
+        # Empty the paragraphs first, then remove the one empty paragraph
+        # left; either deletion starts at a paragraph's first index.
+        return {**plan, "startIndex": start, "endIndex": text_end + 1,
+                "emptiedMark": text_end}
+    previous = siblings[first - 1] if first else None
+    if previous is None or "table" in previous:
+        if before_table:
+            raise GdocError(
+                "cannot remove the paragraph directly before a table "
+                "when no paragraph precedes it; replace its wording, or "
+                "rewrite the tab with write --tab", exit_code=3,
+            )
+        if previous is not None:
+            raise GdocError(
+                "cannot remove the mandatory final paragraph after a table; "
+                "replace its wording instead", exit_code=3,
+            )
+        # The segment's only paragraphs: their wording goes, one mark stays.
+        return {**plan, "startIndex": start, "endIndex": text_end}
+    if previous["paragraph"].get("positionedObjectIds"):
+        # Its mark must survive; the run's last paragraph stays, empty.
+        return {**plan, "startIndex": start, "endIndex": text_end}
+    borrowed = {**plan, "startIndex": previous["endIndex"] - 1,
+                "endIndex": text_end, "removedSpan": (start, text_end + 1)}
+    if previous["endIndex"] - previous.get("startIndex", 0) == 1:
+        restore = _retained_mark_restore(previous["paragraph"], run[-1]["paragraph"])
+        if restore:
+            borrowed["retainedMarkRestore"] = restore
+    return borrowed
 
 
 def _joined_deletion(content: list[dict], match: dict) -> dict | None:
@@ -3536,22 +3658,25 @@ def _joined_deletion(content: list[dict], match: dict) -> dict | None:
     Matches are native text: ``lo\nwor`` matches across the paragraphs
     ``Hello`` and the heading ``world``, and deleting it leaves one
     paragraph, ``Helld``. The joined paragraph always keeps the first
-    paragraph's style, restored explicitly because which style Docs keeps on
-    such a merge is unobserved. A deletion of whole paragraphs is not a join
-    and returns None.
+    paragraph's style. Docs does that itself unless the deletion starts at the
+    first paragraph's first index; only then is the style restored. A
+    deletion of whole paragraphs is not a join and returns None.
     """
     paragraphs = list(_replacement_paragraphs(content, match))
-    if len(paragraphs) < 2 or _empty_paragraph_range(content, match) is not None:
+    if len(paragraphs) < 2 or _removes_whole_paragraphs(content, match):
         return None
     first, last = paragraphs[0], paragraphs[-1]
-    if match["startIndex"] == first[1] and match["endIndex"] > last[2]:
-        return None
     if any(p.get("positionedObjectIds") for p, _, _ in paragraphs[1:]):
         raise GdocError(
             "cannot join these paragraphs: a later one anchors a positioned "
             "object; delete each paragraph's wording separately", exit_code=3,
         )
-    restore = _retained_mark_restore(first[0], last[0])
+    # Docs keeps the first paragraph's style and list when the deletion
+    # starts inside it; one starting at its first index removes it whole,
+    # and the last paragraph's style must be replaced.
+    restore = None
+    if match["startIndex"] == first[1]:
+        restore = _retained_mark_restore(first[0], last[0])
     joined = {**match}
     if restore:
         joined["retainedMarkRestore"] = restore
@@ -3561,12 +3686,13 @@ def _joined_deletion(content: list[dict], match: dict) -> dict | None:
 def _retained_mark_restore(kept: dict, removed: dict) -> dict | None:
     """Keep a paragraph whose text moves onto a removed paragraph's mark.
 
-    Removing a final paragraph, or one before a table, deletes the preceding
-    paragraph's mark instead of its own. Which paragraph's style Docs keeps
-    on that merge is not probed live, so the preceding paragraph's style is
-    restored on the retained mark and a bullet it lacks is removed. A list
-    item's membership cannot be re-created through the API: a removal that
-    would move it onto another list state is refused before any write.
+    Called only when the deletion starts at the kept paragraph's first
+    index (an empty preceding paragraph, or a join that deletes all of the
+    first paragraph's text). Docs then leaves the retained mark with the
+    removed paragraph's style and list, observed live. The kept paragraph's
+    style is restored and a bullet it lacks is removed. A list item's
+    membership cannot be re-created reliably through the API, so a removal
+    that would move it onto another list state is refused before any write.
     """
     kept_bullet, removed_bullet = kept.get("bullet"), removed.get("bullet")
 
@@ -4077,22 +4203,27 @@ def _replacement_range_requests(source, matches, contexts, tab_id):
             length = 0  # The rule styles the retained LF; nothing is inserted.
         structural = (bool(selected.code_blocks) or selected.code_group is not None
                       or any(s.type == "markdown_prefix" for s in selected.styles))
+        # A borrowed mark ends the previous paragraph and keeps its ranges:
+        # Docs clips ranges by the physical deletion, and pieces are rebuilt
+        # from the removed paragraphs with their own marks.
+        physical = (match["startIndex"], match["endIndex"])
+        match_span = match.get("removedSpan", physical)
         by_tab.setdefault(match.get("tabId", tab_id), []).append((
-            match["startIndex"], match["endIndex"], length,
-            baseline is not None and not structural, selected,
+            match_span[0], match_span[1], length,
+            baseline is not None and not structural, selected, physical,
         ))
     deletions, creations = [], []
     for match_tab, parts in by_tab.items():
         parts.sort(key=lambda part: part[0])
         removed, rebuilt = _owned_range_requests(
             _snapshot_tab(source, match_tab), match_tab,
-            [part[:4] for part in parts],
+            [part[:4] + (part[5],) for part in parts],
         )
         deletions += removed
         creations += rebuilt
         shift = 0
         groups: dict = {}
-        for start, end, length, _, selected in parts:
+        for start, end, length, _, selected, _physical in parts:
             creations += _code_range_requests(selected, start + shift, match_tab)
             if selected.code_group is not None:
                 # Span the group's paragraphs, including the last one's mark.
@@ -4168,6 +4299,7 @@ def replace_formatted(
 
     occurrence_count = len(matches)
     planned = []
+    removals = []  # whole paragraphs an empty replacement removes
     reset_bullets = set()
     source = body
     for match in matches:
@@ -4186,6 +4318,10 @@ def replace_formatted(
             )
         else:
             contextual = body is not None and not (parsed.tables and whole)
+        if (body is not None and not new_markdown and not replace_paragraphs
+                and _removes_whole_paragraphs(body.get("content", []), match)):
+            removals.append(match)
+            continue
         if match.get("segmentId"):
             from gdoc.mdparse import ParsedMarkdown, parse_inline
             text, styles = parse_inline(new_markdown.removesuffix("\n"))
@@ -4197,12 +4333,14 @@ def replace_formatted(
             parts = [(match, (selected, baseline))]
         elif body is not None and not new_markdown and not replace_paragraphs:
             from gdoc.mdparse import ParsedMarkdown
-            joined = _joined_deletion(body.get("content", []), match)
-            parts = [(joined, (ParsedMarkdown(""), []))] if joined else [
-                (_empty_paragraph_range(body.get("content", []), part) or part,
-                 (ParsedMarkdown(""), []))
-                for part, _ in _paragraph_wording_matches(body, match, "")
-            ]
+            content = body.get("content", [])
+            joined = _joined_deletion(content, match)
+            pieces = [joined] if joined else [
+                part for part, _ in _paragraph_wording_matches(body, match, "")]
+            whole_pieces = [p for p in pieces if _removes_whole_paragraphs(content, p)]
+            removals += whole_pieces
+            parts = [(p, (ParsedMarkdown(""), [])) for p in pieces
+                     if p not in whole_pieces]
         elif contextual:
             parts = _wording_contexts(body, match, new_markdown)
         elif native and replace_paragraphs and not parsed.tables and not any(
@@ -4218,7 +4356,13 @@ def replace_formatted(
                 paragraph, match, parsed.plain_text, parsed.styles,
             )))]
         else:
-            parts = [(match, (parsed, None))]
+            placed = match
+            if whole and body is not None:
+                placed = _table_between_blanks(body.get("content", []), match,
+                                               parsed) or match
+            parts = [(placed, (_contained_parse(
+                parsed, _snapshot_tab(source, match.get("tabId", tab_id)),
+                match.get("tabId", tab_id), match) if whole else parsed, None))]
         for part, context in parts:
             found = (_replacement_paragraph(body.get("content", []), part)
                      if body is not None else None)
@@ -4246,25 +4390,10 @@ def replace_formatted(
                 reset_bullets.add(_match_key(part))
                 _reset_list_indents(context[0])
             planned.append((part, context))
-    if not new_markdown and not replace_paragraphs:
-        # Final-paragraph removal borrows the preceding LF. Adjacent targets
-        # may therefore overlap: delete their union once, in original indexes.
-        merged = []
-        for part, context in sorted(planned, key=lambda p: _match_key(p[0])):
-            if (merged and _match_space(part) == _match_space(merged[-1][0])
-                    and part["startIndex"] <= merged[-1][0]["endIndex"]):
-                previous = merged[-1][0]
-                previous["endIndex"] = max(previous["endIndex"], part["endIndex"])
-            else:
-                merged.append((dict(part), context))
-        # A merged group ending at the segment boundary needs the LF before
-        # the entire group, rather than the LF between its last two members.
-        planned = []
-        for part, context in merged:
-            body = _replacement_body(source, part)
-            if body is not None:
-                part = _empty_paragraph_range(body.get("content", []), part) or part
-            planned.append((part, context))
+    if removals:
+        from gdoc.mdparse import ParsedMarkdown
+        planned += [(plan, (ParsedMarkdown(""), []))
+                    for plan in _plan_paragraph_removals(source, removals)]
     matches = [part for part, _ in planned]
     contexts = {_match_key(part): context for part, context in planned}
     # Table insertion after the main batch tracks index shifts for a single
@@ -4344,9 +4473,12 @@ def replace_formatted(
                     idx = (
                         match["startIndex"] + offset16
                         - table.removed_tabs_before + shift
+                        - match.get("tableBack", 0)
                     )
+                    # The match's own parse may place the table in a container.
+                    placed = contexts[_match_key(match)][0].tables[ordinal - 1]
                     revision_id = _insert_table(
-                        doc_id, idx, table, tab_id=match.get("tabId", tab_id),
+                        doc_id, idx, placed, tab_id=match.get("tabId", tab_id),
                         revision_id=revision_id,
                         progress=progress,
                         resolve_index=_table_position_resolver(

@@ -10,7 +10,7 @@ import pytest
 
 from gdoc.frontmatter import parse_frontmatter
 from gdoc.mdparse import parse_markdown
-from tests.acceptance.test_round5_workflows import MERGES, NativeRoute
+from tests.acceptance.test_round5_workflows import NativeRoute
 from tests.native_model import NativeDoc
 
 
@@ -36,8 +36,8 @@ def _shape(doc):
     return paragraphs, sorted(name for name, *_ in doc.named if name)
 
 
-def _check(route, merge, markdown, edits, tables=None):
-    doc = route.load(NativeDoc(merge=merge))
+def _check(route, markdown, edits, tables=None):
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=markdown)
     assert _read(route) == markdown
@@ -64,29 +64,26 @@ ADJACENT_IN_QUOTED_ITEM = (
 )
 
 
-@MERGES
-def test_adjacent_tables_in_a_quoted_list_inside_an_item(route, merge):
+def test_adjacent_tables_in_a_quoted_list_inside_an_item(route):
     """R6-2: the paragraph Docs keeps between the tables stays in their quote."""
-    _check(route, merge, ADJACENT_IN_QUOTED_ITEM,
+    _check(route, ADJACENT_IN_QUOTED_ITEM,
            [("x", "x2"), ("vb", "vb😀"), ("y", "y3")], tables=2)
 
 
-@MERGES
 @pytest.mark.parametrize("markdown", [
     "> - a\n> \n>   > q\n> \n>   | t |\n>   | --- |\n>   | vt |\n\n",
     "> - a\n> \n>   > q\n> \n>   ```\n>   code  x\n>   ```\n",
     "> - a\n> \n>   > q\n> - b\n",
     "- x\n\n  > - a\n  > \n  >   > deep\n  > - b\n- z\n",
 ])
-def test_quote_inside_a_quoted_list_item(route, merge, markdown):
+def test_quote_inside_a_quoted_list_item(route, markdown):
     """R6-3: a quote in a quoted item keeps the item's later content inside."""
-    doc = _check(route, merge, markdown, [("a", "a1"), ("q" if "q" in markdown
+    doc = _check(route, markdown, [("a", "a1"), ("q" if "q" in markdown
                                                          else "deep", "Q2")])
     names = sorted(name for name, *_ in doc.named if name)
     assert any(name.startswith("gdoc:prefix:v3:") for name in names)
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,tables", [
     ("- a\n\n  para\n\n  | t |\n  | --- |\n  | vt |\n- b\n", 1),
     ("1. a\n\n   para\n\n   > q\n2. b\n", 0),
@@ -95,52 +92,48 @@ def test_quote_inside_a_quoted_list_item(route, merge, markdown):
     ("> - a\n> \n>   para\n> - b\n", 0),
     ("- a\n\n  ## Heading in item\n- b\n", 0),
 ])
-def test_plain_paragraphs_inside_list_items(route, merge, markdown, tables):
+def test_plain_paragraphs_inside_list_items(route, markdown, tables):
     """R6-4: item paragraphs keep the item open for later blocks."""
-    _check(route, merge, markdown, [("a", "a1"), ("b\n", "b2\n")], tables=tables)
+    _check(route, markdown, [("a", "a1"), ("b\n", "b2\n")], tables=tables)
 
 
-@MERGES
 @pytest.mark.parametrize("blanks", [0, 1, 2])
-def test_blank_paragraphs_between_tables_in_an_item(route, merge, blanks):
+def test_blank_paragraphs_between_tables_in_an_item(route, blanks):
     """R6-5: user blank paragraphs between item tables survive every write."""
     markdown = ("- a\n\n  | t |\n  | --- |\n  | vt |\n\n\n" + "\n" * blanks
                 + "  | u |\n  | --- |\n  | vu |\n- b\n")
     # Two blank lines are the paragraph Docs keeps plus the separator; each
     # further blank line is a user paragraph, and the exact readback keeps it.
-    _check(route, merge, markdown, [("vt", "vt2"), ("vu", "vu3"), ("a\n", "a4\n")],
+    _check(route, markdown, [("vt", "vt2"), ("vu", "vu3"), ("a\n", "a4\n")],
            tables=2)
 
 
-@MERGES
 @pytest.mark.parametrize("markdown", [
     "1. a\n\n   ---\n\n2. b\n",
     "- a\n\n  ---\n- b\n",
     "> 1. a\n> \n>    ---\n> 2. b\n",
 ])
-def test_rules_inside_list_items(route, merge, markdown):
+def test_rules_inside_list_items(route, markdown):
     """R6-20b: a rule written inside an item stays inside it."""
-    _check(route, merge, markdown, [("a", "a1"), ("b", "b2")])
+    _check(route, markdown, [("a", "a1"), ("b", "b2")])
 
 
-@MERGES
 @pytest.mark.parametrize("markdown", [
     "- a\n&#32; literal spaces\n",
     "1. a\n&#9;tabbed text\n2. b\n",
     "&#32; top level\n",
 ])
-def test_literal_leading_whitespace_after_a_list_is_text(route, merge, markdown):
+def test_literal_leading_whitespace_after_a_list_is_text(route, markdown):
     """Raw indentation means item content; literal whitespace is an entity."""
-    _check(route, merge, markdown, [("a\n", "a5\n")] if "a\n" in markdown
+    _check(route, markdown, [("a\n", "a5\n")] if "a\n" in markdown
            else [("top", "top6")])
 
 
-@MERGES
-def test_original_r6_2_trigger_keeps_both_tables(route, merge):
+def test_original_r6_2_trigger_keeps_both_tables(route):
     """The exact R6-2 input: one quoted separator line and no final blank."""
     original = ("- x\n\n  > - y\n  >\n  >   | a |\n  >   | --- |\n  >   | va |\n"
                 "  >\n  >   | b |\n  >   | --- |\n  >   | vb |\n")
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=original)
     first = _read(route)
@@ -159,16 +152,15 @@ def test_original_r6_2_trigger_keeps_both_tables(route, merge):
     assert sum(u.kind == "tstart" for u in doc.units) == 2
 
 
-@MERGES
 @pytest.mark.parametrize("blank_lines,paragraphs", [(1, 1), (2, 1), (3, 2), (4, 3)])
 def test_original_r6_5_blank_counts_between_item_tables(
-    route, merge, blank_lines, paragraphs,
+    route, blank_lines, paragraphs,
 ):
     """User blank lines between item tables: the last is the separator, and
     Docs always keeps at least one paragraph between two tables."""
     original = ("- a\n\n  | t |\n  | --- |\n  | vt |\n" + "\n" * blank_lines
                 + "  | u |\n  | --- |\n  | vu |\n")
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=original)
 
@@ -189,7 +181,6 @@ def test_original_r6_5_blank_counts_between_item_tables(
         assert first == changed and between() == paragraphs
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,path", [
     # quote / list item / quote
     ("> - a\n> \n>   > inner\n> - b\n", ("q", 2, "q")),
@@ -198,8 +189,8 @@ def test_original_r6_5_blank_counts_between_item_tables(
     # list item / quote / list item / quote
     ("- a\n\n  > - b\n  > \n  >   > inner\n- c\n", (2, "q", 2, "q")),
 ])
-def test_container_order_is_preserved(route, merge, markdown, path):
-    doc = _check(route, merge, markdown, [("inner", "inner2"), ("a\n", "a4\n")])
+def test_container_order_is_preserved(route, markdown, path):
+    doc = _check(route, markdown, [("inner", "inner2"), ("a\n", "a4\n")])
     [styled] = [s for s in parse_markdown(markdown).styles
                 if s.type == "markdown_prefix" and s.path == path]
     from gdoc.api.docs import _prefix_range_name
@@ -207,7 +198,6 @@ def test_container_order_is_preserved(route, merge, markdown, path):
     assert styled.path == path
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,edits", [
     ("- a\n\n  ```\n  \tcode\ttab\n  ```\n  | t |\n  | --- |\n  | v |\n- b\n",
      [("code", "code7"), ("- b", "- b8")]),
@@ -219,9 +209,9 @@ def test_container_order_is_preserved(route, merge, markdown, path):
      [("tab literal", "tab literal13"), ("- a", "- a14")]),
 ])
 def test_neighbouring_contained_blocks_and_literal_whitespace(
-    route, merge, markdown, edits,
+    route, markdown, edits,
 ):
-    _check(route, merge, markdown, edits)
+    _check(route, markdown, edits)
 
 
 def test_legacy_v2_range_reads_as_a_quote_in_an_item():
@@ -250,11 +240,10 @@ def test_owned_ranges_and_loss_guard_cover_v3_names():
     assert not _OWNED_RANGE_NAME_RE.fullmatch("gdoc:prefix:v3:x")
 
 
-@MERGES
-def test_removed_container_indent_reads_without_the_container(route, merge):
+def test_removed_container_indent_reads_without_the_container(route):
     """A v3 container whose indent someone removed in Docs no longer applies."""
     markdown = "> - a\n> \n>   > inner\n> - b\n"
-    doc = _check(route, merge, markdown, [])
+    doc = _check(route, markdown, [])
     start = "".join(u.ch for u in doc.units).index("inner") + 1  # section break
     route.service.doc.apply({"updateParagraphStyle": {
         "range": {"startIndex": start, "endIndex": start + 1},
@@ -278,7 +267,6 @@ def _list_of(doc, text):
     return found
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,outer,inner", [
     # quote / item / quote: the quoted list is its own list
     ("> - a\n> \n>   > - x\n>   > - y\n> - b\n", ("a", "b"), ("x", "y")),
@@ -289,18 +277,17 @@ def _list_of(doc, text):
     ("- a\n\n  > - m\n  > \n  >   > - x\n  >   > - y\n  > - n\n- b\n",
      ("m", "n"), ("x", "y")),
 ])
-def test_alternating_containers_keep_list_identity(route, merge, markdown,
+def test_alternating_containers_keep_list_identity(route, markdown,
                                                    outer, inner):
     """CodeRabbit on 262a937: a list quoted in an item never joins the list
     around it, and the enclosing list stays one list across it."""
-    doc = _check(route, merge, markdown, [(inner[0] + "\n", inner[0] + "2\n"),
+    doc = _check(route, markdown, [(inner[0] + "\n", inner[0] + "2\n"),
                                           (outer[1] + "\n", outer[1] + "3\n")])
     a, b = (_list_of(doc, outer[0]), _list_of(doc, outer[1] + "3"))
     x, y = (_list_of(doc, inner[0] + "2"), _list_of(doc, inner[1]))
     assert a == b and x == y and a != x
 
 
-@MERGES
 @pytest.mark.parametrize("source,expected,before", [
     # The paragraph Docs keeps before a first table reads as a blank line.
     ("| h |\n| --- |\n| v |\nplain\n", "\n| h |\n| --- |\n| v |\nplain\n", 1),
@@ -309,10 +296,10 @@ def test_alternating_containers_keep_list_identity(route, merge, markdown,
     # A table ending the tab keeps Docs' final paragraph after it.
     ("plain\n| h |\n| --- |\n| v |\n", "plain\n| h |\n| --- |\n| v |\n\n", 1),
 ])
-def test_table_boundary_paragraphs_are_stable(route, merge, source, expected, before):
+def test_table_boundary_paragraphs_are_stable(route, source, expected, before):
     """R6-12: mandatory native paragraphs around tables are explicit and stable;
     user-authored blank paragraphs are never erased."""
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=source)
     assert _read(route) == expected
@@ -337,7 +324,6 @@ def _indent_of(doc, text):
     raise AssertionError(text)
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,text,indent", [
     ("- parent\n  - child\n\n    continuation\n- next\n", "continuation", 72),
     ("1. a\n  1. b\n\n     para\n2. c\n", "para", 72),
@@ -347,14 +333,14 @@ def _indent_of(doc, text):
     ("- p\n  - c\n\n    | t |\n    | --- |\n    | v |\n- n\n", None, None),
 ])
 def test_content_under_nested_items_is_indented_at_its_item(
-    route, merge, markdown, text, indent,
+    route, markdown, text, indent,
 ):
     """Internal review P1: one container level per enclosing item."""
     last = markdown.rstrip("\n").rsplit("\n", 1)[1]
     edits = [(last, last + "2")]
     if text:
         edits.append((text, text + "3"))
-    doc = _check(route, merge, markdown, edits,
+    doc = _check(route, markdown, edits,
                  tables=1 if "| t |" in markdown else None)
     from gdoc.api.docs import _parse_prefix_range_name
     if text:

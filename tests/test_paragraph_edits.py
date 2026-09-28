@@ -159,20 +159,28 @@ def test_multiline_count_mismatch_refuses_before_service_access(mocker):
     service.assert_not_called()
 
 
+def _bullet_resets(requests):
+    """Bullet removals outside the list compiler, whose own removal follows
+    the temporary separator and anchor it inserts."""
+    return [r for i, r in enumerate(requests) if "deleteParagraphBullets" in r
+            and not (i and requests[i - 1].get("insertText", {}).get("text") == "\n\n")]
+
+
 @pytest.mark.parametrize("new", ["Plain", "## Heading", "", "- item"])
 def test_cell_replacement_removes_inherited_list_unless_requested(mocker, new):
     """Whole-cell prose removes lists; list Markdown recreates membership."""
     body = _body(("Old", "NORMAL_TEXT", True))
     body = {"content": [{"table": {"tableRows": [{"tableCells": [body]}]}}]}
     requests = _requests(mocker, body, "Old", new, replace_paragraphs=True)
-    resets = [req for req in requests if "deleteParagraphBullets" in req]
-    assert len(resets) == 1
+    assert len(_bullet_resets(requests)) == 1
     if new == "- item":
         assert any("createParagraphBullets" in req for req in requests)
     else:
         assert not any("createParagraphBullets" in req for req in requests)
+    # Deletions after a bullet request remove the list's temporary paragraphs.
     assert all(req["deleteContentRange"]["range"]["endIndex"] == 4
-               for req in requests if "deleteContentRange" in req)
+               for i, req in enumerate(requests) if "deleteContentRange" in req
+               and not (i and "createParagraphBullets" in requests[i - 1]))
 
 
 @pytest.mark.parametrize("neighbor", ["normal", "list", "table", "image"])
@@ -201,17 +209,6 @@ def test_empty_heading_does_not_mutate_neighbor(mocker, neighbor, last):
                               tab_id="synthetic-tab", body=body)
         service.assert_not_called()
         return
-    if last and neighbor == "list":
-        # The retained final mark belongs to the heading; the list item's
-        # membership could not be restored on it, so nothing is sent.
-        service = mocker.patch("gdoc.api.docs.get_docs_service")
-        with pytest.raises(GdocError, match="list item before it") as error:
-            replace_formatted("synthetic-doc",
-                              find_text_in_document(None, "Heading", body=body), "",
-                              "synthetic-rev", tab_id="synthetic-tab", body=body)
-        assert error.value.exit_code == 3
-        service.assert_not_called()
-        return
     requests = _requests(mocker, body, "Heading", "")
 
     def deleted(start, end):
@@ -221,14 +218,10 @@ def test_empty_heading_does_not_mutate_neighbor(mocker, neighbor, last):
     # A non-final heading is emptied, then its one empty paragraph removed,
     # the merge shape observed to keep the following paragraph's style.
     deletion = [deleted(9, 17)] if last else [deleted(10, 17), deleted(10, 11)]
-    # A final heading keeps its own mark; the neighbor's style is restored on
-    # it whichever paragraph's style Docs keeps on the merge.
-    restore = [{"updateParagraphStyle": {
-        "range": {"startIndex": 9, "endIndex": 10, "tabId": "synthetic-tab"},
-        "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-        "fields": "namedStyleType",
-    }}] if last else []
-    assert requests == [*deletion, *restore]
+    # A final heading's text moves onto the neighbor's mark's paragraph:
+    # Docs keeps the style and list of the paragraph where the deletion
+    # starts (observed live), so nothing is restored, even for a list item.
+    assert requests == deletion
 
 
 @pytest.mark.parametrize("position", ["start", "end"])
@@ -727,13 +720,11 @@ def test_replay_192037_removes_final_heading_using_preceding_newline(mocker):
                  ('Obsolete section', 'HEADING_2', False))
     requests = _requests(mocker, body, 'Obsolete section', '')
     assert _apply_text_requests(body, requests) == 'Intro\nBody\n'
-    assert len(requests) == 2
+    assert len(requests) == 1
     assert requests[0]['deleteContentRange']['range']['endIndex'] == (
         body['content'][-1]['endIndex'] - 1
     )
-    # Body's own style is restored on the heading's retained mark.
-    assert requests[1]['updateParagraphStyle']['paragraphStyle'] == {
-        'namedStyleType': 'NORMAL_TEXT'}
+    # Docs keeps Body's style on the merge (observed live); nothing restored.
 
 
 @pytest.mark.parametrize('position', ['start', 'end'])
@@ -808,9 +799,8 @@ def test_adjacent_complete_paragraph_removals_delete_shared_mark_once(mocker, ol
                  ('Gone', 'HEADING_2', False))
     requests = _requests(mocker, body, old, '')
     assert _apply_text_requests(body, requests) == 'Keep\n'
-    # One deletion, then Keep's style restored on the retained heading mark.
-    assert [next(iter(r)) for r in requests] == [
-        'deleteContentRange', 'updateParagraphStyle']
+    # One deletion; Docs keeps Keep's style on the merge (observed live).
+    assert [next(iter(r)) for r in requests] == ['deleteContentRange']
 
 
 def test_partial_multiline_deletion_removes_fully_covered_final_paragraph(mocker):
@@ -873,10 +863,11 @@ def test_whole_cell_list_removal_request_ranges(mocker, count, new, bullet):
     assert body == original
     rendered = new.removeprefix("- ")
     assert _apply_text_requests(cell, requests) == rendered + "\n"
-    resets = [r["deleteParagraphBullets"]["range"] for r in requests
-              if "deleteParagraphBullets" in r]
+    resets = [r["deleteParagraphBullets"]["range"] for r in _bullet_resets(requests)]
+    # The list compiler's own indent requests are checked natively elsewhere.
     styles = [r["updateParagraphStyle"] for r in requests
-              if "updateParagraphStyle" in r]
+              if "namedStyleType" in r.get("updateParagraphStyle", {})
+              .get("paragraphStyle", {})]
     creates = [r for r in requests if "createParagraphBullets" in r]
     assert bool(creates) == new.startswith("- ")
     if not bullet and not creates and new:

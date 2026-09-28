@@ -11,96 +11,26 @@ from conftest import paragraph, tab
 from test_workflows import existing_helper, read, requests
 
 from gdoc.mdparse import parse_inline, parse_markdown, utf16_len
+from tests.native_model import NativeDoc
 
 
 def paragraph_rewrite_readback(original, batch, *, tab_id="draft"):
-    """Apply a full rewrite's text and masks, then expose a native read snapshot."""
-    for request in batch:
+    """Apply a full rewrite's text batch on the native model, from its insert.
+
+    The requests before the rewrite's one insert at index 1 clear the old
+    body; the model starts from the empty tab they leave.
+    """
+    first = next(i for i, r in enumerate(batch) if "insertText" in r)
+    assert batch[first]["insertText"]["location"]["index"] == 1
+    doc = NativeDoc()
+    for request in batch[first:]:
         data = next(iter(request.values()))
         assert data.get("range", data.get("location", {})).get("tabId") == tab_id
-    text = existing_helper("test_paragraph_edits", "_apply_text_requests")(
-        original, batch
-    )
-    assert "\t" not in text, "Nesting-tab consumption is outside this helper"
-    inserted = [i for i, r in enumerate(batch) if "insertText" in r]
-    assert len(inserted) == 1
-    assert batch[inserted[0]]["insertText"]["location"]["index"] == 1
-    assert batch[inserted[0]]["insertText"]["text"] + "\n" == text
-    after = deepcopy(batch[inserted[0] :])
-    allowed = {
-        "insertText",
-        "updateTextStyle",
-        "updateParagraphStyle",
-        "createParagraphBullets",
-        "createNamedRange",
-    }
-    assert {next(iter(r)) for r in after} <= allowed
-    normalized = deepcopy(after)
-    for request in normalized:
-        data = next(iter(request.values()))
-        address = data.get("range", data.get("location", {}))
-        if "tabId" in address:
-            address["tabId"] = "tab"  # Existing helper's fixture name only.
-    styles = existing_helper("test_replacement_styles", "_replacement_styles")(
-        normalized, {}
-    ) + [{}]
-    assert len(styles) == utf16_len(text)
-    content, cursor = [], 1
-    for line in text.splitlines(keepends=True):
-        end = cursor + utf16_len(line)
-        p = paragraph(line, cursor)
-        units = line.encode("utf-16-le")
-        line_styles = styles[cursor - 1 : end - 1]
-        runs, start = [], 0
-        while start < len(line_styles):
-            finish = start + 1
-            while (
-                finish < len(line_styles) and line_styles[finish] == line_styles[start]
-            ):
-                finish += 1
-            runs.append(
-                {
-                    "startIndex": cursor + start,
-                    "endIndex": cursor + finish,
-                    "textRun": {
-                        "content": units[start * 2 : finish * 2].decode("utf-16-le"),
-                        "textStyle": line_styles[start],
-                    },
-                }
-            )
-            start = finish
-        p["paragraph"]["elements"] = runs
-        content.append(p)
-        cursor = end
-    named_ranges = {}
-    for request in after:
-        if "createNamedRange" in request:
-            data = request["createNamedRange"]
-            named_ranges.setdefault(data["name"], {"namedRanges": []})[
-                "namedRanges"
-            ].append({"name": data["name"], "ranges": [data["range"]]})
-        if "updateParagraphStyle" in request:
-            data = request["updateParagraphStyle"]
-            lo, hi = data["range"]["startIndex"], data["range"]["endIndex"]
-            for p in content:
-                if p["startIndex"] < hi and lo < p["endIndex"]:
-                    for field in data["fields"].split(","):
-                        if field in data["paragraphStyle"]:
-                            p["paragraph"]["paragraphStyle"][field] = deepcopy(
-                                data["paragraphStyle"][field]
-                            )
-                        else:
-                            p["paragraph"]["paragraphStyle"].pop(field, None)
-        if "createParagraphBullets" in request:
-            data = request["createParagraphBullets"]
-            assert data["bulletPreset"].startswith("BULLET_")
-            for p in content:
-                if (
-                    p["startIndex"] < data["range"]["endIndex"]
-                    and data["range"]["startIndex"] < p["endIndex"]
-                ):
-                    p["paragraph"]["bullet"] = {"listId": "synthetic-bullets"}
-    return {"body": {"content": content}, "namedRanges": named_ranges}
+        doc.apply(request)
+    result = doc.document_tab(tab_id)
+    result["body"]["content"] = [e for e in result["body"]["content"]
+                                 if "sectionBreak" not in e]
+    return result
 
 
 COMBINATION = (
@@ -392,9 +322,10 @@ def _write_table_and_project(scenario, target, before, cells, revision):
     scenario.ok("write", tab="draft", text=target)
     assert len(scenario.batches) == 3
     first_batch = scenario.batches[0]["requests"]
-    assert "deleteContentRange" in first_batch[0]
+    assert "deleteContentRange" in next(r for r in first_batch
+                                        if "deleteNamedRange" not in r)
     projected = paragraph_rewrite_readback(
-        {"content": [paragraph("\n")]}, first_batch[1:]
+        {"content": [paragraph("\n")]}, first_batch
     )
     fill = scenario.batches[2]["requests"]
     ranges = [r["createNamedRange"] for r in fill if "createNamedRange" in r]

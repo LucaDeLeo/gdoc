@@ -1,9 +1,4 @@
-"""Offline checks of the list compiler against the specified request semantics.
-
-The small runner below implements only text edits and the preceding-list join /
-leading-tab removal rules needed by these regressions, not a Docs emulator.
-These checks do not establish backend fidelity.
-"""
+"""Offline checks of the list compiler on the native model's list rules."""
 
 import pytest
 
@@ -14,82 +9,27 @@ from gdoc.api.docs import (
 )
 from gdoc.lossy import _numbered_list_hazards
 from gdoc.mdparse import parse_markdown, to_docs_requests, utf16_len
+from tests.native_model import NativeDoc
 
 
 def apply_list_requests(requests):
+    """Apply requests to the native model (observed Docs list rules).
+
+    Requests before the first insert act on a previous body; the model starts
+    from the empty tab they leave.
+    """
+    doc = NativeDoc()
+    first = next(i for i, r in enumerate(requests) if "insertText" in r)
+    for request in requests[first:]:
+        doc.apply(request)
     paragraphs = []
-    serial = 0
-
-    def coordinates():
-        start = 1
-        for paragraph in paragraphs:
-            end = start + utf16_len(paragraph['text'])
-            yield start, end, paragraph
-            start = end
-
-    def position(text, units):
-        for index in range(len(text) + 1):
-            if utf16_len(text[:index]) == units:
-                return index
-        raise AssertionError('Invalid UTF-16 boundary')
-
-    for request in requests:
-        if 'insertText' in request:
-            data = request['insertText']
-            if not paragraphs:
-                # The document contributes its retained terminal newline.
-                paragraphs = [{'text': line, 'list': None, 'depth': 0}
-                              for line in (data['text'] + '\n').splitlines(True)]
-                continue
-            index = data['location']['index']
-            for start, end, paragraph in coordinates():
-                if start <= index < end:
-                    at = position(paragraph['text'], index - start)
-                    replacement = (paragraph['text'][:at] + data['text']
-                                   + paragraph['text'][at:])
-                    slot = next(i for i, p in enumerate(paragraphs) if p is paragraph)
-                    paragraphs[slot:slot + 1] = [
-                        dict(paragraph, text=line)
-                        for line in replacement.splitlines(True)
-                    ]
-                    break
-            else:
-                raise AssertionError('Insert outside paragraphs')
-        elif 'deleteContentRange' in request:
-            target = request['deleteContentRange']['range']
-            for start, end, paragraph in coordinates():
-                if start <= target['startIndex'] < end:
-                    a = position(paragraph['text'], target['startIndex'] - start)
-                    b = position(paragraph['text'], target['endIndex'] - start)
-                    paragraph['text'] = paragraph['text'][:a] + paragraph['text'][b:]
-                    if not paragraph['text']:
-                        slot = next(i for i, p in enumerate(paragraphs)
-                                    if p is paragraph)
-                        paragraphs.pop(slot)
-                    break
-        elif 'createParagraphBullets' in request:
-            data = request['createParagraphBullets']
-            target = data['range']
-            selected = [p for start, end, p in coordinates()
-                        if end > target['startIndex'] and start < target['endIndex']]
-            assert selected
-            first = next(i for i, p in enumerate(paragraphs) if p is selected[0])
-            prior = paragraphs[first - 1] if first else {}
-            preset = data['bulletPreset']
-            serial += 1
-            identity = (prior['list'] if prior.get('preset') == preset
-                        and prior.get('list') else serial)
-            for paragraph in selected:
-                text = paragraph['text']
-                paragraph['depth'] = len(text) - len(text.lstrip('\t'))
-                paragraph['text'] = text.lstrip('\t')
-                paragraph['list'] = identity
-                paragraph['preset'] = preset
-        elif 'deleteParagraphBullets' in request:
-            target = request['deleteParagraphBullets']['range']
-            for start, end, paragraph in coordinates():
-                if end > target['startIndex'] and start < target['endIndex']:
-                    paragraph['list'] = None
+    for start, mark in doc.paragraphs():
+        unit = doc.units[mark]
+        text = "".join(u.ch for u in doc.units[start:mark + 1] if not u.cont)
+        bullet = unit.bullet or {}
+        paragraphs.append({"text": text, "list": bullet.get("list"),
+                           "depth": bullet.get("nest", 0),
+                           "preset": bullet.get("preset")})
     return paragraphs
 
 

@@ -7,7 +7,7 @@ from gdoc.annotate import annotate_markdown
 from gdoc.api.docs import get_tab_text
 from gdoc.frontmatter import parse_frontmatter
 from gdoc.mdparse import parse_markdown
-from tests.acceptance.test_round5_workflows import MERGES, NativeRoute
+from tests.acceptance.test_round5_workflows import NativeRoute
 from tests.native_model import NativeDoc
 
 
@@ -27,23 +27,21 @@ def _links(doc):
 CANONICAL_TABLE = "| Name | Qty |\n| --- | --- |\n| apple | 3 |\n| pear | 4 |\n\n"
 
 
-@MERGES
 @pytest.mark.parametrize("source", [
     "| Name | Qty | \n| --- | --- |\n| apple | 3 |\n| pear | 4 |\n",
     "| Name | Qty |\n| --- | --- |\n| apple | 3 |  \n| pear | 4 |\t\n",
     "  | Name | Qty |\n  | --- | --- |\n  | apple | 3 |\n  | pear | 4 |\n",
     "   | Name | Qty |\n | --- | --- |\n| apple | 3 |\n  | pear | 4 | \n",
 ])
-def test_gfm_table_spacing_is_still_a_table(route, merge, source):
+def test_gfm_table_spacing_is_still_a_table(route, source):
     """R6-9: trailing whitespace and up to three spaces of indent."""
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=source)
     assert sum(u.kind == "tstart" for u in doc.units) == 1
     assert _read(route) == "\n" + CANONICAL_TABLE
 
 
-@MERGES
 @pytest.mark.parametrize("source,url", [
     ('See [docs](https://example.com/guide "User guide").\n',
      "https://example.com/guide"),
@@ -55,9 +53,9 @@ def test_gfm_table_spacing_is_still_a_table(route, merge, source):
     ('See [docs][d].\n\n[d]: https://example.com/ref "Title"\n',
      "https://example.com/ref"),
 ])
-def test_link_titles_never_enter_the_url(route, merge, source, url):
+def test_link_titles_never_enter_the_url(route, source, url):
     """R6-10 and R6-20c: a CommonMark title is not part of the destination."""
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=source)
     assert _links(doc) == [url]
@@ -101,9 +99,8 @@ def test_rule_like_list_items_keep_their_text(item):
     assert [s for s in parsed.styles if s.type == "bullets"]
 
 
-@MERGES
-def test_rule_like_list_item_survives_changed_rewrites(route, merge):
-    doc = route.load(NativeDoc(merge=merge))
+def test_rule_like_list_item_survives_changed_rewrites(route):
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text="- &#32;--\n- b\n")
     first = _read(route)

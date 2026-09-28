@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 import pytest
+from test_list_request_semantics import apply_list_requests
 
 from gdoc.api.docs import insert_markdown_into_tab
 from gdoc.cli import (
@@ -72,9 +73,9 @@ def test_f7_reset_retained_paragraph_before_inserting_new_content(mocker, paragr
     assert reset["paragraphStyle"] == {"namedStyleType": "NORMAL_TEXT"}
     assert requests[3]["updateTextStyle"]["textStyle"] == {}
     assert requests[3]["updateTextStyle"]["fields"] == "*"
-    bullets = [r["createParagraphBullets"]["range"] for r in requests
+    bullets = [r["createParagraphBullets"] for r in requests
                if "createParagraphBullets" in r]
-    assert bullets == [{"startIndex": 15, "endIndex": 20, "tabId": "draft"}]
+    assert [b["bulletPreset"] for b in bullets] == ["BULLET_DISC_CIRCLE_SQUARE"]
 
 
 @pytest.mark.parametrize("source,expected", [
@@ -153,13 +154,16 @@ def test_r4_f005_three_levels_share_range_and_keep_later_offsets(marker, preset,
     first = "Parent 😀\n\tChild\n\t\tGrandchild\nSibling\n"
     second = "Next\n\tNested\n"
     assert parsed.plain_text.startswith(first + "\n" + second)
-    start = 7 + utf16_len(first + "\n")
-    assert bullets == [
-        {"range": {"startIndex": start, "endIndex": start + utf16_len(second),
-                   "tabId": "draft"}, "bulletPreset": preset},
-        {"range": {"startIndex": 7, "endIndex": 7 + utf16_len(first),
-                   "tabId": "draft"}, "bulletPreset": preset},
-    ]
+    assert [b["bulletPreset"] for b in bullets] == [preset, preset]
+    # Applied from index 1 on the native model: two lists, absolute levels.
+    paragraphs = apply_list_requests(to_docs_requests(parse_markdown(source), 1))
+    items = [(p["text"].rstrip("\n"), p["depth"], p["list"])
+             for p in paragraphs if p["list"] is not None]
+    assert [(text, depth) for text, depth, _ in items][:6] == [
+        ("Parent 😀", 0), ("Child", 1), ("Grandchild", 2), ("Sibling", 0),
+        ("Next", 0), ("Nested", 1)]
+    assert len({lst for *_, lst in items[:4]}) == 1
+    assert items[4][2] == items[5][2] != items[0][2]
     assert parsed.removed_tabs == 4
     if table:
         assert parsed.tables[0].removed_tabs_before == 4
@@ -170,9 +174,12 @@ def test_mixed_list_types_start_separate_ranges():
     bullets = [r["createParagraphBullets"] for r in requests
                if "createParagraphBullets" in r]
     assert [r["bulletPreset"] for r in bullets] == [
-        "NUMBERED_DECIMAL_ALPHA_ROMAN", "BULLET_DISC_CIRCLE_SQUARE",
+        "BULLET_DISC_CIRCLE_SQUARE", "NUMBERED_DECIMAL_ALPHA_ROMAN",
     ]
-    assert bullets[0]["range"]["startIndex"] == 15  # Before earlier tabs are removed.
+    paragraphs = [p for p in apply_list_requests(requests) if p["list"]]
+    assert [(p["text"], p["depth"], p["preset"][:4]) for p in paragraphs] == [
+        ("Parent\n", 0, "BULL"), ("Child\n", 1, "BULL"), ("Number\n", 0, "NUMB")]
+    assert paragraphs[0]["list"] == paragraphs[1]["list"] != paragraphs[2]["list"]
 
 
 @pytest.mark.parametrize("native,loss", [

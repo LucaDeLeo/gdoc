@@ -1,6 +1,7 @@
 """Synthetic request-level checks for native Markdown replacement."""
 
 import pytest
+from test_list_request_semantics import apply_list_requests
 
 from gdoc.api.docs import (
     _code_range_requests,
@@ -292,15 +293,12 @@ def test_mixed_children_keep_parent_batch_and_restore_semantic_indent(mocker):
         r["createParagraphBullets"] for r in requests if "createParagraphBullets" in r
     ]
     assert len(creates) == 2
-    assert creates[0]["range"] == {"startIndex": 1, "endIndex": 22, "tabId": "tab-one"}
     assert creates[0]["bulletPreset"] == "NUMBERED_DECIMAL_ALPHA_ROMAN"
     assert creates[1]["bulletPreset"].startswith("BULLET_")
-    indents = [
-        r["updateParagraphStyle"]["paragraphStyle"]["indentStart"]["magnitude"]
-        for r in requests
-        if "indentStart" in r.get("updateParagraphStyle", {}).get("paragraphStyle", {})
-    ]
-    assert indents == [36, 72, 36]
+    paragraphs = apply_list_requests(requests)
+    assert [(p["text"], p["depth"]) for p in paragraphs] == [
+        ("parent\n", 0), ("child\n", 1), ("sibling\n", 0)]
+    assert paragraphs[0]["list"] == paragraphs[2]["list"] != paragraphs[1]["list"]
 
 
 def test_terminal_empty_list_styles_retained_native_mark(mocker):
@@ -312,8 +310,9 @@ def test_terminal_empty_list_styles_retained_native_mark(mocker):
         for r in requests
         if "createParagraphBullets" in r
     ) == {
-        "startIndex": 1,
-        "endIndex": 2,
+        # The temporary anchor precedes the item, which keeps the tab's mark.
+        "startIndex": 2,
+        "endIndex": 4,
         "tabId": "tab-one",
     }
 
@@ -329,8 +328,8 @@ def test_terminal_empty_item_after_worded_item_is_included(mocker):
         for r in requests
         if "createParagraphBullets" in r
     ) == {
-        "startIndex": 1,
-        "endIndex": 8,
+        "startIndex": 2,
+        "endIndex": 10,
         "tabId": "tab-one",
     }
 

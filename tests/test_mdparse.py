@@ -345,7 +345,8 @@ class TestToDocsRequests:
         assert len(bullet_reqs) == 1
         cpb = bullet_reqs[0]["createParagraphBullets"]
         assert cpb["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
-        assert cpb["range"]["startIndex"] == 1
+        # The range starts at the temporary anchor before the item.
+        assert cpb["range"]["startIndex"] == 2
 
     def test_numbered_generates_create_paragraph_bullets(self):
         parsed = parse_markdown("1. item")
@@ -794,11 +795,14 @@ class TestNewToDocsRequests:
         reqs = to_docs_requests(
             parse_markdown("- a\n  - b\n- c"), insert_index=1,
         )
-        starts = [
-            r["createParagraphBullets"]["range"]["startIndex"]
-            for r in reqs if "createParagraphBullets" in r
-        ]
-        assert starts == [1]  # One range establishes the entire nested list.
+        from tests.test_list_request_semantics import apply_list_requests
+
+        # One range establishes the entire nested list.
+        assert sum("createParagraphBullets" in r for r in reqs) == 1
+        paragraphs = [p for p in apply_list_requests(reqs) if p["list"]]
+        assert [(p["text"], p["depth"]) for p in paragraphs] == [
+            ("a\n", 0), ("b\n", 1), ("c\n", 0)]
+        assert len({p["list"] for p in paragraphs}) == 1
 
 
 class TestTableTabAdjustment:

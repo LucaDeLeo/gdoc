@@ -1471,11 +1471,55 @@ def list_requests(parsed: ParsedMarkdown, insert_index: int,
 
 def _list_bullet_requests(parsed: ParsedMarkdown, insert_index: int,
                           tab_id: str | None = None) -> list[dict]:
-    """Use isolated groups for nested restarts and interleaved continuation."""
-    items = [s for s in parsed.styles if s.type == "bullets"]
+    """Create each native list with the levels and identity its Markdown gives."""
+    items = sorted((s for s in parsed.styles if s.type == "bullets"),
+                   key=lambda s: s.start)
+    if not items:
+        return []
+    return _native_list_requests(parsed, insert_index, tab_id, items,
+                                 _native_lists(parsed, items))
+
+
+def _native_lists(parsed: ParsedMarkdown, items: list) -> list[list]:
+    """Partition list items into native lists, each with one preset.
+
+    A block of items with one preset, whose nested sublists are separated by
+    their parents, is one native list, as Docs' own Tab key makes it. Any
+    other block (mixed bullet types, nested restarts, or numbering that
+    continues across another list or prose) gets one native list per
+    Markdown list, so numbering continues exactly where the Markdown does.
+    """
+    blocks: list[list] = []
+    for item in items:
+        if blocks and (
+            item.list_block is not None
+            and blocks[-1][-1].list_block == item.list_block
+            or item.list_block is None and blocks[-1][-1].end == item.start
+        ):
+            blocks[-1].append(item)
+        else:
+            blocks.append([item])
+    if not _needs_list_per_group(parsed, items, blocks):
+        return blocks
+    groups: dict = {}
+    for item in items:
+        key = item.list_group
+        if key is None:
+            key = (item.list_block, item.list_depth, item.style["bulletPreset"])
+        groups.setdefault(key, []).append(item)
+    return list(groups.values())
+
+
+def _needs_list_per_group(parsed: ParsedMarkdown, items: list, blocks: list) -> bool:
+    if any(len({item.style["bulletPreset"] for item in block}) > 1
+           for block in blocks):
+        return True
     active = {}
     previous = {}
     latest = {}
+    objects = {t.plain_text_offset for t in parsed.tables} | {
+        image.plain_text_offset for image in parsed.images} | {
+        s.start for s in parsed.styles if s.type == "image"}
     for item in items:
         for depth in list(active):
             if depth > item.list_depth:
@@ -1487,223 +1531,55 @@ def _list_bullet_requests(parsed: ParsedMarkdown, insert_index: int,
                 other.list_group != item.list_group
                 and other.list_depth <= item.list_depth
                 and resumed.start < other.start < item.start for other in items):
-            return _separated_list_requests(parsed, insert_index, tab_id)
+            return True
         latest[item.list_group] = item
-        if item.style["bulletPreset"].startswith("NUMBERED"):
-            prior = active.get(item.list_depth)
-            if item.list_depth and prior and prior != item.list_group:
-                return _separated_list_requests(parsed, insert_index, tab_id)
-            active[item.list_depth] = item.list_group
-            earlier = previous.get(item.list_group)
-            if earlier is not None:
-                between = [s for s in parsed.styles
-                           if earlier.end <= s.start < item.start]
-                interleaved = any(s.type == "bullets" and
-                                  s.list_depth <= item.list_depth for s in between)
-                # A table or image between items interrupts the list like prose.
-                objects = {t.plain_text_offset for t in parsed.tables} | {
-                    image.plain_text_offset for image in parsed.images} | {
-                    s.start for s in parsed.styles if s.type == "image"}
-                prose = any(
-                    s.type == "paragraph_style"
-                    and (parsed.plain_text[s.start:s.end].strip()
-                         or any(s.start <= o < s.end for o in objects))
-                    and not any(b.start == s.start for b in items)
-                    for s in between
-                )
-                if interleaved or prose:
-                    return _separated_list_requests(parsed, insert_index, tab_id)
-            previous[item.list_group] = item
-    return _simple_list_requests(parsed, insert_index, tab_id)
-
-
-def _simple_list_requests(parsed: ParsedMarkdown, insert_index: int,
-                  tab_id: str | None = None) -> list[dict]:
-    """Create independent lists backwards; span blanks for explicit continuation.
-
-    createParagraphBullets joins a matching preceding list. Later blocks must
-    therefore exist before earlier blocks acquire their bullets. Content tabs
-    were inserted as spaces and are restored only after all bullet operations
-    on their block, so only nesting tabs are consumed.
-    """
-    items = sorted((s for s in parsed.styles if s.type == "bullets"),
-                   key=lambda s: s.start)
-    blocks = []
-    for item in items:
-        if blocks and (
-            item.list_block is not None
-            and blocks[-1][-1].list_block == item.list_block
-            or item.list_block is None and blocks[-1][-1].end == item.start
-        ):
-            blocks[-1].append(item)
-        else:
-            blocks.append([item])
-    requests = []
-    offsets = _utf16_prefix(parsed.plain_text)
-
-    def span(start, end):
-        target = {"startIndex": start, "endIndex": max(start + 1, end)}
-        if tab_id:
-            target["tabId"] = tab_id
-        return target
-
-    def location(index):
-        target = {"index": index}
-        if tab_id:
-            target["tabId"] = tab_id
-        return target
-
-    for block in reversed(blocks):
-        first, last = block[0], block[-1]
-        root_preset = first.style["bulletPreset"]
-        # A stripped final empty item still owns the retained paragraph mark.
-        block_end = insert_index + offsets[last.end] + (last.start == last.end)
-        requests.append({"createParagraphBullets": {
-            "range": span(insert_index + offsets[first.start], block_end),
-            "bulletPreset": root_preset,
-        }})
-        removed = 0
-        previous_end = None
-        restorations = []
-        mixed = len({item.style["bulletPreset"] for item in block}) > 1
-        if mixed:
-            requests.extend(_mixed_block_requests(
-                block, root_preset, insert_index, offsets, span, location,
-            ))
+        if not item.style["bulletPreset"].startswith("NUMBERED"):
             continue
-        for item in block:
-            depth = item.list_depth
-            start = insert_index + offsets[item.start] - removed
-            if previous_end is not None and previous_end < start:
-                # These blank paragraphs linked the numbered items while the
-                # bullet request ran; removing their bullets retains identity.
-                requests.append({"deleteParagraphBullets": {
-                    "range": span(previous_end, start),
-                }})
-            removed += depth
-            end = max(start + 1, insert_index + offsets[item.end] - removed)
-            target = span(start, end)
-            previous_end = end
-            if item.style["bulletPreset"] != root_preset:
-                requests.append({"deleteParagraphBullets": {"range": target}})
-                if depth:
-                    requests.append({"insertText": {
-                        "location": location(start), "text": "\t" * depth,
-                    }})
-                requests.append({"createParagraphBullets": {
-                    "range": span(start, end + depth),
-                    "bulletPreset": item.style["bulletPreset"],
-                }})
-            if mixed:
-                requests.append({"updateParagraphStyle": {
-                    "range": target,
-                    "paragraphStyle": {
-                        "indentStart": {"magnitude": 36 * (depth + 1), "unit": "PT"},
-                        "indentFirstLine": {
-                            "magnitude": 36 * (depth + 1) - 18, "unit": "PT",
-                        },
-                    },
-                    "fields": "indentStart,indentFirstLine",
-                }})
-            if item.literal_tabs:
-                restorations.extend([
-                    # Inserted after its placeholder spaces, the tab takes their
-                    # parsed style rather than the following text's.
-                    {"insertText": {"location": location(start + item.literal_tabs),
-                                    "text": "\t" * item.literal_tabs}},
-                    {"deleteContentRange": {
-                        "range": span(start, start + item.literal_tabs),
-                    }},
-                ])
-        requests.extend(restorations)
-    return requests
+        prior = active.get(item.list_depth)
+        if item.list_depth and prior and prior != item.list_group:
+            return True
+        active[item.list_depth] = item.list_group
+        earlier = previous.get(item.list_group)
+        if earlier is not None:
+            between = [s for s in parsed.styles
+                       if earlier.end <= s.start < item.start]
+            interleaved = any(s.type == "bullets" and
+                              s.list_depth <= item.list_depth for s in between)
+            # A table or image between items interrupts the list like prose.
+            prose = any(
+                s.type == "paragraph_style"
+                and (parsed.plain_text[s.start:s.end].strip()
+                     or any(s.start <= o < s.end for o in objects))
+                and not any(b.start == s.start for b in items)
+                for s in between
+            )
+            if interleaved or prose:
+                return True
+        previous[item.list_group] = item
+    return False
 
 
-def _mixed_block_requests(block, root_preset, insert_index, offsets, span, location):
-    """Give each nested list of a mixed block its own preset and identity.
+def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
+                          tab_id: str | None, items: list,
+                          lists: list[list]) -> list[dict]:
+    """Bullet requests that give every item its list and absolute level.
 
-    The block already carries the root preset. A nested list (one
-    ``list_group``) whose preset differs from its enclosing list is recreated
-    over its whole extent at once, including blank paragraphs between its
-    items, so loose items keep one numbering. Blank paragraphs lose their
-    bullets only afterwards, which retains every list's identity.
+    createParagraphBullets sets levels relative to its range: a paragraph's
+    level is its leading tabs plus its indent (in 36pt steps) minus the least
+    in the range, plus the level of the paragraph before the range when the
+    range joins that paragraph's list of the same preset. It also converts or
+    joins a list already on a paragraph in its range (both observed live).
+
+    So each native list is created in one pinned sequence, top to bottom,
+    behind two temporary paragraphs: an unbulleted separator, so the range
+    never joins a list above it, and an empty anchor with no tabs or indent
+    as the range's first paragraph, so each item's tabs are its absolute
+    level. Paragraphs the range spans that belong to no list, or to a list
+    created later, lose their bullets right after. A list spans only
+    paragraphs that have no bullet yet: one that spanned an earlier list's
+    item would also span that list's first item (their Markdown lists would
+    interleave both ways, which the parser never produces).
     """
-    positions = []
-    removed = 0
-    for item in block:
-        start = insert_index + offsets[item.start] - removed
-        removed += item.list_depth
-        end = max(start + 1, insert_index + offsets[item.end] - removed)
-        positions.append((item, start, end))
-    groups: dict = {}
-    for item, start, end in positions:
-        groups.setdefault(item.list_group, []).append((item, start, end))
-    requests = []
-    created = []  # (start, end, preset) of recreated extents, outermost first
-    for members in sorted(groups.values(), key=lambda m: m[0][1]):
-        preset = members[0][0].style["bulletPreset"]
-        low, high = members[0][1], members[-1][2]
-        enclosing = next((p for lo, hi, p in reversed(created) if lo <= low < hi),
-                         root_preset)
-        if preset == enclosing:
-            continue
-        requests.append({"deleteParagraphBullets": {"range": span(low, high)}})
-        inside = [(item, start) for item, start, _ in positions
-                  if low <= start < high and item.list_depth]
-        for item, start in reversed(inside):
-            requests.append({"insertText": {
-                "location": location(start), "text": "\t" * item.list_depth,
-            }})
-        requests.append({"createParagraphBullets": {
-            "range": span(low, high + sum(item.list_depth for item, _ in inside)),
-            "bulletPreset": preset,
-        }})
-        created.append((low, high, preset))
-    previous_end = None
-    for item, start, end in positions:
-        depth = item.list_depth
-        requests.append({"updateParagraphStyle": {
-            "range": span(start, end),
-            "paragraphStyle": {
-                "indentStart": {"magnitude": 36 * (depth + 1), "unit": "PT"},
-                "indentFirstLine": {"magnitude": 36 * (depth + 1) - 18, "unit": "PT"},
-            },
-            "fields": "indentStart,indentFirstLine",
-        }})
-        if previous_end is not None and previous_end < start:
-            # These blank paragraphs linked the items while the bullet
-            # requests ran; removing their bullets retains identity.
-            requests.append({"deleteParagraphBullets": {
-                "range": span(previous_end, start),
-            }})
-        previous_end = end
-    for item, start, _ in positions:
-        if item.literal_tabs:
-            requests.extend([
-                # Inserted after its placeholder spaces, the tab takes their
-                # parsed style rather than the following text's.
-                {"insertText": {"location": location(start + item.literal_tabs),
-                                "text": "\t" * item.literal_tabs}},
-                {"deleteContentRange": {
-                    "range": span(start, start + item.literal_tabs),
-                }},
-            ])
-    return requests
-
-
-def _separated_list_requests(parsed: ParsedMarkdown, insert_index: int,
-                  tab_id: str | None = None) -> list[dict]:
-    """Compile canonical numbering into independent native list identities.
-
-    Ordered groups span intervening bullets/prose before those paragraphs are
-    restored. Each deeper group is then created behind a temporary unbulleted
-    paragraph: otherwise Docs can join it to a same-preset parent. All temporary
-    edits cancel within the group, so subsequent ranges use stable coordinates.
-    """
-    items = sorted((s for s in parsed.styles if s.type == "bullets"),
-                   key=lambda s: s.start)
-    if not items:
-        return []
     offsets = _utf16_prefix(parsed.plain_text)
     requests = []
 
@@ -1719,7 +1595,8 @@ def _separated_list_requests(parsed: ParsedMarkdown, insert_index: int,
             target["tabId"] = tab_id
         return target
 
-    # Remove only parser-supplied indentation; literal tabs remain shielded.
+    # Remove parser nesting tabs up front: each list inserts its own. Literal
+    # content tabs stay shielded as spaces.
     for item in reversed(items):
         if item.list_depth:
             start = insert_index + offsets[item.start]
@@ -1732,87 +1609,57 @@ def _separated_list_requests(parsed: ParsedMarkdown, insert_index: int,
             min(item.list_depth, max(0, point - item.start)) for item in items
         )
 
-    groups = {}
-    for item in items:
-        key = item.list_group
-        if key is None:
-            key = (item.list_block, item.list_depth, item.style["bulletPreset"])
-        groups.setdefault(key, []).append(item)
-    # A list quoted inside a list item is its own list, even between items
-    # of an enclosing list with the same preset.
-    def container_of(group):
-        return next((s.path for s in parsed.styles if s.type == "markdown_prefix"
-                     and s.start <= group[0].start < s.end), ())
+    def end_of(item):
+        # A stripped final empty item still owns the retained paragraph mark.
+        return coordinate(item.end) + (item.start == item.end)
 
-    # So is a quoted list that another list's range spans, such as one in a
-    # top-level quote between items of an outer list.
-    def spanned(group):
-        path = container_of(group)
-        return "q" in path and any(
-            container_of(other) != path
-            and other[0].start < group[0].start and group[-1].end <= other[-1].end
-            for other in groups.values())
-
-    contained = {id(group[0]) for group in groups.values()
-                 if _quoted_in_item(container_of(group)) or spanned(group)}
-    # A quoted list is created after every list that spans it, whatever
-    # their depths (deeper containers later): a later spanning bullet request
-    # would overwrite its preset and identity. Within one container,
-    # shallower lists come first, numbered continuity takes precedence over
-    # intervening unordered items, and independent same-depth restarts are
-    # created from bottom to top.
-    ordered_groups = sorted(groups.values(), key=lambda group: (
-        len(container_of(group)) if id(group[0]) in contained else 0,
-        group[0].list_depth,
-        not group[0].style["bulletPreset"].startswith("NUMBERED"),
-        -group[0].start,
-    ))
-    for group in ordered_groups:
-        first, last = group[0], group[-1]
-        start, end = coordinate(first.start), coordinate(last.end)
-        end = max(start + 1, end + (last.start == last.end))
-        covered = [item for item in items if first.start <= item.start <= last.start]
-        requests.append({"deleteParagraphBullets": {"range": span(start, end)}})
-        # This paragraph prevents preceding-list auto-join, even when the
-        # preceding parent has the exact same numbered preset.
-        separator = int(first.list_depth > 0 or id(first) in contained)
-        if separator:
-            requests.append({"insertText": {"location": location(start), "text": "\n"}})
-            requests.append({"deleteParagraphBullets": {
-                "range": span(start, start + 1),
-            }})
+    zero = {"magnitude": 0, "unit": "PT"}
+    for members in sorted(lists, key=lambda members: members[0].start):
+        start, end = coordinate(members[0].start), end_of(members[-1])
+        requests += [
+            {"insertText": {"location": location(start), "text": "\n\n"}},
+            {"deleteParagraphBullets": {"range": span(start, end + 2)}},
+            # Leftover indent from an earlier range would add levels.
+            {"updateParagraphStyle": {
+                "range": span(start, end + 2),
+                "paragraphStyle": {"indentStart": zero, "indentFirstLine": zero},
+                "fields": "indentStart,indentFirstLine",
+            }},
+        ]
         tabs = 0
-        for item in reversed(covered):
+        for item in reversed(members):
             if item.list_depth:
                 requests.append({"insertText": {
-                    "location": location(coordinate(item.start) + separator),
+                    "location": location(coordinate(item.start) + 2),
                     "text": "\t" * item.list_depth,
                 }})
                 tabs += item.list_depth
-        requests.append({"createParagraphBullets": {
-            "range": span(start + separator, end + separator + tabs),
-            "bulletPreset": first.style["bulletPreset"],
-        }})
-        if separator:
-            requests.append({"deleteContentRange": {"range": span(start, start + 1)}})
+        requests += [
+            {"createParagraphBullets": {
+                "range": span(start + 1, end + 2 + tabs),
+                "bulletPreset": members[0].style["bulletPreset"],
+            }},
+            # Starting at the separator's first index, the deletion leaves the
+            # first item its own style and bullet.
+            {"deleteContentRange": {"range": span(start, start + 2)}},
+        ]
+        for before, after in zip(members, members[1:]):
+            if end_of(before) < coordinate(after.start):
+                requests.append({"deleteParagraphBullets": {
+                    "range": span(end_of(before), coordinate(after.start)),
+                }})
 
-    # Spanning a continuation temporarily bullets intervening prose/blank lines.
+    # Restore the requested style of non-list paragraphs a list spanned.
     for style in parsed.styles:
         if (style.type == "paragraph_style" and not any(
             item.start == style.start for item in items
-        ) and any(group[0].start <= style.start < group[-1].end
-                  for group in groups.values())):
-            target = span(coordinate(style.start), coordinate(style.end))
-            requests.append({"deleteParagraphBullets": {"range": target}})
-            # Removing native bullets also alters indentation. Restore the
-            # requested non-list paragraph style only where a group spanned it.
-            paragraph_style = {
-                "indentStart": {"magnitude": 0, "unit": "PT"},
-                "indentFirstLine": {"magnitude": 0, "unit": "PT"},
-                **style.style,
-            }
+        ) and any(members[0].start <= style.start < members[-1].end
+                  for members in lists)):
+            paragraph_style = {"indentStart": zero, "indentFirstLine": zero,
+                               **style.style}
             requests.append({"updateParagraphStyle": {
-                "range": target, "paragraphStyle": paragraph_style,
+                "range": span(coordinate(style.start), coordinate(style.end)),
+                "paragraphStyle": paragraph_style,
                 "fields": _paragraph_style_fields(paragraph_style),
             }})
     for item in items:

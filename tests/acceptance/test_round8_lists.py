@@ -1,6 +1,6 @@
 """R7-1: a list quoted inside a nested list item is its own native list.
 
-Each case is written through CLI and MCP under both merge models, then changed
+Each case is written through CLI and MCP, then changed
 several times. Native list identity, bullet type, nesting and displayed
 numbering must match the Markdown, not only the Markdown readback.
 """
@@ -8,7 +8,7 @@ numbering must match the Markdown, not only the Markdown readback.
 import pytest
 
 from gdoc.frontmatter import parse_frontmatter
-from tests.acceptance.test_round5_workflows import MERGES, NativeRoute
+from tests.acceptance.test_round5_workflows import NativeRoute
 from tests.native_model import NativeDoc
 
 
@@ -63,12 +63,11 @@ CASES = [
 ]
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,expected", CASES)
 def test_quoted_list_inside_nested_item_keeps_its_own_identity(
-    route, merge, markdown, expected,
+    route, markdown, expected,
 ):
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=markdown)
     assert _read(route) == markdown
@@ -101,12 +100,11 @@ SPANNED = [
 ]
 
 
-@MERGES
 @pytest.mark.parametrize("markdown,expected", SPANNED)
 def test_quoted_list_spanned_by_an_outer_list_keeps_its_own_identity(
-    route, merge, markdown, expected,
+    route, markdown, expected,
 ):
-    doc = route.load(NativeDoc(merge=merge))
+    doc = route.load(NativeDoc())
     route.ok("cat")
     route.ok("write", text=markdown)
     assert _read(route) == markdown

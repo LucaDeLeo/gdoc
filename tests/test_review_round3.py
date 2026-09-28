@@ -93,13 +93,9 @@ def test_paragraph_before_a_table_is_removed_with_the_preceding_mark(mocker):
     body["content"].append({"startIndex": 16, "endIndex": 30, "table": {}})
     requests = _requests(mocker, body, "Obsolete", "")
     # Docs refuses to delete the mark before a table; the preceding one goes,
-    # and Intro's style is restored on the heading's retained mark.
+    # and Docs keeps Intro's style on the merge (observed live).
     assert requests == [{"deleteContentRange": {"range": {
-        "startIndex": 6, "endIndex": 15, "tabId": "synthetic-tab"}}},
-        {"updateParagraphStyle": {
-            "range": {"startIndex": 6, "endIndex": 7, "tabId": "synthetic-tab"},
-            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-            "fields": "namedStyleType"}}]
+        "startIndex": 6, "endIndex": 15, "tabId": "synthetic-tab"}}}]
 
     first = _body(("Obsolete", "HEADING_2", False))
     first["content"].append({"startIndex": 10, "endIndex": 20, "table": {}})

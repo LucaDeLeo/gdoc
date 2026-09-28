@@ -31,11 +31,10 @@ def sibling(text="Reference\n"):
                                   "textRun": {"content": text}}]}}]}}}
 
 
-@pytest.fixture(params=["mark", "first"])
+@pytest.fixture
 def env(request, monkeypatch, tmp_path):
     route = NativeRoute("cli", monkeypatch, tmp_path)
-    doc = route.load(NativeDoc(("p", "Alpha beta."), ("p", "Second."),
-                               merge=request.param))
+    doc = route.load(NativeDoc(("p", "Alpha beta."), ("p", "Second.")))
     route.service.extra_tabs = [sibling()]
     route.doc, route.file = doc, tmp_path / "doc.md"
     return route
