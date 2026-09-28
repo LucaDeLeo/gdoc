@@ -145,13 +145,18 @@ def _marker_style(el: dict) -> dict:
     return _set_fields((_bullet(el) or {}).get("textStyle"))
 
 
+# Marker fields a rebuild is known to keep when the item's text carries
+# them too: live, a fully bold item's number is bold again afterwards. A
+# font is not (an item ending in Georgia keeps a plain marker), and
+# nothing else has been tested, so any other marker field is refused.
+_MARKER_FIELDS_KEPT = frozenset({"bold"})
+
+
 def _marker_differences(el: dict) -> list[str]:
     """Formatting on the item's bullet or number that a rebuild could drop.
 
-    Live: a fully bold item has a bold number, and it is bold again after
-    the rebuild; an item whose text ends in Georgia keeps a plain marker.
-    So marker formatting that repeats the item's end-of-text style is safe.
-    Refused: a marker field the text does not share, and an explicit false
+    Refused: a marker field outside ``_MARKER_FIELDS_KEPT``, a kept field
+    the item's end-of-text style does not share, and an explicit false
     (say an unbolded number on bold text) that the text contradicts.
     ``underline: false`` is on every plain marker and is ignored.
     """
@@ -162,7 +167,7 @@ def _marker_differences(el: dict) -> list[str]:
         if m is False:
             if key != "underline" and text.get(key) is True:
                 odd.append(key)
-        elif text.get(key) != m:
+        elif key not in _MARKER_FIELDS_KEPT or text.get(key) != m:
             odd.append(key)
     return sorted(odd)
 
@@ -210,7 +215,9 @@ def locate_item(body: dict, text: str) -> int:
 
     matches = find_text_in_document(None, text, body=body)
     if not matches:
-        reason = diagnose_no_match(None, text, body=body)
+        # already_normalized: skip the "--normalize" hint, a flag nest
+        # does not have.
+        reason = diagnose_no_match(None, text, body=body, already_normalized=True)
         raise _usage(f"no match found for {text!r}" + (f"; {reason}" if reason else ""))
     content = body.get("content", [])
     found: set[int] = set()
@@ -259,6 +266,7 @@ class NestPlan:
     expected: dict[int, int]
     blanks: list[int]
     markers: dict[int, dict] = field(default_factory=dict)
+    texts: dict[int, str] = field(default_factory=dict)
 
 
 def plan_nesting(
@@ -496,6 +504,7 @@ def plan_nesting(
         requests=requests, list_id=list_id, moved=len(moved),
         expected={i: lvl for i, lvl in levels.items()}, blanks=blanks,
         markers={i: _marker_style(content[i]) for i in levels},
+        texts={i: _text(content[i]) for i in list(levels) + blanks},
     )
 
 
@@ -503,6 +512,16 @@ def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
     """Differences between a re-read tab and what *plan* should have left."""
     content = document_tab.get("body", {}).get("content", [])
     problems = []
+    for i, want in plan.texts.items():
+        el = content[i] if i < len(content) else {}
+        if _text(el) != want:
+            # Positions are compared, so a shifted or altered paragraph
+            # (another edit, a leftover tab) makes the rest meaningless.
+            shown = want.strip()
+            return [
+                f"{shown[:40]!r} is no longer where it was (the tab changed, "
+                "or text was left behind)"
+            ]
     for i, want in plan.expected.items():
         el = content[i] if i < len(content) else {}
         bullet = _bullet(el)
@@ -516,7 +535,7 @@ def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
                 f"expected {want}"
             )
         elif _marker_style(el) != plan.markers.get(i, _marker_style(el)):
-            problems.append(f"{_label(el)} lost its bullet or number formatting")
+            problems.append(f"{_label(el)} has changed bullet or number formatting")
     for i in plan.blanks:
         if i >= len(content) or _bullet(content[i]) is not None:
             problems.append("a blank line between items kept a bullet")

@@ -262,6 +262,12 @@ class TestRefusals:
         with pytest.raises(GdocError, match="matches 2 paragraphs"):
             _at(tab, "Bravo")
 
+    def test_no_match_hint_does_not_offer_normalize(self):
+        tab = _tab(("Alpha", 0, "num"), ("Don\u2019t stop", 0, "num"))
+        with pytest.raises(GdocError) as exc:
+            _at(tab, "Don't stop")
+        assert "--normalize" not in str(exc.value)
+
     def test_not_a_list_item(self):
         self._refused(_tab(*STD), "Intro", 1, "not a list item")
 
@@ -411,6 +417,20 @@ class TestRefusals:
         }
         assert _plan(tab, "Bravo", 1).moved == 1
 
+    @pytest.mark.parametrize("style", [
+        {"weightedFontFamily": {"fontFamily": "Georgia", "weight": 400}},
+        {"foregroundColor": {"color": {"rgbColor": {"red": 1}}}},
+        {"italic": True},
+    ])
+    def test_marker_style_without_live_evidence_is_refused(self, style):
+        # Even when the text carries the same style: only bold is known to
+        # survive the rebuild.
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = dict(style)
+        para["elements"][0]["textRun"]["textStyle"] = dict(style)
+        self._refused(tab, "Bravo", 1, "formatted bullet or number")
+
     def test_plain_marker_style_is_not_formatting(self):
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
@@ -461,6 +481,14 @@ class TestCheckResult:
             "bold": True, "underline": False,
         }
         assert check_result(after, plan) == []
+
+    def test_shifted_paragraphs_are_reported_not_trusted(self):
+        # A paragraph inserted above the list shifts every position; the
+        # items now at the planned positions must not pass for the moved ones.
+        plan = _plan(_tab(*STD), "Bravo", 1)
+        shifted = _tab(("New", 0, None), ("Intro", 0, None), ("Alpha", 1, "num"),
+                       ("Bravo", 0, "num"), ("Charlie", 0, "num"))
+        assert "no longer where it was" in check_result(shifted, plan)[0]
 
     def test_wrong_level_or_list_is_reported(self):
         plan = _plan(_tab(*STD), "Bravo", 1)
@@ -711,6 +739,15 @@ class TestBatchUpdatePinned:
 
         execute.side_effect = error
         with pytest.raises(GdocError, match="outcome is unknown"):
+            batch_update_pinned("doc1", [], "rev1")
+
+    def test_credentials_failure_before_sending_is_not_unknown(self, mocker):
+        from gdoc.api.docs import batch_update_pinned
+        from gdoc.util import AuthError
+
+        mocker.patch("gdoc.api.docs.get_docs_service",
+                     side_effect=AuthError("Authentication expired"))
+        with pytest.raises(AuthError):
             batch_update_pinned("doc1", [], "rev1")
 
     def test_token_refresh_failure_changed_nothing(self, execute):

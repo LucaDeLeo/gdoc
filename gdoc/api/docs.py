@@ -1156,8 +1156,11 @@ def batch_update_pinned(
         "The outcome is unknown: the change may or may not have been "
         "saved. Inspect the document before retrying."
     )
+    # Built before the try: a credentials failure here happens before
+    # anything is sent, so it must not read as an unknown outcome.
+    service = get_docs_service()
     try:
-        get_docs_service().documents().batchUpdate(
+        service.documents().batchUpdate(
             documentId=doc_id,
             body={
                 "requests": requests,
