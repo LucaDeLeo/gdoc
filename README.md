@@ -433,7 +433,14 @@ the Sheets API, so no re-authentication is needed.
      5	Authentication uses OAuth2.
 ```
 
-Comments are placed from their live anchors: the text each comment covers now, as the Docs UI highlights it. This needs the same [Developer Preview](https://developers.google.com/workspace/preview) enrollment as anchored `comment --quote`. A comment whose anchored text is all gone is listed as `[detached]` (Docs shows "Original content deleted"); a `write --tab` that changes the tab detaches every comment in it, resolved ones included. A comment that is still attached but whose text gdoc can't find in the markdown (for example, one on an image) is listed as `[attached, location not found]`. Comments that aren't placed inline are grouped in an `[UNANCHORED]` section at the end. `--json` reports `"anchors": "live"`.
+Comments are placed from their live anchors: the text each comment covers now, as the Docs UI highlights it. This needs the same [Developer Preview](https://developers.google.com/workspace/preview) enrollment as anchored `comment --quote`. A comment whose anchored text is all gone is listed as `[detached]` (Docs shows "Original content deleted"); a `write --tab` that changes the tab detaches every comment in it, resolved ones included. A comment that is still attached is listed as `[attached, location not found]` when gdoc can't pin its text to one markdown line: for example, a comment on an image, on footnote text, or on heading text that a table of contents repeats. The same label is used when the document kept changing while gdoc read it; a `WARN` says so. Comments that aren't placed inline are grouped in an `[UNANCHORED]` section at the end.
+
+With `--json`, `"anchors"` says where the labels came from:
+
+- `"live"`: live anchors, with comments placed on their lines.
+- `"live_no_locations"`: live anchors for `[detached]` status, but no lines, because the document changed during the read.
+- `"quoted_text"`: live anchors couldn't be read (see below).
+- `"none"`: there were no comments, so nothing was read.
 
 When live anchors can't be read (no preview access, no comment access on the document, or the request fails), gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment.
 

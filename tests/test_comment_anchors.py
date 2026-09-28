@@ -628,7 +628,7 @@ class TestCatOutput:
         assert cmd_cat(_cat_args(json=True)) == 0
         captured = capsys.readouterr()
         assert captured.err == ""
-        assert json.loads(captured.out)["anchors"] == "live"
+        assert json.loads(captured.out)["anchors"] == "none"
 
     @staticmethod
     def _versions(monkeypatch, *values):
@@ -665,6 +665,15 @@ class TestCatOutput:
         )
         assert "[#reword open] [attached, location not found]" in captured.out
         assert "[#deleted open] [detached]" in captured.out
+
+    def test_dropped_locations_are_reported_in_json(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        self._versions(monkeypatch, 5, 6, 7, 8)
+        assert cmd_cat(_cat_args(json=True)) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["anchors"] == "live_no_locations"
+        assert "[#deleted open] [detached]" in data["content"]
 
     @pytest.mark.parametrize("error", [
         GdocError("API error (503): backend"),
