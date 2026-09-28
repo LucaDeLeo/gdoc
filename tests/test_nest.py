@@ -499,6 +499,23 @@ class TestCheckResult:
                     ("Bravo", 0, "num"), ("Charlie", 0, "num"))
         assert check_result(twin, plan)
 
+    def test_changed_heading_id_is_reported(self):
+        tab = _tab(*STD)
+        tab["body"]["content"][3]["paragraph"]["paragraphStyle"] = {
+            "namedStyleType": "HEADING_2", "headingId": "h.abc",
+        }
+        plan = _plan(tab, "Bravo", 1)
+        after = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 1, "num"),
+                     ("Charlie", 0, "num"), ("Outro", 0, None))
+        after["body"]["content"][3]["paragraph"]["paragraphStyle"] = {
+            "namedStyleType": "HEADING_2", "headingId": "h.new",
+            "indentStart": {"magnitude": 72, "unit": "PT"},
+        }
+        assert "paragraph style (headingId)" in check_result(after, plan)[0]
+        style = after["body"]["content"][3]["paragraph"]["paragraphStyle"]
+        style["headingId"] = "h.abc"
+        assert check_result(after, plan) == []
+
     def test_wrong_level_or_list_is_reported(self):
         plan = _plan(_tab(*STD), "Bravo", 1)
         stayed = _tab(*STD)

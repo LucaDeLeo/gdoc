@@ -643,10 +643,11 @@ Refused before any write (exit 3), with a message naming the item:
 
 - text that matches no paragraph or several, is not a list item, or is inside
   a table;
-- any move that would rebuild a list's first item (the rebuilt items must
-  rejoin an item of their own list above them): nesting the first item, or,
-  in a list that starts indented, unnesting its first items; nesting an item
-  more than one level deeper than the item above it; unnesting an item at the top level, or so far that the
+- any move whose rebuilt items would not directly follow an item of their
+  own list: nesting a list's first item, unnesting the first items of a list
+  that starts indented, or moving the first item after a non-list paragraph
+  in a list that continues past it; nesting an item more than one level
+  deeper than the item above it; unnesting an item at the top level, or so far that the
   next item would sit two levels below it;
 - checkbox lists and lists with custom glyphs (only the default numbered
   `1. a. i.` and bullet `● ○ ■` lists are supported);

@@ -268,6 +268,7 @@ class NestPlan:
     markers: dict[int, dict] = field(default_factory=dict)
     texts: dict[int, str] = field(default_factory=dict)
     original: dict[int, int] = field(default_factory=dict)
+    styles: dict[int, dict] = field(default_factory=dict)
 
 
 def plan_nesting(
@@ -509,7 +510,18 @@ def plan_nesting(
         # are checked against their surroundings.
         texts={i: _text(content[i]) for i in [start - 1, *levels, *blanks]},
         original={i: _level(content[i]) for i in levels},
+        styles={i: _kept_style(content[i]) for i in levels},
     )
+
+
+def _kept_style(el: dict) -> dict:
+    """Paragraph style the rebuild must keep: everything but the indent,
+    which the new level sets (headingId, named style, spacing, ...)."""
+    style = (_paragraph(el) or {}).get("paragraphStyle", {})
+    return {
+        k: v for k, v in style.items()
+        if k not in ("indentStart", "indentFirstLine")
+    }
 
 
 def is_unchanged(document_tab: dict, plan: NestPlan) -> bool:
@@ -561,6 +573,14 @@ def check_result(document_tab: dict, plan: NestPlan) -> list[str]:
             )
         elif _marker_style(el) != plan.markers.get(i, _marker_style(el)):
             problems.append(f"{_label(el)} has changed bullet or number formatting")
+        elif i in plan.styles and _kept_style(el) != plan.styles[i]:
+            before, after = plan.styles[i], _kept_style(el)
+            fields = sorted(
+                k for k in set(before) | set(after) if before.get(k) != after.get(k)
+            )
+            problems.append(
+                f"{_label(el)} has a changed paragraph style ({', '.join(fields)})"
+            )
     for i in plan.blanks:
         if i >= len(content) or _bullet(content[i]) is not None:
             problems.append("a blank line between items kept a bullet")
