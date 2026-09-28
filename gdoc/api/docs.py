@@ -3628,7 +3628,11 @@ def _each_item_kept(native, markdown, body, source, tab_id) -> bool:
     from gdoc.mdparse import parse_markdown
 
     lines = markdown.rstrip("\n").split("\n")
-    if (body is None or len(native) != len(lines)
+    # A restart between the lines is another list, which per-line parses
+    # cannot see.
+    groups = {s.list_group for s in parse_markdown(markdown).styles
+              if s.type == "bullets"}
+    if (body is None or len(native) != len(lines) or len(groups) != 1
             or len({(p.get("bullet") or {}).get("listId") for p, _, _ in native}) != 1):
         return False
     lists = (_snapshot_tab(source, tab_id) or {}).get("lists", {})

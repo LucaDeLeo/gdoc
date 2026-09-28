@@ -444,3 +444,16 @@ def test_continuation_counts_from_the_list_start(route, inserted, warns):
     assert code == 0 and ("start at 1" in output + error) == warns
     if not warns:
         assert _read(route) == "5. a\n6. b\n7. c\n"
+
+
+@pytest.mark.parametrize("base,old,new,expected", [
+    ("1. a\n2. b\n", "a\nb", "1. A\n1. B", "1. A\n1. B\n"),
+    ("1. p\n  1. a\n  2. b\n", "a\nb", "  1. A\n  1. B", "1. p\n  1. A\n  1. B\n"),
+])
+def test_same_count_restart_is_kept(route, base, old, new, expected):
+    """Round 5 (Codex R5-1): a restart between replaced items stays."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    route.ok("edit", old_text=old, new_text=new)
+    assert _read(route) == expected
