@@ -612,7 +612,9 @@ new document version but does not advance the read baseline.
 `nest` and `unnest` move list items one level in or out, like pressing Tab or
 Shift-Tab in Google Docs. The items keep their native list: same list ID,
 so numbering continues, a list restarted at 5 stays at 5, and comments on the
-items stay attached. Nothing outside the moved items is rewritten.
+items stay attached. Only the moved items, any deeper items directly above
+them, and blank lines between them are rebuilt; the rest of the tab is not
+touched.
 
 ```bash
 gdoc nest DOC "Bravo"                     # Bravo becomes a sub-item of the item above

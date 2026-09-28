@@ -15,18 +15,22 @@ NUM = "NUMBERED_DECIMAL_ALPHA_ROMAN"
 BUL = "BULLET_DISC_CIRCLE_SQUARE"
 
 
-def _levels(**per_level):
+def _levels(fmt, **per_level):
+    """Nine list levels as the API returns them; fmt is "%{i}." or "%{i}"."""
     return {"listProperties": {"nestingLevels": [
-        {k: v[i % 3] for k, v in per_level.items()} for i in range(9)
+        {"glyphFormat": fmt.format(i=i), **{k: v[i % 3] for k, v in per_level.items()}}
+        for i in range(9)
     ]}}
 
 
+NUM_GLYPHS = ("DECIMAL", "ALPHA", "ROMAN")
 LISTS = {
-    "num": _levels(glyphType=("DECIMAL", "ALPHA", "ROMAN")),
-    "num2": _levels(glyphType=("DECIMAL", "ALPHA", "ROMAN")),
-    "bul": _levels(glyphSymbol=("●", "○", "■")),
-    "check": _levels(glyphType=("GLYPH_TYPE_UNSPECIFIED",) * 3),
-    "diamond": _levels(glyphSymbol=("❖", "➢", "■")),
+    "num": _levels("%{i}.", glyphType=NUM_GLYPHS),
+    "num2": _levels("%{i}.", glyphType=NUM_GLYPHS),
+    "parens": _levels("%{i})", glyphType=NUM_GLYPHS),
+    "bul": _levels("%{i}", glyphSymbol=("●", "○", "■")),
+    "check": _levels("%{i}", glyphType=("GLYPH_TYPE_UNSPECIFIED",) * 3),
+    "diamond": _levels("%{i}", glyphSymbol=("❖", "➢", "■")),
 }
 
 
@@ -346,6 +350,7 @@ class TestPresets:
 
     def test_other_lists(self):
         assert list_preset(LISTS, "check") is None
+        assert list_preset(LISTS, "parens") is None
         assert list_preset(LISTS, "diamond") is None
         assert list_preset(LISTS, "missing") is None
 
@@ -478,6 +483,18 @@ class TestCommand:
         assert cmd_nest(_args()) == 0
         assert "awareness state not updated" in capsys.readouterr().err
         api.state.assert_not_called()
+
+    def test_failed_state_write_after_the_write_is_a_warning(self, api, capsys):
+        api.state.side_effect = OSError("read-only file system")
+        assert cmd_nest(_args()) == 0
+        assert api.write.call_count == 1
+        assert "awareness state was not persisted" in capsys.readouterr().err
+
+    def test_missing_revision_refuses_to_write(self, api):
+        api.get.side_effect = [_doc(_tab(*STD), revision="")]
+        with pytest.raises(GdocError, match="no revision ID"):
+            cmd_nest(_args())
+        api.write.assert_not_called()
 
     def test_parser(self):
         args = build_parser().parse_args(

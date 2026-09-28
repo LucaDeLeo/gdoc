@@ -1433,6 +1433,13 @@ def cmd_nest(args) -> int:
 
     doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
+    if not revision_id:
+        # Never write unpinned: the plan's indexes are only valid at the
+        # revision they were read from.
+        raise GdocError(
+            "the document read returned no revision ID; refusing to write "
+            "without a revision pin"
+        )
     tabs = doc.get("tabs", [])
     tab_name = getattr(args, "tab", None)
     if tab_name:
@@ -1509,10 +1516,16 @@ def cmd_nest(args) -> int:
 
     from gdoc.state import update_state_after_command
 
-    update_state_after_command(
-        doc_id, change_info, command=args.command,
-        quiet=quiet, command_version=command_version,
-    )
+    try:
+        update_state_after_command(
+            doc_id, change_info, command=args.command,
+            quiet=quiet, command_version=command_version,
+        )
+    except Exception as e:  # noqa: BLE001 — post-mutation, see above
+        print(
+            f"WARN: {verb} but awareness state was not persisted: {e}",
+            file=sys.stderr,
+        )
     return 0
 
 

@@ -62,8 +62,11 @@ def list_preset(lists: dict, list_id: str) -> str | None:
     )
     if not levels:
         return None
+    # glyphFormat tells "1." from "1)" (NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS)
+    # and catches prefix/suffix edits made in List options.
     if all(
         lvl.get("glyphType") == _NUMBERED_GLYPHS[i % 3]
+        and lvl.get("glyphFormat") == f"%{i}."
         for i, lvl in enumerate(levels)
     ):
         return _NUMBERED
@@ -71,6 +74,7 @@ def list_preset(lists: dict, list_id: str) -> str | None:
         lvl.get("glyphSymbol") == _BULLET_GLYPHS[i % 3]
         and lvl.get("glyphType", "GLYPH_TYPE_UNSPECIFIED")
         in ("GLYPH_TYPE_UNSPECIFIED", "NONE")
+        and lvl.get("glyphFormat") == f"%{i}"
         for i, lvl in enumerate(levels)
     ):
         return _BULLET
@@ -141,6 +145,8 @@ def locate_item(body: dict, text: str) -> int:
                     raise _usage(f"{text!r} spans more than one paragraph")
                 found.add(i)
                 break
+    if not found:
+        raise _usage(f"{text!r} is not in a paragraph of the tab body")
     if len(found) > 1:
         raise _usage(
             f"{text!r} matches {len(found)} paragraphs; use text unique to "
