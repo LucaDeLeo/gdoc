@@ -4954,6 +4954,19 @@ def suggest_replacement(
             # literal rows would misrepresent the request. Inside a
             # paragraph the rows are literal text, as in edit.
             check_inline_only_markdown(parsed)
+        if not new_markdown and any(
+            len(list(_replacement_paragraphs(
+                _replacement_body(body, match).get("content", []), match))) > 1
+            for match in matches
+        ):
+            # Suggestions keep every native paragraph mark, so accepting this
+            # would leave the paragraphs apart instead of joining them.
+            raise GdocError(
+                "cannot suggest deleting text across a paragraph break: the "
+                "suggestion would keep the break, so accepting it would not "
+                "join the paragraphs. Suggest each paragraph's deletion "
+                "separately, or use edit", exit_code=3,
+            )
         planned = [part for match in matches
                    for part in _wording_contexts(
                        _replacement_body(body, match), match, new_markdown)]

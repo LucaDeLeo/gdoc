@@ -319,6 +319,19 @@ def test_rebased_write_says_so(route, as_json):
         assert '"rebased": true' in output
 
 
+@pytest.mark.parametrize("old", ["lo\nwor", "Hello\nworld", "Hello\nworld\n"])
+def test_suggest_refuses_an_empty_replacement_across_paragraphs(
+        route, monkeypatch, old):
+    """R8-10: a suggestion keeps paragraph marks, so it cannot join paragraphs."""
+    from gdoc.api import docs
+    monkeypatch.setattr(docs, "check_suggest_preview_access", lambda d: None)
+    route.load(NativeDoc(("p", "Hello"), ("p", "world"), ("p", "Tail")))
+    route.ok("cat")
+    code, output, error = route.call("suggest", old_text=old, new_text="")
+    assert code != 0 and "across a paragraph break" in output + error
+    assert not route.service.batches
+
+
 def test_written_rule_still_reads_as_rule(route):
     route.load(NativeDoc(("p", "seed")))
     route.ok("cat")
