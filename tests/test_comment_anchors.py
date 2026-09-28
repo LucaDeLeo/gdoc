@@ -90,7 +90,8 @@ def _response(status=200, body=None, text="", reason="OK"):
 def _anchors(document: dict) -> dict:
     with patch("gdoc.api.docs._comments_view_get",
                return_value=_response(body=document)):
-        return get_comment_anchors("doc1")
+        anchors, _revision = get_comment_anchors("doc1")
+    return anchors
 
 
 def _comment(cid: str, quote: str, content: str = "note") -> dict:
@@ -226,7 +227,7 @@ class TestGetCommentAnchors:
              patch("gdoc.auth.get_credentials", return_value="creds"), \
              patch("google.auth.transport.requests.AuthorizedSession",
                    return_value=session):
-            assert get_comment_anchors("doc1") == {}
+            assert get_comment_anchors("doc1") == ({}, "")
         params = session.get.call_args.kwargs["params"]
         assert params == {
             "includeTabsContent": "true",
@@ -544,8 +545,9 @@ def edited_doc(monkeypatch, doc_mime):
     )
     anchors = _anchors(EDITS_DOC)
     monkeypatch.setattr(
-        "gdoc.api.docs.get_comment_anchors", lambda doc_id: anchors,
+        "gdoc.api.docs.get_comment_anchors", lambda doc_id: (anchors, "r1"),
     )
+    monkeypatch.setattr("gdoc.api.docs.get_revision_id", lambda doc_id: "r1")
 
 
 def _no_preview(monkeypatch):
@@ -592,6 +594,46 @@ class TestCatOutput:
         captured = capsys.readouterr()
         assert captured.err == ""
         assert json.loads(captured.out)["anchors"] == "live"
+
+    def test_edit_during_the_read_is_retried(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        revisions = iter(["r2", "r1"])  # changed once, then stable
+        monkeypatch.setattr(
+            "gdoc.api.docs.get_revision_id", lambda doc_id: next(revisions),
+        )
+        assert cmd_cat(_cat_args()) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert _annotation_line(captured.out, "reword") == 1
+
+    def test_document_that_keeps_changing_loses_locations_only(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        monkeypatch.setattr(
+            "gdoc.api.docs.get_revision_id", lambda doc_id: "r9",
+        )
+        assert cmd_cat(_cat_args()) == 0
+        captured = capsys.readouterr()
+        assert "WARN: the document changed while it was being read" in (
+            captured.err
+        )
+        assert "[#reword open] [attached, location not found]" in captured.out
+        assert "[#deleted open] [detached]" in captured.out
+
+    def test_unconfirmed_revision_loses_locations_only(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        def fails(doc_id):
+            raise GdocError("API error (503): backend")
+
+        monkeypatch.setattr("gdoc.api.docs.get_revision_id", fails)
+        assert cmd_cat(_cat_args()) == 0
+        captured = capsys.readouterr()
+        assert "WARN: the document changed" in captured.err
+        assert "[#control open] [attached, location not found]" in (
+            captured.out
+        )
 
     def test_fallback_json(self, edited_doc, monkeypatch, capsys):
         _no_preview(monkeypatch)

@@ -257,6 +257,57 @@ def cmd_revisions(args) -> int:
     return 0
 
 
+def _export_with_anchors(
+    doc_id: str, want_anchors: bool,
+) -> tuple[str, dict | None]:
+    """The markdown export and the live comment anchors at the same revision.
+
+    Live anchors show whether each comment is still attached; Drive's
+    quoted text alone can't (it never changes after an edit). Anchors are
+    placed by counting occurrences of their text, so they must come from
+    the revision that was exported: the revision is checked after the
+    export and the pair re-read once if a collaborator edited in between.
+    If it keeps changing, comments keep their attached/detached status but
+    lose their line. Returns anchors None when they can't be read (the
+    caller falls back to quoted text); {} when *want_anchors* is False.
+    """
+    from gdoc.api.docs import get_comment_anchors, get_revision_id
+    from gdoc.api.drive import export_doc
+    from gdoc.util import AuthError, PreviewUnavailableError
+
+    if not want_anchors:
+        # No comments, nothing to place: skip the full-document read.
+        return export_doc(doc_id, mime_type="text/markdown"), {}
+    for _attempt in range(2):
+        try:
+            anchors, revision = get_comment_anchors(doc_id)
+        except PreviewUnavailableError as e:
+            print(
+                f"WARN: live comment anchors unavailable ({e}); comments "
+                "are placed where their quoted text occurs, which does not "
+                "show whether they are still attached",
+                file=sys.stderr,
+            )
+            return export_doc(doc_id, mime_type="text/markdown"), None
+        markdown = export_doc(doc_id, mime_type="text/markdown")
+        try:
+            if revision and get_revision_id(doc_id) == revision:
+                return markdown, anchors
+        except AuthError:
+            raise
+        except GdocError:
+            break  # can't confirm the revision: same as a mismatch
+    print(
+        "WARN: the document changed while it was being read; attached "
+        "comments are listed without a location",
+        file=sys.stderr,
+    )
+    return markdown, {
+        cid: None if live is None else {**live, "counts": []}
+        for cid, live in anchors.items()
+    }
+
+
 def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -386,13 +437,6 @@ def cmd_cat(args) -> int:
 
     if getattr(args, "comments", False):
         # Annotated view: line-numbered content + inline comment annotations
-        from gdoc.api.drive import export_doc
-        markdown = export_doc(doc_id, mime_type="text/markdown")
-
-        if no_images:
-            from gdoc.mdimport import strip_images
-            markdown = strip_images(markdown)
-
         from gdoc.api.comments import list_comments
         include_resolved = getattr(args, "all", False)
         comments = list_comments(
@@ -400,22 +444,11 @@ def cmd_cat(args) -> int:
             include_resolved=include_resolved,
             include_anchor=True,
         )
+        markdown, anchors = _export_with_anchors(doc_id, bool(comments))
 
-        # Live anchors show whether each comment is still attached; Drive's
-        # quoted text alone can't (it never changes after an edit).
-        from gdoc.api.docs import get_comment_anchors
-        from gdoc.util import PreviewUnavailableError
-        try:
-            # No comments, nothing to place: skip the full-document read.
-            anchors = get_comment_anchors(doc_id) if comments else {}
-        except PreviewUnavailableError as e:
-            anchors = None
-            print(
-                f"WARN: live comment anchors unavailable ({e}); comments "
-                "are placed where their quoted text occurs, which does not "
-                "show whether they are still attached",
-                file=sys.stderr,
-            )
+        if no_images:
+            from gdoc.mdimport import strip_images
+            markdown = strip_images(markdown)
 
         from gdoc.annotate import annotate_markdown
         annotated = annotate_markdown(
