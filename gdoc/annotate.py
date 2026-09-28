@@ -79,15 +79,17 @@ def _find_all(text: str, key: str) -> list[int]:
     return starts
 
 
-# Markdown that isn't visible text: an escape (keeps the escaped char),
-# an image, a link (keeps its text), a reference definition line, or an
-# emphasis/code marker.
+# Markdown that isn't visible text: an escape (keeps the escaped char), a
+# code span (keeps its contents), an image, a link (keeps its label), a
+# reference definition line, or an emphasis marker. Underscores inside a
+# word are literal, as in CommonMark.
 _MARKUP = re.compile(
     r"\\(.)"
+    r"|(`+)(.+?)\2"
     r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
-    r"|\[([^\]]*)\]\([^)]*\)"
+    r"|\[((?:\\.|[^\]\\])*)\]\([^)]*\)"
     r"|^\[[^\]]+\]:[^\n]*$"
-    r"|[*_~`]",
+    r"|\*+|~~|(?<!\w)_+|_+(?!\w)",
     re.MULTILINE,
 )
 
@@ -98,21 +100,23 @@ def _visible_text(markdown: str) -> tuple[str, list[int]]:
     where: list[int] = []
 
     def keep(start: int, end: int) -> None:
-        for i in range(start, end):
-            if markdown[i] not in "*_~`":
-                chars.append(markdown[i])
-                where.append(i)
+        chars.extend(markdown[start:end])
+        where.extend(range(start, end))
 
-    pos = 0
-    for m in _MARKUP.finditer(markdown):
-        keep(pos, m.start())
-        if m.group(1) is not None:
-            chars.append(m.group(1))
-            where.append(m.start(1))
-        elif m.group(2) is not None:
-            keep(m.start(2), m.end(2))
-        pos = m.end()
-    keep(pos, len(markdown))
+    def scan(start: int, end: int) -> None:
+        pos = start
+        for m in _MARKUP.finditer(markdown, start, end):
+            keep(pos, m.start())
+            if m.group(1) is not None:
+                keep(m.start(1), m.end(1))
+            elif m.group(3) is not None:
+                keep(m.start(3), m.end(3))
+            elif m.group(4) is not None:
+                scan(m.start(4), m.end(4))
+            pos = m.end()
+        keep(pos, end)
+
+    scan(0, len(markdown))
     return "".join(chars), where
 
 

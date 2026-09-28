@@ -417,6 +417,25 @@ class TestProbeScenarios:
         )
         assert _annotation_line(result, "c1") == 1
 
+    @pytest.mark.parametrize("text,markdown", [
+        ("user_id", "`user_id`"),
+        ("foo_bar", "foo_bar"),
+        ("5*3 today", "[5\\*3 today](https://example.com)"),
+        ("bold and italic", "**bold** and _italic_"),
+        ("~5 minutes", "~5 minutes"),
+    ], ids=["code-span", "intraword-underscore", "escape-in-link",
+            "emphasis", "tilde"])
+    def test_literal_characters_survive_the_visible_text(
+        self, text, markdown,
+    ):
+        doc = _document(
+            [_tab("t.1", [text], {"kix.a": [text]})], {"c1": "kix.a"},
+        )
+        result = annotate_markdown(
+            markdown + "\n", [_comment("c1", text)], anchors=_anchors(doc),
+        )
+        assert _annotation_line(result, "c1") == 1
+
     def test_comment_without_live_anchor_uses_its_quote(self):
         result = annotate_markdown(
             EDITS_MD, [_comment("api", "Lima has")], anchors={},
