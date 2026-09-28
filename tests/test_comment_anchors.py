@@ -429,12 +429,13 @@ class TestProbeScenarios:
 
     @pytest.mark.parametrize("text,markdown", [
         ("user_id", "`user_id`"),
+        ("5*3 [x](y) &amp;", "`5*3 [x](y) &amp;`"),
         ("foo_bar", "foo_bar"),
         ("5*3 today", "[5\\*3 today](https://example.com)"),
         ("bold and italic", "**bold** and _italic_"),
         ("~5 minutes", "~5 minutes"),
         ("Q&A <draft>", "Q&amp;A &lt;draft&gt;"),
-    ], ids=["code-span", "intraword-underscore", "escape-in-link",
+    ], ids=["code-span", "code-span-literals", "intraword-underscore", "escape-in-link",
             "emphasis", "tilde", "html-entities"])
     def test_literal_characters_survive_the_visible_text(
         self, text, markdown,

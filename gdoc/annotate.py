@@ -85,11 +85,11 @@ def _find_all(text: str, key: str) -> list[int]:
 # an image, a link (keeps its label), a reference definition line, or an
 # emphasis marker. Underscores inside a word are literal, as in CommonMark.
 _MARKUP = re.compile(
-    r"\\(.)"
-    r"|(&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)"
-    r"|(`+)(.+?)\2"
+    r"\\(?P<escaped>.)"
+    r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)"
+    r"|(?P<ticks>`+)(?P<code>.+?)(?P=ticks)"
     r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
-    r"|\[((?:\\.|[^\]\\])*)\]\([^)]*\)"
+    r"|\[(?P<label>(?:\\.|[^\]\\])*)\]\([^)]*\)"
     r"|^\[[^\]]+\]:[^\n]*$"
     r"|\*+|~~|(?<!\w)_+|_+(?!\w)",
     re.MULTILINE,
@@ -109,16 +109,16 @@ def _visible_text(markdown: str) -> tuple[str, list[int]]:
         pos = start
         for m in _MARKUP.finditer(markdown, start, end):
             keep(pos, m.start())
-            if m.group(1) is not None:
-                keep(m.start(1), m.end(1))
-            elif m.group(2) is not None:
-                decoded = html.unescape(m.group(2))
+            if m["escaped"] is not None:
+                keep(m.start("escaped"), m.end("escaped"))
+            elif m["entity"] is not None:
+                decoded = html.unescape(m["entity"])
                 chars.extend(decoded)
-                where.extend([m.start(2)] * len(decoded))
-            elif m.group(4) is not None:
-                keep(m.start(4), m.end(4))
-            elif m.group(5) is not None:
-                scan(m.start(5), m.end(5))
+                where.extend([m.start("entity")] * len(decoded))
+            elif m["code"] is not None:
+                keep(m.start("code"), m.end("code"))
+            elif m["label"] is not None:
+                scan(m.start("label"), m.end("label"))
             pos = m.end()
         keep(pos, end)
 
