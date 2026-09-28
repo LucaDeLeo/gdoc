@@ -432,8 +432,10 @@ the tab needs `--allow-lossy` to discard it while staying revision-protected. `p
 with `key: value` lines, or an empty block of two `---` lines. `write` of a pulled
 file (one whose `gdoc` names this document) replaces the tab it was pulled from
 when `--tab` is absent, and refuses a different `--tab` or another document;
-remove the frontmatter to copy the text elsewhere. A `tab` field without `gdoc`
-provenance is ignored. When a tab starts
+remove the frontmatter to copy the text elsewhere. It also checks the file's
+`gdoc-revision` as `push` does (below). `write` of a `pull --revision` file needs
+`--force`, because it replaces the live tab with older text. A `tab` field without
+`gdoc` provenance is ignored. When a tab starts
 with a horizontal rule, `cat` and Markdown `export` print that empty block first, so
 the rule and the text after it stay content. Keep the empty block when writing such
 a read back; `pull` files already carry their own metadata block. Without it, a
@@ -456,7 +458,7 @@ content. An unchanged selected tab returns `already in sync` without mutation.
 Matching Markdown is not a read: styles and pending suggestions do not appear in
 Markdown, so an `already in sync` result never establishes a new baseline.
 
-`push` and the sync hook also check the file's own `gdoc-revision`; reading a newer
+`push`, `write` of a pulled file and the sync hook also check the file's own `gdoc-revision`; reading a newer
 copy elsewhere cannot authorize an older file. The revision covers the whole
 document, so an older file is still accepted when its selected tab's native content
 matches the `gdoc-tab-sha256` fingerprint recorded at that revision: edits to other

@@ -131,3 +131,60 @@ def test_monospace_whitespace_run_stays_inline_code():
     markdown = get_tab_text(NativeService(doc).snapshot()["tabs"][0]["documentTab"],
                             markdown=True)
     assert markdown == "a`  `b\n"
+
+
+def _pull(route, path, *extra):
+    import contextlib
+    import io
+
+    from gdoc import cli
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = cli.run_argv(["pull", "synthetic", str(path), *extra],
+                            check_updates=False)
+    assert code == 0, err.getvalue()
+    return path.read_text()
+
+
+def _collaborator_edit(route):
+    route.service.doc = NativeDoc(("p", "Alpha."), ("p", "Beta."),
+                                  ("p", "COLLABORATOR LINE."))
+    route.service.revision += 1
+
+
+def _texts(route):
+    return [t for t, *_ in styles(route.service.doc)]
+
+
+def test_write_refuses_a_stale_pulled_file_after_a_fresh_read(route, tmp_path):
+    """R8-06: a newer read cannot authorize an older pulled file."""
+    route.load(NativeDoc(("p", "Alpha."), ("p", "Beta.")))
+    pulled = _pull(route, tmp_path / "draft.md")
+    edited = pulled.replace("Alpha.", "Alpha edited locally.")
+    _collaborator_edit(route)
+    assert "COLLABORATOR" in route.ok("cat")
+    code, output, error = route.call("write", text=edited)
+    assert code == (3 if route.interface == "cli" else 1), output + error
+    assert "gdoc-revision is stale" in output + error
+    assert "COLLABORATOR LINE." in _texts(route)
+
+    route.ok("write", text=edited, force=True)
+    assert _texts(route) == ["Alpha edited locally.", "Beta."]
+
+
+def test_write_accepts_a_current_pulled_file(route, tmp_path):
+    route.load(NativeDoc(("p", "Alpha."), ("p", "Beta.")))
+    pulled = _pull(route, tmp_path / "draft.md")
+    route.ok("write", text=pulled.replace("Alpha.", "Alpha edited."))
+    assert _texts(route) == ["Alpha edited.", "Beta."]
+
+
+def test_write_refuses_a_past_revision_file_without_force(route, tmp_path):
+    route.load(NativeDoc(("p", "Alpha.")))
+    route.ok("cat")
+    old = "---\nsource: synthetic\nrevision: r0\ntitle: Synthetic\n---\nOld.\n"
+    code, output, error = route.call("write", text=old)
+    assert code != 0 and "past revision r0" in output + error
+    assert _texts(route) == ["Alpha."]
+    route.ok("write", text=old, force=True)
+    assert _texts(route) == ["Old."]

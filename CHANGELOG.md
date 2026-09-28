@@ -69,7 +69,9 @@ All notable changes to `gdoc` are documented here. This project follows
 - A list quoted inside a nested list item keeps its own bullets or numbering;
   the enclosing list no longer absorbs it.
 - `write` of a pulled file replaces the tab it came from and refuses another
-  `--tab` or document. Rule-first bodies whose lines contain a colon or a link
+  `--tab` or document. It checks the file's `gdoc-revision` as `push` does, so a
+  later read cannot authorize an older file; a `pull --revision` file needs
+  `--force`. Rule-first bodies whose lines contain a colon or a link
   stay content instead of being read as metadata.
 - Linked Sheets charts, custom named ranges, and rules or indented paragraphs in
   table cells are named as read omissions and need `--allow-lossy` to rewrite.

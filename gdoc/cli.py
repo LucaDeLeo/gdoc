@@ -1574,11 +1574,24 @@ def cmd_write(args) -> int:
             "frontmatter to copy the text into this one.", 3,
         )
 
-    # `tab` is source provenance only in a file `pull` wrote for this
-    # document; another tool's `tab` field never selects the tab replaced.
+    if (not pulled_doc and "revision" in metadata and "source" in metadata
+            and not getattr(args, "force", False)):
+        raise GdocError(
+            f"this file was pulled from past revision {metadata['revision']}; "
+            "writing it would replace the live tab with that older text. Use "
+            "--force to restore it intentionally, or remove its frontmatter "
+            "to copy the text.", 3,
+        )
+
+    # `tab`, `gdoc-revision` and `gdoc-tab-sha256` are provenance only in a
+    # file `pull` wrote for this document; they are checked as `push` checks
+    # them, so reading a newer copy cannot authorize an older file.
     return _write_native_markdown(
         args, doc_id, content, command="write", tab_name=tab_name,
         file_tab=(metadata.get("tab") or None) if pulled_doc else None,
+        file_revision=metadata.get("gdoc-revision", "") if pulled_doc else None,
+        file_tab_fingerprint=(metadata.get("gdoc-tab-sha256")
+                              if pulled_doc else None),
     )
 
 

@@ -105,7 +105,7 @@ def native_write(mocker, tmp_path):
     "doc", ["abc123", "https://docs.google.com/document/d/abc123/edit"]
 )
 @pytest.mark.parametrize(
-    "text", ["# Heading\n\nContent.", "", "---\ngdoc: abc123\n---\n# Body\n"]
+    "text", ["# Heading\n\nContent.", "", "---\ngdoc: abc123\ngdoc-revision: r10\n---\n# Body\n"]
 )
 def test_write_transports_content_and_native_snapshot(native_write, doc, text):
     env = native_write
