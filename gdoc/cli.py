@@ -276,6 +276,8 @@ def _export_with_anchors(
     - ``live``: live anchors, with line placement.
     - ``live_no_locations``: live anchors for attached/detached status,
       but no line placement (the version kept changing or couldn't be read).
+      That status is from the last anchor read, just before the export, so
+      it may miss an edit made between the two.
     - ``quoted_text``: anchors couldn't be read (anchors None); the caller
       places comments by quoted text.
     - ``none``: *want_anchors* is False (no comments), nothing was read.
@@ -323,7 +325,9 @@ def _export_with_anchors(
         if before == after:
             return markdown, anchors, "live"
     print(
-        f"WARN: {problem}; attached comments are listed without a location",
+        f"WARN: {problem}; comments are listed without a location, and "
+        "their attached/detached status comes from a read just before the "
+        "text shown, so an edit in between may not be reflected",
         file=sys.stderr,
     )
     return markdown, {

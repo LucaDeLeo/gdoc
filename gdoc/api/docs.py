@@ -2155,7 +2155,9 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
         for start, run in _text_runs(
             doc_tab.get("body", {}).get("content", []),
         ):
-            if len(run.encode("utf-16-le")) == 2 * len(run):
+            # Only chars beyond the BMP take two UTF-16 units; a lone
+            # surrogate (which can't be encoded) takes one.
+            if not run or max(run) <= "\uffff":
                 indices.extend(range(start, start + len(run)))
             else:
                 # Doc indices are UTF-16 units: an emoji advances by 2.

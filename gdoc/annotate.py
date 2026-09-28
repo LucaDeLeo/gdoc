@@ -69,11 +69,6 @@ def _format_annotation_block(
     return lines
 
 
-def _line_of(markdown: str, start: int, length: int) -> int:
-    """0-based index of the line where a match starting at *start* ends."""
-    return markdown[:start + length].count("\n")
-
-
 def _find_all(text: str, key: str) -> list[int]:
     starts, pos = [], text.find(key)
     while pos != -1:
@@ -233,7 +228,12 @@ def annotate_markdown(
             unanchored.append((c, "quoted text too short"))
             continue
 
-        starts = _find_all(markdown, anchor_text)
+        # Searched in the visible text, like live anchors, so a copy inside
+        # a link target can't stand in for text split by formatting.
+        if visible is None:
+            visible = _visible_text(markdown)
+        text, where = visible
+        starts = _find_all(text, anchor_text)
         if not starts:
             unanchored.append((c, "quoted text not found (edited or detached)"))
             continue
@@ -241,11 +241,9 @@ def annotate_markdown(
             unanchored.append((c, "quoted text ambiguous"))
             continue
 
-        # Annotate after the last line of the match.
-        place(
-            _line_of(markdown, starts[0], len(anchor_text)),
-            c, anchor_text, "quoted text found",
-        )
+        # Annotate after the line where the match ends.
+        last = where[starts[0] + len(anchor_text) - 1]
+        place(markdown.count("\n", 0, last), c, anchor_text, "quoted text found")
 
     # Build output
     output_lines: list[str] = []

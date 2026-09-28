@@ -255,6 +255,15 @@ class TestGetCommentAnchors:
         anchors = _anchors(_document([tab], {"c1": "kix.a"}))
         assert anchors["c1"]["text"] == "first"
 
+    def test_lone_surrogate_in_the_text_does_not_crash(self):
+        # What resp.json() yields for an unpaired \ud83d escape.
+        lone = json.loads('"ok \\ud83d tail"')
+        doc = _document(
+            [_tab("t.1", ["Alpha line", lone], {"kix.a": ["Alpha"]})],
+            {"c1": "kix.a"},
+        )
+        assert _anchors(doc)["c1"]["key"] == "Alpha"
+
     def test_request_uses_the_preview_view(self):
         session = MagicMock()
         session.get.return_value = _response(body=_document([], {}))
@@ -554,6 +563,15 @@ class TestQuoteFallback:
         assert _annotation_line(result, "survivor") == 1
         assert "[#survivor open] [quoted text found]" in result
 
+    def test_quote_is_matched_in_visible_text_not_link_targets(self):
+        # The only contiguous "target" in the raw markdown is in a URL.
+        md = (
+            "tar**get** is the commented text.\n\n"
+            "[Reference](https://example.com/target)\n"
+        )
+        result = annotate_markdown(md, [_comment("c1", "target")])
+        assert _annotation_line(result, "c1") == 1
+
     def test_quote_not_found_is_not_called_deleted(self):
         result = annotate_markdown(EDITS_MD, EDITS_COMMENTS)
         assert (
@@ -677,6 +695,9 @@ class TestCatOutput:
         assert cmd_cat(_cat_args()) == 0
         captured = capsys.readouterr()
         assert "WARN: the document changed while it was being read" in (
+            captured.err
+        )
+        assert "status comes from a read just before the text shown" in (
             captured.err
         )
         assert "[#reword open] [attached, location not found]" in captured.out
