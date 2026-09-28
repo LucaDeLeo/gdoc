@@ -723,6 +723,20 @@ class TestCommand:
         assert cmd_nest(_args()) == 0
         api.state.assert_called_once()
 
+    def test_full_disk_on_output_after_the_write_still_succeeds(self, api, mocker):
+        import errno
+
+        class Full(io.StringIO):
+            def flush(self):
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+            def fileno(self):
+                raise io.UnsupportedOperation
+
+        mocker.patch("sys.stdout", Full())
+        assert cmd_nest(_args()) == 0
+        api.state.assert_called_once()
+
     def test_parser(self):
         args = build_parser().parse_args(
             ["unnest", "doc1", "Bravo", "--to", "Delta", "--levels", "2", "--tab", "T"],

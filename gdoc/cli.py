@@ -1578,17 +1578,17 @@ def cmd_nest(args) -> int:
 def _print_after_write(out: list[str], err: list[str]) -> None:
     """Print after a saved non-idempotent write without risking the exit code.
 
-    A closed pipe (`gdoc nest ... | head -0`) would otherwise raise
-    BrokenPipeError here, or at interpreter exit, turning a saved change
-    into a failure a caller might retry. Output that cannot be delivered
-    is dropped instead.
+    A closed pipe (`gdoc nest ... | head -0`) or a full disk behind a
+    redirect would otherwise raise here, or at interpreter exit, turning a
+    saved change into a failure a caller might retry. Output that cannot
+    be delivered is dropped instead.
     """
     for stream, lines in ((sys.stdout, out), (sys.stderr, err)):
         try:
             for line in lines:
                 print(line, file=stream)
             stream.flush()
-        except (BrokenPipeError, ValueError):
+        except (OSError, ValueError):
             try:
                 devnull = os.open(os.devnull, os.O_WRONLY)
                 os.dup2(devnull, stream.fileno())
