@@ -1473,22 +1473,29 @@ def _stale_file_error(
     The recovery pulls into a new path: `gdoc pull` overwrites its target,
     so re-pulling the refused file would destroy the edits just protected.
     """
+    return GdocError(
+        f"{file_path} is from doc version {stamp}; the doc is now at "
+        f"version {current_version}. Nothing was sent and {file_path} "
+        "is unchanged. To recover:\n"
+        + _stale_recovery(doc_id, file_path)
+        + "\n  4. Use --force only to discard the newer changes in the doc.",
+        exit_code=3,
+    )
+
+
+def _stale_recovery(doc_id: str, file_path: str) -> str:
+    """Recovery steps for a stale stamped file, via a new path."""
     import os
     import shlex
 
     root, ext = os.path.splitext(file_path)
     latest = f"{root}.latest{ext or '.md'}"
     f, new = shlex.quote(file_path), shlex.quote(latest)
-    return GdocError(
-        f"{file_path} is from doc version {stamp}; the doc is now at "
-        f"version {current_version}. Nothing was sent and {file_path} "
-        "is unchanged. To recover:\n"
+    return (
         f"  1. gdoc pull {doc_id} {new}   (fresh copy at the current version)\n"
         f"  2. gdoc diff {doc_id} {f}   (what changed in the doc)\n"
         f"  3. Carry your edits into {new} and push it, "
-        "or apply small changes with 'gdoc edit'.\n"
-        "  4. Use --force only to discard the newer changes in the doc.",
-        exit_code=3,
+        "or apply small changes with 'gdoc edit'."
     )
 
 
@@ -1500,17 +1507,37 @@ def _advance_file_stamp(file_path: str, original: str, version) -> None:
     edit the file doesn't contain. The file is left alone if it changed
     on disk while the upload ran.
     """
+    import os
+    import shutil
+    import tempfile
+
     from gdoc.frontmatter import set_frontmatter_value
 
+    tmp = None
     try:
         with open(file_path, encoding="utf-8") as f:
             if f.read() != original:
                 raise OSError("file changed on disk during the upload")
         updated = set_frontmatter_value(original, _STAMP_KEY, str(version))
-        with open(file_path, "w", encoding="utf-8") as f:
+        # Write a sibling and swap it in, so a failed write can never
+        # truncate the user's file.
+        fd, tmp = tempfile.mkstemp(
+            dir=os.path.dirname(os.path.abspath(file_path)),
+            prefix=".gdoc-stamp-", suffix=".tmp",
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(updated)
+        shutil.copymode(file_path, tmp)
+        os.replace(tmp, file_path)
+        tmp = None
     except (OSError, ValueError) as e:
         _warn_stamp_kept(file_path, str(e))
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def _warn_stamp_kept(file_path: str, reason: str) -> None:
@@ -2013,7 +2040,7 @@ def cmd_pull_hook(args) -> int:
 
         from gdoc.frontmatter import parse_frontmatter
 
-        metadata, _ = parse_frontmatter(content)
+        metadata, local_body = parse_frontmatter(content)
         if "gdoc" not in metadata:
             return 0
 
@@ -2046,6 +2073,20 @@ def cmd_pull_hook(args) -> int:
         version = file_metadata.get("version")
         if version is not None:
             version = int(version)
+
+        # A stale stamped file may hold edits that never reached the doc
+        # (the sync hook refuses to push them). Replace it only when it
+        # already matches the doc; otherwise block the edit (exit 2 shows
+        # stderr to the agent) and leave the file for the agent to merge.
+        if stamp is not None and local_body.strip() != markdown.strip():
+            print(
+                f"SYNC: {file_path} is from doc version {stamp}; the doc "
+                f"is now at version {current_version}. Left unchanged so "
+                "local edits are not lost. To recover:\n"
+                + _stale_recovery(doc_id, file_path),
+                file=sys.stderr,
+            )
+            return 2
 
         from gdoc.frontmatter import add_frontmatter
 

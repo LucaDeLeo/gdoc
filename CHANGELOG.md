@@ -25,8 +25,11 @@ All notable changes to `gdoc` are documented here. This project follows
   agent; its other skips stay silent. After an
   upload the stamp advances to the version in the upload response; a tab
   write, which reports no version of its own, leaves the stamp and warns.
-  The pull hook stamps what it pulls and re-pulls when a file's stamp is
-  behind the doc. Unstamped files keep the old rule.
+  The advance writes a sibling file and swaps it in, so a failed write
+  never truncates the source. The pull hook stamps what it pulls; when a
+  stamped file is behind the doc it refreshes the file only if the file
+  already matches the doc, and otherwise leaves it untouched and exits 2
+  with the same recovery steps. Unstamped files keep the old rule.
 
 ## [0.21.0] — 2026-08-26
 

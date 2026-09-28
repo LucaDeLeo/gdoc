@@ -234,6 +234,21 @@ class TestCurrentStampUploads:
         assert "gdoc-version" in capsys.readouterr().err
 
     @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=6)
+    @patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=5))
+    def test_failed_stamp_write_keeps_file_intact(
+        self, _pf, _upload, _state, tmp_path, capsys,
+    ):
+        f = tmp_path / "draft.md"
+        f.write_text(_stamped(5))
+        before = f.read_bytes()
+        with patch("os.replace", side_effect=OSError(28, "No space left")):
+            assert cmd_push(_push_args(f)) == 0
+        assert f.read_bytes() == before
+        assert "gdoc-version" in capsys.readouterr().err
+        assert [p.name for p in tmp_path.iterdir()] == ["draft.md"]
+
+    @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 9})
     @patch("gdoc.api.docs.insert_markdown_into_tab", return_value={})
     @patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=5))
@@ -375,17 +390,34 @@ class TestPullStamp:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_info", return_value={"name": "D", "version": 55})
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 55})
-    def test_pull_hook_stamps_and_trusts_stamp_over_state(
-        self, _ver, _info, _state, tmp_path,
+    def test_pull_hook_keeps_stale_file_with_local_edits(
+        self, _ver, _info, _state, tmp_path, capsys,
     ):
         from gdoc.state import save_state
 
-        # The machine already read 55, but this file is based on 50.
+        # The machine already read 55, but this file is based on 50 and
+        # holds an edit the doc doesn't have.
         save_state(DOC, DocState(last_version=55, last_read_version=55))
         f = tmp_path / "draft.md"
         f.write_text(_stamped(50))
+        before = f.read_bytes()
         with patch("sys.stdin", _hook_stdin(f)):
-            cmd_pull_hook(SimpleNamespace(command="_pull-hook"))
+            rc = cmd_pull_hook(SimpleNamespace(command="_pull-hook"))
+        assert rc == 2  # Claude Code shows a PreToolUse exit-2 stderr
+        assert f.read_bytes() == before
+        err = capsys.readouterr().err
+        assert "draft.latest.md" in err and "Left unchanged" in err
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_info", return_value={"name": "D", "version": 55})
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 55})
+    def test_pull_hook_restamps_stale_file_that_matches_doc(
+        self, _ver, _info, _state, tmp_path,
+    ):
+        f = tmp_path / "draft.md"
+        f.write_text(_stamped(50, body="# Collaborator text\n"))
+        with patch("sys.stdin", _hook_stdin(f)):
+            assert cmd_pull_hook(SimpleNamespace(command="_pull-hook")) == 0
         meta, body = parse_frontmatter(f.read_text())
         assert meta["gdoc-version"] == "55"
         assert body == "# Collaborator text\n"
