@@ -251,6 +251,30 @@ class TestCurrentStampUploads:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.update_doc_content", return_value=6)
     @patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=5))
+    def test_save_during_temp_write_is_kept(
+        self, _pf, _upload, _state, tmp_path, capsys,
+    ):
+        """The on-disk check runs after staging, just before the rename."""
+        import shutil
+
+        f = tmp_path / "draft.md"
+        f.write_text(_stamped(5))
+        saved = _stamped(5, body="saved while staging\n")
+        real_copymode = shutil.copymode
+
+        def copymode(src, dst):
+            f.write_text(saved)
+            real_copymode(src, dst)
+
+        with patch("shutil.copymode", side_effect=copymode):
+            assert cmd_push(_push_args(f)) == 0
+        assert f.read_text() == saved
+        assert "gdoc-version" in capsys.readouterr().err
+        assert [p.name for p in tmp_path.iterdir()] == ["draft.md"]
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.update_doc_content", return_value=6)
+    @patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=5))
     def test_stamp_advance_keeps_symlink(self, _pf, _upload, _state, tmp_path):
         target = tmp_path / "canonical.md"
         target.write_text(_stamped(5))

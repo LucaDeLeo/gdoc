@@ -1505,17 +1505,17 @@ def _replace_file_if_unchanged(
     """Swap updated content into file_path if it still holds original.
 
     Raises OSError if the file changed on disk since it was read. The new
-    content goes to a sibling temp file that replaces the (symlink-resolved)
-    target, so a failed write never truncates the user's file.
+    content is staged in a sibling temp file first and then renamed over
+    the (symlink-resolved) target, so a failed write never truncates the
+    user's file and the check sits right before the rename. Plain files
+    have no compare-and-swap, so a save landing between that check and
+    the rename can still be replaced.
     """
     import os
     import shutil
     import tempfile
 
     target = os.path.realpath(file_path)
-    with open(target, encoding="utf-8") as f:
-        if f.read() != original:
-            raise OSError("file changed on disk while gdoc was working")
     fd, tmp = tempfile.mkstemp(
         dir=os.path.dirname(target), prefix=".gdoc-", suffix=".tmp",
     )
@@ -1523,6 +1523,9 @@ def _replace_file_if_unchanged(
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(updated)
         shutil.copymode(target, tmp)
+        with open(target, encoding="utf-8") as f:
+            if f.read() != original:
+                raise OSError("file changed on disk while gdoc was working")
         os.replace(tmp, target)
     except BaseException:
         try:
