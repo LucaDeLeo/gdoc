@@ -448,6 +448,38 @@ class TestProbeScenarios:
         )
         assert _annotation_line(result, "c1") == 1
 
+    def test_paragraph_spanning_anchor_header_stays_on_one_line(self):
+        doc = _document(
+            [_tab("t.1", ["Hello world", "Next line"],
+                  {"kix.a": ["Hello world\nNext"]})],
+            {"c1": "kix.a"},
+        )
+        result = annotate_markdown(
+            "Hello world\n\nNext line\n", [_comment("c1", "x")],
+            anchors=_anchors(doc),
+        )
+        assert '[#c1 open] alice@example.com on "Hello world Next":' in result
+
+    def test_anchor_across_a_footnote_reference_is_placed(self):
+        # A footnote reference is its own element in the document (no
+        # text run); the export writes it as a [^1] marker.
+        tab = _tab("t.1", [], {})
+        tab["documentTab"]["body"]["content"] = [{"paragraph": {"elements": [
+            {"startIndex": 1, "textRun": {"content": "Claim here"}},
+            {"startIndex": 11, "footnoteReference": {"footnoteId": "f1"}},
+            {"startIndex": 12, "textRun": {"content": " continues.\n"}},
+        ]}}]
+        tab["documentTab"]["commentAnchors"] = {"kix.a": {"ranges": [
+            {"startIndex": 1, "endIndex": 22, "tabId": "t.1"},
+        ]}}
+        anchors = _anchors(_document([tab], {"c1": "kix.a"}))
+        assert anchors["c1"]["key"] == "Claim here continues"
+        result = annotate_markdown(
+            "Claim here[^1] continues.\n\n[^1]: A note.\n",
+            [_comment("c1", "x")], anchors=anchors,
+        )
+        assert _annotation_line(result, "c1") == 1
+
     def test_visible_text_is_built_once_per_call(self):
         from gdoc import annotate
 

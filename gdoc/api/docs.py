@@ -1961,10 +1961,10 @@ def _comments_view_get(doc_id: str, fields: str | None = None):
 
 def _preview_field_rejected(resp) -> bool:
     """400 naming the preview field: the project is not preview-enrolled."""
+    if resp.status_code != 400:
+        return False
     detail = resp.text.lower()
-    return resp.status_code == 400 and (
-        "unknown name" in detail or "cannot find field" in detail
-    )
+    return "unknown name" in detail or "cannot find field" in detail
 
 
 def check_suggest_preview_access(doc_id: str) -> None:

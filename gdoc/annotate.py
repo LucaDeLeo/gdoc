@@ -36,8 +36,9 @@ def _format_annotation_block(
         status_part += f" [{fallback_note}]"
 
     if anchor_text is not None:
-        # Anchored: show truncated anchor text
-        display_anchor = anchor_text
+        # Anchored: show truncated anchor text on one line (an anchor can
+        # span paragraphs or soft line breaks)
+        display_anchor = " ".join(anchor_text.split())
         if len(display_anchor) > 40:
             display_anchor = display_anchor[:37] + "..."
         lines.append(f'{prefix}  {status_part} {author} on "{display_anchor}":')
@@ -82,8 +83,8 @@ def _find_all(text: str, key: str) -> list[int]:
 
 # Markdown that isn't visible text: an escape (keeps the escaped char), an
 # HTML entity (keeps the decoded char), a code span (keeps its contents),
-# an image, a link (keeps its label), a reference definition line, or an
-# emphasis marker. Underscores inside a word are literal, as in CommonMark.
+# an image, a link (keeps its label), a reference definition line, a
+# footnote reference, or an emphasis marker. Underscores inside a word are literal, as in CommonMark.
 _MARKUP = re.compile(
     r"\\(?P<escaped>.)"
     r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)"
@@ -91,6 +92,7 @@ _MARKUP = re.compile(
     r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
     r"|\[(?P<label>(?:\\.|[^\]\\])*)\]\([^)]*\)"
     r"|^\[[^\]]+\]:[^\n]*$"
+    r"|\[\^[^\]]+\]"
     r"|\*+|~~|(?<!\w)_+|_+(?!\w)",
     re.MULTILINE,
 )
