@@ -162,12 +162,21 @@ def _marker_differences(el: dict) -> list[str]:
     """
     marker = (_bullet(el) or {}).get("textStyle") or {}
     text = _newline_style(el)
+    runs = [
+        pe["textRun"].get("textStyle", {})
+        for pe in (_paragraph(el) or {}).get("elements", [])
+        if pe.get("textRun", {}).get("content")
+    ]
     odd = []
     for key, m in marker.items():
         if m is False:
             if key != "underline" and text.get(key) is True:
                 odd.append(key)
-        elif key not in _MARKER_FIELDS_KEPT or text.get(key) != m:
+        elif key not in _MARKER_FIELDS_KEPT or not runs or any(
+            r.get(key) != m for r in runs
+        ):
+            # Kept only when the whole item carries it (live: Docs gives a
+            # marker bold only for a fully bold item).
             odd.append(key)
     return sorted(odd)
 

@@ -432,6 +432,19 @@ class TestRefusals:
         para["elements"][0]["textRun"]["textStyle"] = dict(style)
         self._refused(tab, "Bravo", 1, "formatted bullet or number")
 
+    def test_bold_marker_on_partly_bold_text_is_refused(self):
+        tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
+        para = tab["body"]["content"][2]["paragraph"]
+        para["bullet"]["textStyle"] = {"bold": True, "underline": False}
+        start = para["elements"][0]["startIndex"]
+        para["elements"] = [
+            {"startIndex": start, "endIndex": start + 3,
+             "textRun": {"content": "Bra", "textStyle": {}}},
+            {"startIndex": start + 3, "endIndex": start + 6,
+             "textRun": {"content": "vo\n", "textStyle": {"bold": True}}},
+        ]
+        self._refused(tab, "Bravo", 1, "formatted bullet or number \\(bold\\)")
+
     def test_plain_marker_style_is_not_formatting(self):
         tab = _tab(("Alpha", 0, "num"), ("Bravo", 0, "num"))
         tab["body"]["content"][2]["paragraph"]["bullet"]["textStyle"] = {
