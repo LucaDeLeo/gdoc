@@ -257,6 +257,123 @@ def cmd_revisions(args) -> int:
     return 0
 
 
+def _export_with_anchors(
+    doc_id: str, read_comments,
+) -> tuple[list[dict], str, dict | None, str]:
+    """The comments, markdown export and live comment anchors from one version.
+
+    Live anchors show whether each comment is still attached; Drive's
+    quoted text alone can't (it never changes after an edit). Anchors are
+    placed by counting occurrences of their text, so they must come from
+    the version that was exported: the Drive file version (visible to any
+    reader) is checked before and after. The comments are listed again
+    after the export, so one added, removed or resolved during the read
+    is caught too (Drive's file version doesn't reliably track comments).
+    If either changed, the whole read is repeated once. If it keeps
+    changing, or can't be confirmed, comments keep their attached/detached
+    status but lose their line.
+
+    *read_comments* lists the comments; it is called at least twice.
+
+    Returns (comments, markdown, anchors, source). *source* says where
+    comment labels come from, and is reported as ``anchors`` in ``--json``:
+
+    - ``live``: live anchors, with line placement.
+    - ``live_no_locations``: live anchors for attached/detached status,
+      but no line placement (the version or the comments kept changing,
+      or the version couldn't be read). That status is from the last
+      anchor read, just before the export, so it may miss an edit made
+      between the two. Comments without a live anchor are unplaced too.
+    - ``quoted_text``: anchors couldn't be read (anchors None); the caller
+      places comments by quoted text. If the comments kept changing,
+      their quotes are dropped so none is placed.
+    - ``none``: there are no comments, nothing else was read.
+    """
+    from google.auth.exceptions import TransportError
+    from httplib2 import HttpLib2Error
+
+    from gdoc.api.docs import get_comment_anchors
+    from gdoc.api.drive import export_doc, get_file_version
+    from gdoc.util import AuthError, PreviewUnavailableError
+
+    def version():
+        try:
+            return get_file_version(doc_id).get("version")
+        except AuthError:
+            raise
+        except (GdocError, HttpLib2Error, TransportError, OSError):
+            return None
+
+    def ids(comments):
+        return sorted(str(c.get("id")) for c in comments)
+
+    comments_changed = "comments changed while the document was being read"
+    problem = "the document changed while it was being read"
+    comments = read_comments()
+    anchors: dict | None = {}
+    preview_error = None
+    for _attempt in range(2):
+        if not comments:
+            # No comments, nothing to place: skip the anchor read.
+            markdown = export_doc(doc_id, mime_type="text/markdown")
+            latest = read_comments()
+            if not latest:
+                return latest, markdown, {}, "none"
+            comments, problem = latest, comments_changed
+            continue
+        before = version()
+        try:
+            anchors = get_comment_anchors(doc_id)
+        except PreviewUnavailableError as e:
+            # Warned about once the result is known: a retry may recover.
+            preview_error, anchors = e, None
+        markdown = export_doc(doc_id, mime_type="text/markdown")
+        after = version() if anchors is not None else None
+        latest = read_comments()
+        if ids(latest) != ids(comments):
+            comments, problem = latest, comments_changed
+            continue
+        comments = latest
+        if anchors is None:
+            print(
+                f"WARN: live comment anchors unavailable ({preview_error}); "
+                "comments are placed where their quoted text occurs, which "
+                "does not show whether they are still attached",
+                file=sys.stderr,
+            )
+            return comments, markdown, None, "quoted_text"
+        if before is None or after is None:
+            problem = "could not confirm the document's version"
+            break
+        if before == after:
+            return comments, markdown, anchors, "live"
+        problem = "the document changed while it was being read"
+    # Unsettled: list every comment without a location. A comment with no
+    # live anchor would otherwise be placed by a quote from another read.
+    unplaced = [
+        c if anchors is not None and c.get("id") in anchors
+        else {k: v for k, v in c.items() if k != "quotedFileContent"}
+        for c in comments
+    ]
+    if anchors is None:
+        print(
+            f"WARN: live comment anchors unavailable ({preview_error}), and "
+            f"{problem}; comments are listed without a location",
+            file=sys.stderr,
+        )
+        return unplaced, markdown, None, "quoted_text"
+    print(
+        f"WARN: {problem}; comments are listed without a location, and "
+        "their attached/detached status comes from a read just before the "
+        "text shown, so an edit in between may not be reflected",
+        file=sys.stderr,
+    )
+    return unplaced, markdown, {
+        cid: None if live is None else {**live, "occurrences": 0}
+        for cid, live in anchors.items()
+    }, "live_no_locations"
+
+
 def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -386,29 +503,34 @@ def cmd_cat(args) -> int:
 
     if getattr(args, "comments", False):
         # Annotated view: line-numbered content + inline comment annotations
-        from gdoc.api.drive import export_doc
-        markdown = export_doc(doc_id, mime_type="text/markdown")
+        from gdoc.api.comments import list_comments
+        include_resolved = getattr(args, "all", False)
+        comments, markdown, anchors, source = _export_with_anchors(
+            doc_id,
+            lambda: list_comments(
+                doc_id,
+                include_resolved=include_resolved,
+                include_anchor=True,
+            ),
+        )
 
         if no_images:
             from gdoc.mdimport import strip_images
             markdown = strip_images(markdown)
 
-        from gdoc.api.comments import list_comments
-        include_resolved = getattr(args, "all", False)
-        comments = list_comments(
-            doc_id,
-            include_resolved=include_resolved,
-            include_anchor=True,
-        )
-
         from gdoc.annotate import annotate_markdown
-        annotated = annotate_markdown(markdown, comments, show_resolved=include_resolved)
+        annotated = annotate_markdown(
+            markdown, comments, show_resolved=include_resolved, anchors=anchors,
+        )
         annotated = _truncate_bytes(annotated, max_bytes)
 
         from gdoc.format import get_output_mode, format_json
         mode = get_output_mode(args)
         if mode == "json":
-            print(format_json(content=annotated))
+            print(format_json(
+                content=annotated,
+                anchors=source,
+            ))
         else:
             print(annotated, end="")
 
@@ -1442,22 +1564,164 @@ def _finish_noop_write(
     return 0
 
 
+# Frontmatter key `pull` stamps with the Drive `version` the file's
+# content came from. Uploads from a stamped file use it as the baseline.
+_STAMP_KEY = "gdoc-version"
+
+
+def _file_stamp(metadata: dict, doc_id: str) -> str | None:
+    """The version stamp a pulled file carries for doc_id, if any.
+
+    A stamp describes the doc named by the same frontmatter's `gdoc:` key,
+    so it is ignored when that key is missing or names another doc.
+    """
+    stamp = metadata.get(_STAMP_KEY)
+    target = metadata.get("gdoc")
+    if not stamp or not target:
+        return None
+    try:
+        if _resolve_doc_id(target) != doc_id:
+            return None
+    except GdocError:
+        return None
+    return stamp
+
+
+def _stale_file_error(
+    doc_id: str, file_path: str, stamp: str, current_version,
+) -> GdocError:
+    """Refusal for a stamped file whose doc has moved on.
+
+    The recovery pulls into a new path: `gdoc pull` overwrites its target,
+    so re-pulling the refused file would destroy the edits just protected.
+    """
+    return GdocError(
+        f"{file_path} is from doc version {stamp}; the doc is now at "
+        f"version {current_version}. Nothing was sent and {file_path} "
+        "is unchanged. To recover:\n"
+        + _stale_recovery(doc_id, file_path)
+        + "\n  4. Use --force only to discard the newer changes in the doc.",
+        exit_code=3,
+    )
+
+
+def _stale_recovery(doc_id: str, file_path: str) -> str:
+    """Recovery steps for a stale stamped file, via a new path."""
+    import os
+    import shlex
+
+    root, ext = os.path.splitext(file_path)
+    latest = f"{root}.latest{ext or '.md'}"
+    f, new = shlex.quote(file_path), shlex.quote(latest)
+    return (
+        f"  1. gdoc pull {doc_id} {new}   (fresh copy at the current version)\n"
+        f"  2. gdoc diff {doc_id} {f}   (what changed in the doc)\n"
+        f"  3. Carry your edits into {new} and push it, "
+        "or apply small changes with 'gdoc edit'."
+    )
+
+
+def _replace_file_if_unchanged(
+    file_path: str, original: str, updated: str,
+) -> None:
+    """Swap updated content into file_path if it still holds original.
+
+    Raises OSError if the file changed on disk since it was read. The new
+    content is staged in a sibling temp file first and then renamed over
+    the (symlink-resolved) target, so a failed write never truncates the
+    user's file and the check sits right before the rename. Plain files
+    have no compare-and-swap, so a save landing between that check and
+    the rename can still be replaced.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    target = os.path.realpath(file_path)
+    fd, tmp = tempfile.mkstemp(
+        dir=os.path.dirname(target), prefix=".gdoc-", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(updated)
+        shutil.copymode(target, tmp)
+        with open(target, encoding="utf-8") as f:
+            if f.read() != original:
+                raise OSError("file changed on disk while gdoc was working")
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _advance_file_stamp(file_path: str, original: str, version) -> None:
+    """Point a stamped file at the version its own upload produced.
+
+    `version` must come from the upload response itself: a separate read
+    afterwards could return a collaborator's newer version and bless an
+    edit the file doesn't contain. The file is left alone if it changed
+    on disk while the upload ran.
+    """
+    from gdoc.frontmatter import set_frontmatter_value
+
+    try:
+        updated = set_frontmatter_value(original, _STAMP_KEY, str(version))
+        _replace_file_if_unchanged(file_path, original, updated)
+    except (OSError, ValueError) as e:
+        _warn_stamp_kept(file_path, str(e))
+
+
+def _warn_stamp_kept(file_path: str, reason: str) -> None:
+    print(
+        f"WARN: {_STAMP_KEY} in {file_path} not updated ({reason}); "
+        "the next push from this file will be refused as stale.",
+        file=sys.stderr,
+    )
+
+
 def _check_write_conflict(
     doc_id: str, quiet: bool, force: bool, body: str | None = None,
+    file_stamp: str | None = None, file_path: str | None = None,
 ):
     """Run conflict detection for write-like commands.
+
+    The baseline is `file_stamp` (the `gdoc-version` a pulled file
+    carries) when given, else the version this machine last read.
 
     Returns (change_info, in_sync). in_sync is True when the version moved
     but the doc content already equals `body` (e.g. our own earlier write or
     a cosmetic Docs version bump) — the caller should skip the upload.
     Raises GdocError(exit_code=3) on a real conflict.
     """
+    change_info = None
     if not quiet:
         from gdoc.notify import pre_flight
 
         change_info = pre_flight(doc_id, quiet=False)
         _require_doc(doc_id, change_info)
 
+    if file_stamp is not None:
+        if force:
+            return change_info, False
+        current_version = (
+            change_info.current_version if change_info is not None else None
+        )
+        if current_version is None:
+            from gdoc.api.drive import get_file_version
+
+            current_version = get_file_version(doc_id).get("version")
+        if current_version is not None and str(current_version) != file_stamp:
+            if body is not None and _doc_matches(doc_id, body):
+                return change_info, True
+            raise _stale_file_error(
+                doc_id, file_path or "file", file_stamp, current_version,
+            )
+        return change_info, False
+
+    if not quiet:
         if not force:
             if change_info.last_read_version is None:
                 if body is not None and _doc_matches(doc_id, body):
@@ -1535,12 +1799,15 @@ def cmd_write(args) -> int:
     # Strip frontmatter — pull prepends it, and leaving it in the upload
     # dumps visible YAML into the doc body.
     from gdoc.frontmatter import parse_frontmatter
-    _, content = parse_frontmatter(content)
+    original = content
+    front, content = parse_frontmatter(content)
+    stamp = _file_stamp(front, doc_id)
 
     # Conflict detection. Content comparison only applies to full-doc
     # writes — a tab write's body never equals the whole-doc export.
     change_info, in_sync = _check_write_conflict(
         doc_id, quiet, force, body=None if tab_name else content,
+        file_stamp=stamp, file_path=file_path,
     )
     if in_sync:
         return _finish_noop_write(doc_id, change_info, args, quiet, command="write")
@@ -1561,6 +1828,11 @@ def cmd_write(args) -> int:
         _print_tab_write_result(
             mode, doc_id, result, command_version, verb="wrote",
         )
+        if stamp is not None:
+            # command_version came from a separate read, not the write.
+            _warn_stamp_kept(
+                file_path, "a tab write reports no version of its own",
+            )
     else:
         # Refuse destructive multi-tab collapse unless the user opts in.
         if not force_collapse:
@@ -1577,6 +1849,8 @@ def cmd_write(args) -> int:
 
         from gdoc.api.drive import update_doc_content
         command_version = update_doc_content(doc_id, content)
+        if stamp is not None:
+            _advance_file_stamp(file_path, original, command_version)
 
         if mode == "json":
             print(format_json(written=True, version=command_version))
@@ -1611,9 +1885,13 @@ def cmd_pull(args) -> int:
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
 
-    # Export doc (or one past revision) as markdown
+    # Export doc (or one past revision) as markdown. The version is read
+    # before the export so the stamp can only be older than the content,
+    # never newer: an edit landing in between makes the next push refuse
+    # instead of letting it overwrite that edit.
     from gdoc.api.drive import export_doc, get_file_info
 
+    metadata = get_file_info(doc_id)
     rev = None
     if revision:
         from gdoc.api.revisions import export_revision
@@ -1625,7 +1903,6 @@ def cmd_pull(args) -> int:
         )
     else:
         markdown = export_doc(doc_id, mime_type="text/markdown")
-    metadata = get_file_info(doc_id)
     title = metadata.get("name", "")
 
     # Add frontmatter and write to local file. Revision pulls
@@ -1638,6 +1915,8 @@ def cmd_pull(args) -> int:
         front = {"source": doc_id, "revision": rev["id"], "title": title}
     else:
         front = {"gdoc": doc_id, "title": title}
+        if metadata.get("version") is not None:
+            front[_STAMP_KEY] = metadata["version"]
     content = add_frontmatter(markdown, front)
 
     try:
@@ -1726,9 +2005,13 @@ def cmd_push(args) -> int:
         )
 
     doc_id = _resolve_doc_id(metadata["gdoc"])
+    stamp = _file_stamp(metadata, doc_id)
 
     # Conflict detection (reuse shared helper)
-    change_info, in_sync = _check_write_conflict(doc_id, quiet, force, body=body)
+    change_info, in_sync = _check_write_conflict(
+        doc_id, quiet, force, body=body, file_stamp=stamp,
+        file_path=file_path,
+    )
     if in_sync:
         return _finish_noop_write(doc_id, change_info, args, quiet, command="push")
 
@@ -1752,6 +2035,8 @@ def cmd_push(args) -> int:
     from gdoc.api.drive import update_doc_content
 
     command_version = update_doc_content(doc_id, body)
+    if stamp is not None:
+        _advance_file_stamp(file_path, content, command_version)
 
     # Output
     from gdoc.format import format_json, get_output_mode
@@ -1806,6 +2091,25 @@ def cmd_sync_hook(args) -> int:
             return 0
 
         doc_id = _resolve_doc_id(metadata["gdoc"])
+        title = metadata.get("title", doc_id)
+
+        # A stamped file must not overwrite edits made after it was
+        # pulled. Unstamped files keep the hook's unconditional push.
+        stamp = _file_stamp(metadata, doc_id)
+        if stamp is not None:
+            try:
+                _, in_sync = _check_write_conflict(
+                    doc_id, quiet=True, force=False, body=body,
+                    file_stamp=stamp, file_path=file_path,
+                )
+            except GdocError as e:
+                # Exit 2 is how a Claude Code PostToolUse hook shows stderr
+                # to the agent; exit 0 would hide that its edit never
+                # reached the doc.
+                print(f'SYNC: not pushed to "{title}": {e}', file=sys.stderr)
+                return 2
+            if in_sync:
+                return 0
 
         # Refuse to silently flatten a multi-tab doc. The hook runs
         # without user attention on every matching file edit, so there
@@ -1813,7 +2117,6 @@ def cmd_sync_hook(args) -> int:
         # entirely and log to stderr.
         from gdoc.api.docs import count_document_tabs
         if count_document_tabs(doc_id) > 1:
-            title = metadata.get("title", doc_id)
             print(
                 f'SYNC: skipped "{title}" (multi-tab doc; sync would '
                 "collapse tabs). Use `gdoc edit --tab` or "
@@ -1825,8 +2128,9 @@ def cmd_sync_hook(args) -> int:
         from gdoc.api.drive import update_doc_content
 
         command_version = update_doc_content(doc_id, body)
+        if stamp is not None:
+            _advance_file_stamp(file_path, content, command_version)
 
-        title = metadata.get("title", doc_id)
         print(
             f'SYNC: pushed to "{title}" (v{command_version})',
             file=sys.stderr,
@@ -1870,7 +2174,7 @@ def cmd_pull_hook(args) -> int:
 
         from gdoc.frontmatter import parse_frontmatter
 
-        metadata, _ = parse_frontmatter(content)
+        metadata, local_body = parse_frontmatter(content)
         if "gdoc" not in metadata:
             return 0
 
@@ -1881,28 +2185,61 @@ def cmd_pull_hook(args) -> int:
         version_data = get_file_version(doc_id)
         current_version = version_data.get("version")
 
-        from gdoc.state import load_state
+        # A stamped file is current when its stamp matches; otherwise
+        # fall back to what this machine last saw.
+        stamp = _file_stamp(metadata, doc_id)
+        if stamp is not None:
+            if str(current_version) == stamp:
+                return 0
+        else:
+            from gdoc.state import load_state
 
-        state = load_state(doc_id)
-        if state is not None and state.last_version == current_version:
-            return 0  # No remote changes
+            state = load_state(doc_id)
+            if state is not None and state.last_version == current_version:
+                return 0  # No remote changes
 
-        # Pull fresh content
+        # Pull fresh content (version first, as in `gdoc pull`)
         from gdoc.api.drive import export_doc, get_file_info
 
-        markdown = export_doc(doc_id, mime_type="text/markdown")
         file_metadata = get_file_info(doc_id)
+        markdown = export_doc(doc_id, mime_type="text/markdown")
         title = file_metadata.get("name", "")
         version = file_metadata.get("version")
         if version is not None:
             version = int(version)
 
+        # A stale stamped file may hold edits that never reached the doc
+        # (the sync hook refuses to push them). Replace it only when it
+        # already matches the doc; otherwise block the edit (exit 2 shows
+        # stderr to the agent) and leave the file for the agent to merge.
+        if stamp is not None and local_body.strip() != markdown.strip():
+            print(
+                f"SYNC: {file_path} is from doc version {stamp}; the doc "
+                f"is now at version {current_version}. Left unchanged so "
+                "local edits are not lost. To recover:\n"
+                + _stale_recovery(doc_id, file_path),
+                file=sys.stderr,
+            )
+            return 2
+
         from gdoc.frontmatter import add_frontmatter
 
-        new_content = add_frontmatter(markdown, {"gdoc": doc_id, "title": title})
+        front = {"gdoc": doc_id, "title": title}
+        if version is not None:
+            front[_STAMP_KEY] = version
+        new_content = add_frontmatter(markdown, front)
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+        if stamp is not None:
+            # The equality check above used the file as first read; don't
+            # replace a save that landed while the doc was being fetched.
+            try:
+                _replace_file_if_unchanged(file_path, content, new_content)
+            except OSError as e:
+                print(f"SYNC: {file_path} not refreshed ({e})", file=sys.stderr)
+                return 2
+        else:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
 
         print(
             f'SYNC: pulled "{title}" (v{version})',

@@ -281,3 +281,33 @@ def extract_doc_id(input_str: str) -> str:
         return input_str
 
     raise ValueError(f"Cannot extract document ID from: {input_str}")
+
+
+def find_overlapping(text: str, key: str):
+    """Yield the start of every occurrence of *key* in *text*, overlaps included.
+
+    Linear even for highly repetitive keys: with p the key's smallest
+    period, two occurrences less than ``m - p + 1`` apart must be a multiple
+    of p apart (Fine and Wilf), so a run of matches p apart is extended by
+    checking only the next p chars, and after the run ends the search
+    resumes ``m - p + 1`` past the last match.
+    """
+    m = len(key)
+    if not m:
+        return
+    border, k = [0] * m, 0  # KMP prefix function
+    for i in range(1, m):
+        while k and key[i] != key[k]:
+            k = border[k - 1]
+        if key[i] == key[k]:
+            k += 1
+        border[i] = k
+    p = m - border[-1]
+    tail = key[m - p:]
+    s = text.find(key)
+    while s != -1:
+        yield s
+        while p < m and text.startswith(tail, s + m):
+            s += p
+            yield s
+        s = text.find(key, s + (m - p + 1 if p < m else m))
