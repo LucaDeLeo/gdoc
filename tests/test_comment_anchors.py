@@ -600,6 +600,19 @@ class TestProbeScenarios:
             result = annotate_markdown(md, [comment], anchors=anchors)
             assert _annotation_line(result, "c1") == 1
 
+    @pytest.mark.parametrize("markdown,visible", [
+        # Live-checked: Drive escapes backticks in a URL, percent-encodes
+        # spaces, and writes no link titles.
+        ('[After](https://example.com/a\\`b\\`c"d%20e) the image.',
+         "After the image."),
+        ('`x` and [After](https://example.com/a\\`b\\`c"d%20e) the `y` image.',
+         "x and After the y image."),
+    ], ids=["escaped-backticks-in-url", "next-to-code-spans"])
+    def test_drive_link_targets_with_backticks(self, markdown, visible):
+        from gdoc.annotate import _visible_text
+
+        assert _visible_text(markdown)[0] == visible
+
     def test_long_repetitive_quote_is_fast(self):
         import time
 
