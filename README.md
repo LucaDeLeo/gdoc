@@ -726,9 +726,9 @@ with the same recovery steps), re-pulls one that matches the doc, and leaves a
 current file with local edits in place. `pull` now records `gdoc-revision` and the
 tab fingerprint rather than `gdoc-version`, and a file with `gdoc-revision` ignores
 any `gdoc-version`. A pulled-file header is an opening `---` block with a
-`gdoc` or `gdoc-*` key (in any case, indented or not), after anything that shows
-as nothing: blank lines, spaces, byte-order marks, zero-width characters or HTML
-comments. It must be read exactly: first in the file, opened and closed by `---`
+`gdoc` or `gdoc-*` key (in any case, indented or not), after any leading text
+without letters or digits: blank lines, spaces, invisible characters, symbols or
+HTML comments. It must be read exactly: first in the file, opened and closed by `---`
 lines, every line `key: value`, naming the document with `gdoc: ID`. Otherwise
 `write` (CLI and MCP) and `push` refuse it with exit 3 and nothing sent, and the
 sync hook reports the refusal (exit 2); the message names the cause. Fix the

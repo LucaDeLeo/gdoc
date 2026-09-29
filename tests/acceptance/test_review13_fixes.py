@@ -74,6 +74,7 @@ def test_r5_06_07_every_marker_spelling_is_refused(route, markdown):
 @pytest.mark.parametrize("prefix", [
     "\n", "\r\n", " ", "\t", "﻿ ", "﻿﻿", "​", " \n",
     "<!-- x -->\n", "<!-- x -->", "<!-- a\nb -->", "\u200e", "\u00ad\n",
+    "\u034f", "\ufe0f", "\U000e0100", "<!-- x -->\u034f", "\u3164",
 ])
 def test_r5_02_a_prefixed_pulled_header_is_refused(route, prefix):
     _written(route, "Alpha.\n")

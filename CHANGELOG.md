@@ -27,7 +27,7 @@ All notable changes to `gdoc` are documented here. This project follows
   `gdoc nest` and `gdoc unnest` when those would accept the items, and to
   `write` otherwise.
 - A pulled-file header (an opening `---` block with a `gdoc` or `gdoc-*` key,
-  even after blank lines, spaces, byte-order marks or zero-width characters)
+  even after leading blank lines, spaces, invisible characters or comments)
   must be read exactly as gdoc frontmatter; otherwise `write`, `push` and MCP
   `write` refuse it, and the sync hook reports the refusal, instead of writing
   it without stale-file checks. Other front matter is unaffected.

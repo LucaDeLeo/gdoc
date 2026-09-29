@@ -86,18 +86,26 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     return metadata, body
 
 
+# Letters that render as blank space.
+_BLANK_LETTERS = "\u115f\u1160\u3164\uffa0"
+
+
 def _invisible_prefix(content: str) -> int:
-    """The length of *content*'s leading text that renders as nothing:
-    whitespace (including blank lines), control and format characters (such
-    as byte-order marks, zero-width and direction marks) and HTML comments."""
+    """The length of *content*'s leading text before a possible opening
+    `---`: HTML comments, and every character that is not a letter, a digit
+    or a dash. That covers everything that renders as nothing (whitespace,
+    blank lines, marks, control and format characters), and treats stray
+    symbols the same way."""
     import unicodedata
 
     i = 0
     while i < len(content):
-        if content[i].isspace() or unicodedata.category(content[i]) in ("Cc", "Cf"):
-            i += 1
-        elif content.startswith("<!--", i) and (end := content.find("-->", i + 4)) >= 0:
+        char = content[i]
+        if content.startswith("<!--", i) and (end := content.find("-->", i + 4)) >= 0:
             i = end + 3
+        elif (_DASH_RUN_RE.match(char * 3) is None
+              and (unicodedata.category(char)[0] not in "LN" or char in _BLANK_LETTERS)):
+            i += 1
         else:
             break
     return i
