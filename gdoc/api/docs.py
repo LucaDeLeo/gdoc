@@ -3769,21 +3769,28 @@ def _table_between_blanks(content, match, parsed, tab=None, tab_id=None):
         return None
     before, after = paragraphs[first - 1], paragraphs[last + 1]
     following = paragraphs[last + 2]
-    owned = [span for _, name, spans in _owned_named_ranges(tab, tab_id)
+    owned = [(name, span) for _, name, spans in _owned_named_ranges(tab, tab_id)
              for span in spans] if tab else []
 
+    def containers(index):
+        return {name for name, (a, b) in owned if a <= index < b}
+
+    home = containers(paragraphs[first].get("startIndex", 0))
+
     def plain_blank(element):
-        # Only an unstyled blank outside every gdoc container is a
-        # separator; a rule, an empty heading, an empty code line or a
-        # quoted blank is content (I5).
+        # Only an unstyled blank outside every container or in the replaced
+        # paragraph's own is a separator; a rule, an empty heading, an empty
+        # code line, a blank of another container or a styled blank is
+        # content (I5).
         style = element.get("paragraph", {}).get("paragraphStyle", {})
-        start = element.get("startIndex", 0)
+        runs = element.get("paragraph", {}).get("elements", [])
         return (_is_empty_paragraph(element)
                 and not element["paragraph"].get("bullet")
                 and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
-                and not (style.get("borderBottom") or {}).get("width", {}).get(
-                    "magnitude")
-                and not any(a <= start < b for a, b in owned))
+                and not set(style) - {"namedStyleType", "direction", "indentStart",
+                                      "indentFirstLine", "indentEnd"}
+                and not any(run.get("textRun", {}).get("textStyle") for run in runs)
+                and containers(element.get("startIndex", 0)) <= home)
 
     if (paragraphs[first].get("startIndex", 0) != match["startIndex"]
             or "table" in after):

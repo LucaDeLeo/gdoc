@@ -28,6 +28,11 @@ def _written(route, markdown):
     return doc
 
 
+def _read_after_write(route, markdown):
+    _written(route, markdown)
+    return _read(route)
+
+
 def _oracle(route, markdown):
     doc = _written(route, markdown)
     return _read(route), _native(doc)
@@ -205,3 +210,25 @@ def test_r2_01_one_item_plus_text_in_a_container_is_refused(route, markdown, old
     code, output, error = route.call("edit", old_text=old, new_text=new)
     assert code != 0 and "paragraph count" in output + error
     assert len(route.service.batches) == batches
+
+
+def test_r2_04_a_table_between_quoted_blanks_matches_write(route):
+    """Round-2 review R2-04: the quote's own blanks are the separators."""
+    quoted = "\n".join("> " + line for line in T.split("\n"))
+    want = _read_after_write(route, f"> A\n>\n{quoted}\n>\n> B\n")
+    _written(route, "> A\n>\n> Mid\n>\n> B\n")
+    route.ok("edit", old_text="Mid", new_text=T)
+    assert _read(route) == want
+
+
+def test_r2_12_a_styled_blank_before_a_table_is_kept(route):
+    """Round-2 review R2-12: a centred blank is content, not a separator."""
+    doc = _written(route, "A\n\nMid\n\nB\n")
+    blank = next(start for start, mark in doc.paragraphs()
+                 if mark > start and doc.units[start].ch == "M") - 1
+    doc.units[blank].ps.update({"alignment": "CENTER"})
+    route.ok("cat")
+    route.ok("edit", old_text="Mid", new_text=T)
+    centred = [mark for start, mark in doc.paragraphs()
+               if doc.units[mark].ps.get("alignment") == "CENTER"]
+    assert len(centred) == 1
