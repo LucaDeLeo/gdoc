@@ -1355,7 +1355,8 @@ def cmd_edit(args) -> int:
     if cell is not None:
         # A cell reads its paragraph breaks as `<br>`; the same spelling
         # writes them back.
-        new_text = new_text.replace("<br>", "\n")
+        from gdoc.mdparse import cell_breaks
+        new_text = cell_breaks(new_text)
 
     plan = _prepare_text_replacement(args, doc_id, old_text)
     matches = plan.matches
@@ -1716,7 +1717,9 @@ def _write_native_markdown(
     # At the file's own revision, a recorded fingerprint that does not match
     # shows the file holds another tab's content (its tab field was lost).
     file_current = bool(file_revision) and (tab_unchanged or (
-        file_revision == revision and not file_tab_fingerprint))
+        file_revision == revision and (
+            not file_tab_fingerprint
+            or native_tab_fingerprint(selected) == file_tab_fingerprint)))
     if unchanged:
         if result_details is not None and file_current:
             # The file's provenance advances only when it already covers the

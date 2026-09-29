@@ -247,6 +247,27 @@ def _code_spans(text: str) -> list[re.Match]:
     return spans
 
 
+def cell_breaks(text: str) -> str:
+    """Decode a cell's ``<br>`` line breaks as a pipe table cell does: not
+    escaped ones, not inside code spans. Each line after a break stays inline
+    text, so a leading block marker there is escaped."""
+    def decode(chunk):
+        return re.sub(r"\\.|<br>", lambda m: "\n" if m[0] == "<br>" else m[0],
+                      chunk)
+
+    parts, cursor = [], 0
+    for code in _code_spans(text):
+        parts.append(decode(text[cursor:code.start()]))
+        parts.append(code[0])
+        cursor = code.end()
+    parts.append(decode(text[cursor:]))
+    lines = "".join(parts).split("\n")
+    return "\n".join([lines[0]] + [
+        re.sub(r"^(\s*\d+)([.)])", r"\1\\\2",
+               re.sub(r"^(\s*)([-*+>#])", r"\1\\\2", line))
+        for line in lines[1:]])
+
+
 def _table_cells(line: str) -> list[str]:
     """Split unescaped pipes, retaining inline escapes for the cell parser."""
     text = line[1:-1]

@@ -164,3 +164,33 @@ def test_r1_15_a_cell_writes_br_as_a_break(route):
     _written(route, markdown)
     route.ok("edit", cell="1,1", tab="Main", new_text="a<br>c")
     assert _read(route) == want
+
+
+@pytest.mark.parametrize("new,cell", [
+    ("a\\<br>b", "a\\<br>b"),
+    ("`<br>`", "`<br>`"),
+    ("a<br>- b", "a<br>- b"),
+])
+def test_f1_01_cell_breaks_follow_the_table_rules(route, new, cell):
+    """Follow-up review F1-01: escaped and code `<br>` stay literal, and text
+    after a break stays inline."""
+    markdown = "| k | v |\n| --- | --- |\n| Status | old |\n"
+    want = _oracle(route, markdown.replace("old", cell))[0]
+    _written(route, markdown)
+    route.ok("edit", cell="1,1", tab="Main", new_text=new)
+    assert _read(route) == want
+
+
+def test_f1_02_a_current_pulled_file_collapses_tabs(monkeypatch, tmp_path):
+    """Follow-up review F1-02: at the current revision a matching fingerprint
+    is current, with --force-collapse-tabs too."""
+    from gdoc import cli
+
+    route = NativeRoute("cli", monkeypatch, tmp_path)
+    route.load(NativeDoc(("p", "Alpha")))
+    pulled = tmp_path / "d.md"
+    assert cli.run_argv(["pull", "synthetic", str(pulled)], check_updates=False) == 0
+    pulled.write_text(pulled.read_text().replace("Alpha", "Beta"))
+    code = cli.run_argv(["write", "synthetic", str(pulled), "--force-collapse-tabs"],
+                        check_updates=False)
+    assert code == 0 and _read(route) == "Beta\n"
