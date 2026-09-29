@@ -2560,6 +2560,14 @@ def get_document_threads(doc_id: str) -> dict:
                 "Preview (commentsViewMode rejected)"
             )
         _translate_http_error(e, doc_id)
+    # An enrolled project echoes the view mode; a 200 without it means the
+    # preview view was not applied, so a missing ``suggestions`` key would
+    # not mean "no suggestions" (same rule as check_suggest_preview_access).
+    if doc.get("commentsViewMode") != COMMENTS_VIEW_MODE_INCLUDED:
+        raise PreviewUnavailableError(
+            "suggestion threads are not available: the server did not "
+            "apply the Developer Preview comments view"
+        )
     if "suggestions" not in doc:
         doc = {**doc, "suggestions": []}
     return doc

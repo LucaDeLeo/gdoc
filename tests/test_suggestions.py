@@ -183,8 +183,27 @@ class TestGetDocumentThreads:
     @patch("gdoc.api.docs._documents_get_raw")
     @patch("gdoc.api.docs.get_docs_service")
     def test_missing_suggestions_key_becomes_empty_list(self, _svc, mock_raw):
-        mock_raw.return_value = {"documentId": "doc1", "revisionId": "r"}
+        mock_raw.return_value = {
+            "documentId": "doc1",
+            "revisionId": "r",
+            "commentsViewMode": "COMMENTS_VIEW_MODE_INCLUDED",
+        }
         assert get_document_threads("doc1")["suggestions"] == []
+
+    @pytest.mark.parametrize("mode", [None, "", "DEFAULT_FOR_CURRENT_ACCESS"])
+    @patch("gdoc.api.docs._documents_get_raw")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_200_without_preview_view_is_unavailable_not_empty(
+        self, _svc, mock_raw, mode
+    ):
+        # An empty thread list is only trustworthy when the server echoes
+        # the preview view mode; otherwise "No suggestions." would be a lie.
+        doc = {"documentId": "doc1", "revisionId": "r"}
+        if mode is not None:
+            doc["commentsViewMode"] = mode
+        mock_raw.return_value = doc
+        with pytest.raises(PreviewUnavailableError, match="did not apply"):
+            get_document_threads("doc1")
 
     @patch("gdoc.api.docs._documents_get_raw")
     @patch("gdoc.api.docs.get_docs_service")
