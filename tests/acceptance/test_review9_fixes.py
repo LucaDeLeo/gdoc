@@ -299,7 +299,7 @@ def test_reshaping_a_first_item_that_would_split_the_list_is_refused(route):
     batches = len(route.service.batches)
     code, output, error = route.call("edit", old_text="a",
                                      new_text="1. a1\n  1. sub")
-    assert code != 0 and "renumbering" in output + error
+    assert code != 0 and "splitting that list" in output + error
     assert len(route.service.batches) == batches
 
 
@@ -488,7 +488,7 @@ def test_splits_that_renumber_later_items_are_refused(route, base, old, new):
     route.ok("write", text=base)
     batches = len(route.service.batches)
     code, output, error = route.call("edit", old_text=old, new_text=new)
-    assert code != 0 and "renumbering" in output + error
+    assert code != 0 and "splitting that list" in output + error
     assert len(route.service.batches) == batches
 
 
@@ -516,13 +516,13 @@ def test_expansion_ending_with_an_empty_item_keeps_the_list(route):
     assert {bullet for _, _, bullet in styles(doc)} == {(1, 0)}
 
 
-def test_cell_paragraphs_become_one_list(route):
-    """Round 6 (Codex R6-1): equal-count cell replacements make one list."""
+def test_cell_paragraphs_stay_text(route):
+    """Round 6 (Codex R6-1) is superseded by round-2 review R2-03: a cell
+    holds inline text only, so item markers stay literal."""
     doc = route.load(NativeDoc(("t", [["a\nb"]])))
     route.ok("cat")
     route.ok("edit", cell="0,0", tab="Main", new_text="1. A\n2. B")
-    lists = {bullet[0] for _, _, bullet in styles(doc) if bullet}
-    assert len(lists) == 1
+    assert not any(bullet for _, _, bullet in styles(doc))
 
 
 @pytest.mark.parametrize("base,old,new", [
@@ -540,7 +540,7 @@ def test_restarts_that_renumber_later_items_are_refused(route, base, old, new):
     route.ok("write", text=base)
     batches = len(route.service.batches)
     code, output, error = route.call("edit", old_text=old, new_text=new)
-    assert code != 0 and "renumbering" in output + error
+    assert code != 0 and "splitting that list" in output + error
     assert len(route.service.batches) == batches
 
 

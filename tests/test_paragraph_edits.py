@@ -861,7 +861,8 @@ def test_whole_cell_list_removal_request_ranges(mocker, count, new, bullet):
     requests = service.documents.return_value.batchUpdate.call_args.kwargs[
         "body"]["requests"]
     assert body == original
-    rendered = new.removeprefix("- ")
+    # A cell holds inline text only: an item marker stays literal (R2-03).
+    rendered = new
     assert _apply_text_requests(cell, requests) == rendered + "\n"
     resets = [r["deleteParagraphBullets"]["range"] for r in _bullet_resets(requests)]
     # The list compiler's own indent requests are checked natively elsewhere.
@@ -869,7 +870,7 @@ def test_whole_cell_list_removal_request_ranges(mocker, count, new, bullet):
               if "namedStyleType" in r.get("updateParagraphStyle", {})
               .get("paragraphStyle", {})]
     creates = [r for r in requests if "createParagraphBullets" in r]
-    assert bool(creates) == new.startswith("- ")
+    assert not creates
     if not bullet and not creates and new:
         assert resets == styles == []
         return

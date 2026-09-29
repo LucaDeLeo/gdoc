@@ -73,12 +73,16 @@ def test_r1_02_a_pulled_file_writes_again_after_its_own_write(
 
 @pytest.mark.parametrize("new,expected", [
     ("2. b2\n  - sub", "1. a\n2. b2\n  - sub\n3. c\n"),
-    ("2. b2\n  - sub\n3. b3", "1. a\n2. b2\n  - sub\n3. b3\n4. c\n"),
+    # A same-kind item after the sub-item stays refused, as at 39ab543.
+    ("2. b2\n  - sub\n3. b3", None),
 ])
 def test_r1_03_mid_list_item_gains_a_sub_item_of_the_other_kind(route, new, expected):
     _written(route, "1. a\n2. b\n3. c\n")
-    route.ok("edit", old_text="b", new_text=new)
-    assert _read(route) == expected
+    code, output, error = route.call("edit", old_text="b", new_text=new)
+    if expected is None:
+        assert code != 0 and "new list" in output + error
+    else:
+        assert code == 0 and _read(route) == expected
 
 
 @pytest.mark.parametrize("markdown,expected", [
@@ -130,7 +134,7 @@ def test_r1_07_a_level_change_does_not_take_the_slot_silently(
     _written(route, markdown)
     code, output, error = route.call("edit", old_text=old, new_text=new)
     if expected is None:
-        assert code != 0 and "renumbering" in output + error
+        assert code != 0 and "splitting that list" in output + error
     else:
         assert code == 0
         got = _read(route)
@@ -152,37 +156,25 @@ def test_r1_09_an_empty_final_nested_item_keeps_its_level(route):
     assert [bullet[1] for _, _, bullet in styles(doc) if bullet] == [0, 1]
 
 
-def test_r1_10_a_bare_line_after_one_item_is_prose(route):
-    _written(route, "1. a\n2. b\n3. c\nTail\n")
-    route.ok("edit", old_text="b\nc", new_text="2. B\nC")
-    assert _read(route) == "1. a\n2. B\nC\nTail\n"
-
-
-def test_r1_15_a_cell_writes_br_as_a_break(route):
-    markdown = "| k | v |\n| --- | --- |\n| Status | a<br>b |\n"
-    want = _oracle(route, markdown.replace("a<br>b", "a<br>c"))[0]
-    _written(route, markdown)
-    route.ok("edit", cell="1,1", tab="Main", new_text="a<br>c")
-    assert _read(route) == want
-
-
-@pytest.mark.parametrize("new,cell", [
-    ("a\\<br>b", "a\\<br>b"),
-    ("`<br>`", "`<br>`"),
-    ("a<br>- b", "a<br>- b"),
-    ("a<br>___", "a<br>___"),
-    ("a<br>~~~<br>x<br>~~~", "a<br>~~~<br>x<br>~~~"),
-    ("a<br>[x]: https://example.com", "a<br>[x]: https://example.com"),
-    ("a<br>**bold** x", "a<br>**bold** x"),
+@pytest.mark.parametrize("new,expected", [
+    ("# h", "| S | # h |"), ("- l", "| S | - l |"), ("1. x", "| S | 1. x |"),
+    ("> q", "| S | > q |"), ("**b** `c`", "| S | **b** `c` |"),
 ])
-def test_f1_01_cell_breaks_follow_the_table_rules(route, new, cell):
-    """Follow-up review F1-01: escaped and code `<br>` stay literal, and text
-    after a break stays inline."""
-    markdown = "| k | v |\n| --- | --- |\n| Status | old |\n"
-    want = _oracle(route, markdown.replace("old", cell))[0]
-    _written(route, markdown)
+def test_r2_03_cell_content_is_inline_only(route, new, expected):
+    """Round-2 review R2-03: a cell's own spelling writes literal text."""
+    doc = _written(route, "| k | v |\n| --- | --- |\n| S | old |\n")
     route.ok("edit", cell="1,1", tab="Main", new_text=new)
-    assert _read(route) == want
+    assert expected in _read(route)
+    assert all(style in (None, "NORMAL_TEXT") and not bullet
+               for _, style, bullet in styles(doc))
+
+
+def test_r2_02_cell_keeps_an_image_after_br(route):
+    """Round-2 review R2-02: as at 39ab543, `<br>` in a --cell replacement
+    stays literal and an image after it is inserted."""
+    _written(route, "| k | v |\n| --- | --- |\n| S | old |\n")
+    route.ok("edit", cell="1,1", tab="Main", new_text="a<br>![i](http://x/i.png)")
+    assert "gdoc-image:" in _read(route)
 
 
 def test_f1_02_a_current_pulled_file_collapses_tabs(monkeypatch, tmp_path):
@@ -198,3 +190,18 @@ def test_f1_02_a_current_pulled_file_collapses_tabs(monkeypatch, tmp_path):
     code = cli.run_argv(["write", "synthetic", str(pulled), "--force-collapse-tabs"],
                         check_updates=False)
     assert code == 0 and _read(route) == "Beta\n"
+
+
+@pytest.mark.parametrize("markdown,old,new", [
+    ("> quote\n> more\n\nout\n", "quote", "- X\ntext"),
+    ("> quote\n> more\n\nout\n", "quote", "text\n- X"),
+    ("1. a\n\n   para\n   more\n2. b\n", "para", "- X\ntext"),
+])
+def test_r2_01_one_item_plus_text_in_a_container_is_refused(route, markdown, old, new):
+    """Round-2 review R2-01: as at 39ab543, a one-item multi-line replacement
+    of a container paragraph is refused (paragraph count), not restructured."""
+    _written(route, markdown)
+    batches = len(route.service.batches)
+    code, output, error = route.call("edit", old_text=old, new_text=new)
+    assert code != 0 and "paragraph count" in output + error
+    assert len(route.service.batches) == batches

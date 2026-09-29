@@ -3632,13 +3632,20 @@ def _refuse_list_split(parsed, content, native, lists) -> None:
     # stays in it (one Markdown list, no restart).
     from gdoc.mdparse import _native_lists
 
-    # Exempt only when every new item of the continued list's kind is in
-    # the native list that joins; items of the other kind are their own
-    # lists, as in a write (a nested sublist of another kind).
-    joining = _native_lists(parsed, sorted(items, key=lambda s: s.start))[0]
-    same_kind = [s for s in items
-                 if s.style["bulletPreset"] == parsed.continues_list]
-    if parsed.continues_list and all(s in joining for s in same_kind):
+    # Exempt only when every new item is in the native list that joins, or
+    # (a sub-item of the other kind) the new items end with a nested
+    # sublist of the other kind and no deeper item of the list follows.
+    ordered_items = sorted(items, key=lambda s: s.start)
+    joining = _native_lists(parsed, ordered_items)[0]
+    others = [s for s in ordered_items if s not in joining]
+    after = next((e["paragraph"] for e in _flat_paragraphs(content)
+                  if e.get("startIndex") == native[-1][2] + 1), {})
+    sub_items = bool(others) and all(
+        s.style["bulletPreset"] != parsed.continues_list
+        and s.list_depth > parsed.continues_level
+        and s.start > max(j.start for j in joining) for s in others
+    ) and (after.get("bullet") or {}).get("nestingLevel", 0) <= parsed.continues_level
+    if parsed.continues_list and (not others or sub_items):
         above = next((e["paragraph"] for e in _flat_paragraphs(content)
                       if e.get("endIndex") == native[0][1]), {})
         ids.discard((above.get("bullet") or {}).get("listId"))
@@ -3647,10 +3654,9 @@ def _refuse_list_split(parsed, content, native, lists) -> None:
            for e in _flat_paragraphs(content) if e.get("startIndex", 0) > end):
         raise GdocError(
             "these list items would start a new list before the rest of the "
-            "list they replace items of, renumbering the items after them; "
-            "reword each item separately, keeping its level, include the "
-            "items above it that the new items nest under, or rewrite the "
-            "tab with write --tab", exit_code=3,
+            "list they replace items of, splitting that list (numbered items "
+            "after them would renumber); reword each item separately, keeping "
+            "its level, or rewrite the tab with write --tab", exit_code=3,
         )
 
 
@@ -4651,9 +4657,7 @@ def replace_formatted(
             # compiled from the whole replacement, not paragraph by paragraph.
             # Items replacing as many existing items stay per paragraph,
             # where each keeps its native bullet.
-            items = sum(s.type == "bullets" for s in parsed.styles)
-            several = "\n" in new_markdown.strip("\n")
-            listed = (items > 1 or (items and several)) and not (
+            listed = sum(s.type == "bullets" for s in parsed.styles) > 1 and not (
                 _each_item_kept(native, new_markdown, body, source,
                                 match.get("tabId", tab_id)))
             contextual = body is not None and not ((parsed.tables or listed) and whole)

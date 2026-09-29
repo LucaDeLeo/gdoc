@@ -887,8 +887,11 @@ at the end. This works for lists with gdoc's default bullet and number styles;
 after a list styled in Docs another way, the new items start their own list and
 gdoc warns. An edit whose new items would start a new list in front of the
 rest of the list it replaces items of, such as a nested item added under the
-first item, is refused, because the untouched items after it would renumber;
-reword each item keeping its level, or rewrite the tab with `write --tab`.
+first item, is refused, because it would split that list (numbered items after
+it would renumber); reword each item keeping its level, or rewrite the tab with
+`write --tab`. A table cell (`edit --cell`) holds inline text only: an item or
+heading marker there stays literal, as the cell's `cat` spelling reads, and so
+does `<br>`; separate a cell's lines with a newline.
 
 ### Deleting across paragraphs
 

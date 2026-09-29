@@ -1353,10 +1353,9 @@ def cmd_edit(args) -> int:
     # Resolve text from args or files (fail fast before API calls)
     old_text, new_text = _resolve_replacement_text(args, cell)
     if cell is not None:
-        # A cell reads its paragraph breaks as `<br>`; the same spelling
-        # writes them back.
-        from gdoc.mdparse import cell_breaks
-        new_text = cell_breaks(new_text)
+        # A cell holds inline text only, as its `cat` spelling reads.
+        from gdoc.mdparse import cell_inline
+        new_text = cell_inline(new_text)
 
     plan = _prepare_text_replacement(args, doc_id, old_text)
     matches = plan.matches
