@@ -289,7 +289,15 @@ def test_i4_i6_insert_matches_writing_the_concatenation(route, seed, position):
     expected_doc = _written(route, concatenated)
     expected = (_read(route), _numbered_identity(_native(expected_doc)))
     doc = _written(route, base)
-    route.ok("insert", text=inserted, tab="t.0", position=position)
+    batches = len(route.service.batches)
+    code, output, error = route.call("insert", text=inserted, tab="t.0",
+                                     position=position)
+    if code != 0:
+        # A refusal (items that may join a list above) sends nothing; the
+        # write of the concatenation above is the working route.
+        assert "list's structure" in output + error
+        assert len(route.service.batches) == batches
+        return
     assert (_read(route), _numbered_identity(_native(doc))) == expected, (
         base_read, inserted)
 

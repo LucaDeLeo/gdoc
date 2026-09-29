@@ -105,7 +105,14 @@ def test_insert_matches_writing_the_concatenation(
     assert _read(route) == base_read
     original = _native(doc)[0]
     batches = len(route.service.batches)
-    route.ok("insert", text=inserted, tab="t.0", position=position)
+    code, output, error = route.call("insert", text=inserted, tab="t.0",
+                                     position=position)
+    if code != 0:
+        # Items that may join a list above are refused, with nothing sent;
+        # the write above is the working route.
+        assert "list's structure" in output + error
+        assert len(route.service.batches) == batches
+        return
     assert len(route.service.batches) > batches
     # The tab's own paragraphs keep their text, style, list, indent and rule
     # outside the inserted scope, whatever the concatenation would suggest.

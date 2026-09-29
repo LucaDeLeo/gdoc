@@ -3859,17 +3859,12 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
                             for s in parsed.styles))
     # A numbered item asking for a number other than 1 continues an earlier
     # numbered list of its level in a write, even across other blocks.
-    # Any line of the inserted text that starts a numbered list with another
-    # number than 1 (not continuing a numbered line just above it) may join
-    # a numbered list of the tab.
-    starts, previous = [], None
-    for line in markdown.split("\n"):
-        if not line.strip(" \t>"):
-            continue
-        number = re.match(r"[\s>]*(\d+)[.)][ \t]", line)
-        if number and int(number[1]) != 1 and previous is None:
-            starts.append(line)
-        previous = number
+    # Any numbered item of the inserted text with another number than 1 may
+    # continue a numbered list of the tab in a write; which one is not
+    # worked out.
+    starts = [line for line in markdown.split("\n")
+              if (number := re.match(r"[\s>]*(\d+)[.)](?:[ \t]|$)", line))
+              and int(number[1]) != 1]
     numbered_join = position == "end" and bool(starts) and any(
         _list_is_ordered(tab.get("lists", {}), b.get("listId", ""),
                          b.get("nestingLevel", 0))

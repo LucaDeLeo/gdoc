@@ -191,3 +191,13 @@ def test_f7_03_an_empty_sub_item_counts(route):
     _written(route, "1. a\n2. b\n  1. \n3. d\n")
     code, output, error = route.call("edit", old_text="b", new_text="  1. b")
     assert code != 0 and "gdoc nest" not in output + error
+
+
+@pytest.mark.parametrize("inserted", [
+    "> 1. quoted\n3. c\n", "Paragraph\n\n  1. child\n3. c\n", "Paragraph\n\n3.\n",
+])
+def test_f7b_any_other_number_is_refused(route, inserted):
+    _written(route, "1. a\n2. b\n")
+    _refused(route, "insert", "list's structure", text=inserted, tab="t.0",
+             position="end")
+    route.ok("write", text="1. a\n2. b\n" + inserted)
