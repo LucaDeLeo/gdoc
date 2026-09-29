@@ -104,7 +104,8 @@ def _invisible_prefix(content: str) -> int:
         if content.startswith("<!--", i) and (end := content.find("-->", i + 4)) >= 0:
             i = end + 3
         elif (_DASH_RUN_RE.match(char * 3) is None
-              and (unicodedata.category(char)[0] not in "LN" or char in _BLANK_LETTERS)):
+              and (unicodedata.category(char)[0] not in "LN"
+                   or char in _BLANK_LETTERS)):
             i += 1
         else:
             break
