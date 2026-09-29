@@ -86,10 +86,23 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     return metadata, body
 
 
-# Leading text that renders as nothing: whitespace (including blank lines),
-# byte-order marks, zero-width characters and HTML comments.
-_INVISIBLE_PREFIX_RE = re.compile(
-    r"(?:[\s\ufeff\u200b-\u200d\u2060]+|<!--.*?-->)*", re.DOTALL)
+def _invisible_prefix(content: str) -> int:
+    """The length of *content*'s leading text that renders as nothing:
+    whitespace (including blank lines), control and format characters (such
+    as byte-order marks, zero-width and direction marks) and HTML comments."""
+    import unicodedata
+
+    i = 0
+    while i < len(content):
+        if content[i].isspace() or unicodedata.category(content[i]) in ("Cc", "Cf"):
+            i += 1
+        elif content.startswith("<!--", i) and (end := content.find("-->", i + 4)) >= 0:
+            i = end + 3
+        else:
+            break
+    return i
+
+
 # A dash run, counting Unicode dashes, and a `...` closer.
 _DASH_RUN_RE = re.compile(r"[-\u2010-\u2015\u2212\ufe58\ufe63\uff0d]{3,}[ \t]*")
 _BLOCK_CLOSE_RE = re.compile(
@@ -113,19 +126,16 @@ def provenance_header_problem(content: str) -> str | None:
     and a body that opens with a rule, are unaffected.
     """
     content = content.removeprefix("\ufeff")
-    prefix = _INVISIBLE_PREFIX_RE.match(content).end()
-    # Stop the prefix at the start of the opener's line.
-    prefix = max(content.rfind("\n", 0, prefix), content.rfind("\r", 0, prefix)) + 1
+    prefix = _invisible_prefix(content)
     lines = re.split(r"\r\n|\r|\n", content[prefix:])
-    opener = re.sub(r"^[\s\ufeff\u200b-\u200d\u2060]+", "", lines[0])
-    if not _DASH_RUN_RE.fullmatch(opener):
+    if not _DASH_RUN_RE.fullmatch(lines[0]):
         return None
     close = next((k for k in range(1, len(lines))
                   if _BLOCK_CLOSE_RE.fullmatch(lines[k])), None)
     block = lines[1:close] if close is not None else lines[1:]
     if not any(_GDOC_KEY_RE.search(line) for line in block):
         return None
-    if prefix or opener != lines[0]:
+    if prefix:
         return "something comes before its opening `---` line"
     if close is None:
         return "its opening `---` block never closes"
