@@ -1189,6 +1189,11 @@ class TestMergedWithNativeReads:
         "- parent\n  - child\n    ```\n    alpha *beta*\n    ```\n",
         "1. parent\n   1. child\n      ```\n      alpha *beta*\n      ```\n",
         "- a\n  - b\n    - c\n      ```\n      alpha *beta*\n      ```\n",
+        # a blank line inside the item, a lazy continuation, an ancestor item
+        "- parent\n  - child\n\n    ```\n    alpha *beta*\n    ```\n",
+        "- parent\nlazy continuation\n    ```\n    alpha *beta*\n    ```\n",
+        "- a\n  - b\n    - c\n    ```\n    alpha *beta*\n    ```\n",
+        "1. a\n   1. b\n      1. c\n      ```\n      alpha *beta*\n      ```\n",
     ])
     def test_fences_in_nested_list_items_stay_code(self, markdown):
         literal = {"id": "c1", "content": "check",
@@ -1197,6 +1202,15 @@ class TestMergedWithNativeReads:
         prose = {"id": "c2", "content": "check",
                  "quotedFileContent": {"value": "alpha beta"}}
         assert "[quoted text not found" in annotate_markdown(markdown, [prose])
+
+    @pytest.mark.parametrize("markdown", [
+        "```\nalpha\n    ```\n*beta*\n```\n",
+        "- a\n  ```\n  alpha\n      ```\n  *beta*\n  ```\n",
+    ])
+    def test_an_over_indented_fence_does_not_close(self, markdown):
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "*beta*"}}
+        assert "[quoted text found]" in annotate_markdown(markdown, [comment])
 
     def test_top_level_four_space_indent_is_not_a_fence(self):
         comment = {"id": "c1", "content": "check",

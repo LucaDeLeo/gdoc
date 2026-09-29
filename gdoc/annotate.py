@@ -147,38 +147,52 @@ def _visible_text(
     # follow a closing run.)
     fences: dict[int, tuple[int | None, int]] = {}  # line -> (closer, indent)
     fenced: list[tuple[int, int]] = []  # (start, end) of each block
-    opened: tuple[int, str, int, int] | None = None
+    opened: tuple[int, str, int, int, int] | None = None
     items: list[int] = []  # content columns of the open list items
+    after_blank = False
     for line in [0, *(k + 1 for k in newlines)]:
-        m = _FENCE.match(md, line)
+        end = md.find("\n", line)
+        end = n if end < 0 else end
+        m = _FENCE.match(md, line, end)
         if opened is None and not m:
             # Track list items (after any quote markers) for fence indents.
-            body = md[_QUOTED.match(md, line).end():line_end(line)]
-            if body.strip():
-                col = len(body) - len(body.lstrip(" "))
-                marker = _LIST_MARKER.match(body)
+            body = md[_QUOTED.match(md, line, end).end():end]
+            if not body.strip():
+                after_blank = True
+                continue
+            col = len(body) - len(body.lstrip(" "))
+            marker = _LIST_MARKER.match(body)
+            # A less indented block after a blank line ends the deeper
+            # items; without one it is a lazy paragraph continuation.
+            if marker or after_blank:
                 while items and items[-1] > col:
                     items.pop()
-                if marker:
-                    items.append(marker.end())
+            if marker:
+                items.append(marker.end())
+            after_blank = False
             continue
         if not m:
             continue
         spaces, run, rest = m.group(2), m.group(3), m.group(4)
         indent = m.group(1) + spaces
         if opened is None:
-            base = items[-1] if items and items[-1] <= len(spaces) else 0
+            # The deepest item still enclosing the fence sets its base.
+            while items and items[-1] > len(spaces):
+                items.pop()
+            base = items[-1] if items else 0
             if len(spaces) - base > 3:
                 continue  # indented code, not a fence
             if not (run[0] == "`" and "`" in rest):
-                opened = (line, run[0], len(run), len(indent))
+                opened = (line, run[0], len(run), len(indent), base)
         elif (
             run[0] == opened[1] and len(run) >= opened[2]
             and not rest.strip(" \t")
+            and len(spaces) - opened[4] <= 3
         ):
             fences[opened[0]] = (line, opened[3])
             fenced.append((opened[0], line_end(line)))
             opened = None
+            after_blank = False
     if opened is not None:
         fences[opened[0]] = (None, opened[3])
         fenced.append((opened[0], n))
