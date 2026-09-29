@@ -145,9 +145,13 @@ def _borrows(body, j):
     return j == len(body) - 1 or body[j + 1][0] == "t"
 
 
-def _refusal_expected(body, i, j):
+def _refusal_expected(body, i, j, doc=None):
     """The documented refusals: a removal that must borrow a mark from a
-    table or nothing, or from an empty list item of another list state."""
+    table or nothing, or from an empty list item of another list state; and
+    one that deletes list items whose content (item content paragraphs or
+    deeper items) would then join the item above."""
+    if doc is not None and _orphans_item_content(doc, body, i, j):
+        return True
     if not _borrows(body, j):
         return False
     if i == 0 and j == len(body) - 1:
@@ -160,6 +164,24 @@ def _refusal_expected(body, i, j):
         for p in (kept, removed)]
     return not body[i - 1][1] and bool(kept.get("bullet")) and (
         identity[0] != identity[1])
+
+
+def _orphans_item_content(doc, body, i, j):
+    from gdoc.api.docs import _parse_prefix_range_name
+
+    levels = [p["bullet"].get("nestingLevel", 0) for kind, _, _, _, p in body[i:j + 1]
+              if kind == "p" and p.get("bullet")]
+    if not levels:
+        return False
+    for kind, text, start, _, paragraph in body[j + 1:]:
+        if kind == "p" and not text:
+            continue
+        if kind == "p" and paragraph.get("bullet"):
+            return paragraph["bullet"].get("nestingLevel", 0) > min(levels)
+        return any(name and a <= start < b and any(
+            isinstance(step, int) for step in _parse_prefix_range_name(name) or ())
+            for name, a, b in doc.named)
+    return False
 
 
 def _plan_span(body, i, j):
@@ -182,7 +204,7 @@ def test_i1_to_i4_removing_whole_paragraphs(route, seed):
         batches = len(route.service.batches)
         code, output, error = route.call("edit", old_text=old, new_text="")
         context = (markdown, old, output + error)
-        if _refusal_expected(body, i, j):
+        if _refusal_expected(body, i, j, doc):
             assert code != 0 and len(route.service.batches) == batches, context
             assert "unexpected error" not in output + error, context
             continue
@@ -202,7 +224,7 @@ def test_i2_suggestions_on_deleted_characters_refuse(route, seed):
     doc = _written(route, markdown)
     body = _body(doc)
     runs = [(i, j, old) for i, j, old in _runs(rng, body)
-            if not _refusal_expected(body, i, j)]
+            if not _refusal_expected(body, i, j, doc)]
     checked = 0
     for i, j, old in runs[:2]:
         low, high = _plan_span(body, i, j)

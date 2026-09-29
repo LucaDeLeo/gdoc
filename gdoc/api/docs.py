@@ -3585,10 +3585,49 @@ _LIST_RESTRUCTURE = (
     "targeted edits only reword list items in place, each keeping its list, "
     "kind and level, or delete whole items; this edit would change a list's "
     "structure (an item's kind or level, which paragraphs are list items, or "
-    "a quote or list-item container). To move items a level in or out, use "
-    "gdoc nest or gdoc unnest; for other list changes, use write (a later "
-    "edit --block will cover them). Nothing was sent."
+    "a quote or list-item container). Use write for this change (a later "
+    "edit --block will cover it). Nothing was sent."
 )
+_LIST_LEVEL_CHANGE = (
+    "targeted edits only reword list items in place, each keeping its list, "
+    "kind and level; this edit would change a list's structure by moving "
+    "items a level in or out. Use gdoc nest or gdoc unnest on them, or write. "
+    "Nothing was sent."
+)
+
+
+def _level_change_advice(parsed, lines, native, source, tab_id) -> str:
+    """The refusal for items reworded only at another level: it names
+    `gdoc nest`/`gdoc unnest` when their planner accepts these items, and
+    `write` otherwise."""
+    from gdoc.listnest import plan_nesting
+
+    items = sorted((s for s in parsed.styles if s.type == "bullets"),
+                   key=lambda s: s.start)
+    tab = _snapshot_tab(source, tab_id)
+    if (not tab or len(items) != len(lines) or len(lines) != len(native)
+            or not all(p.get("bullet") for p, _, _ in native)):
+        return _LIST_RESTRUCTURE
+    deltas = {item.list_depth - (p.get("bullet") or {}).get("nestingLevel", 0)
+              for item, (p, _, _) in zip(items, native)}
+    lists = tab.get("lists", {})
+    same_kind = all(
+        item.style["bulletPreset"].startswith("NUMBERED")
+        == _list_is_ordered(lists, (p.get("bullet") or {}).get("listId", ""),
+                            (p.get("bullet") or {}).get("nestingLevel", 0))
+        for item, (p, _, _) in zip(items, native))
+    if len(deltas) != 1 or 0 in deltas or not same_kind:
+        return _LIST_RESTRUCTURE
+    content = tab.get("body", {}).get("content", [])
+    index = {e.get("startIndex"): k for k, e in enumerate(content)}
+    first, last = index.get(native[0][1]), index.get(native[-1][1])
+    if first is None or last is None:
+        return _LIST_RESTRUCTURE
+    try:
+        plan_nesting(tab, tab_id or "", first, last, deltas.pop())
+    except GdocError:
+        return _LIST_RESTRUCTURE
+    return _LIST_LEVEL_CHANGE
 
 
 def _refuse_list_restructure(parsed, markdown, native, whole, body, source,
@@ -3605,11 +3644,15 @@ def _refuse_list_restructure(parsed, markdown, native, whole, body, source,
     """
     old_items = any(p.get("bullet") for p, _, _ in native)
     if not markdown:
+        content = body.get("content", [])
+        if _removes_whole_paragraphs(content, match):
+            if old_items and _orphans_item_content(native, content, match,
+                                                   source, tab_id):
+                raise GdocError(_LIST_RESTRUCTURE, exit_code=3)
+            return
         # The joined paragraph keeps the first one's list: a later item
         # would lose its bullet or its place in the list.
-        if (len(native) < 2
-                or _removes_whole_paragraphs(body.get("content", []), match)
-                or not any(p.get("bullet") for p, _, _ in native[1:])):
+        if len(native) < 2 or not any(p.get("bullet") for p, _, _ in native[1:]):
             return
         raise GdocError(_LIST_RESTRUCTURE, exit_code=3)
     new_items = any(s.type == "bullets" for s in parsed.styles)
@@ -3656,7 +3699,29 @@ def _refuse_list_restructure(parsed, markdown, native, whole, body, source,
             "to reword an item inside a quote or list item, write it without "
             "the container's markers (`2. B`, not `> 2. B`); it keeps its "
             "container. " + _LIST_RESTRUCTURE, exit_code=3)
-    raise GdocError(_LIST_RESTRUCTURE, exit_code=3)
+    raise GdocError(_level_change_advice(parsed, lines, native, source, tab_id)
+                    if new_items and whole else _LIST_RESTRUCTURE, exit_code=3)
+
+
+def _orphans_item_content(native, content, match, source, tab_id) -> bool:
+    """Whether deleting whole list items leaves content they own (item
+    content paragraphs, or deeper items) to join the item above them."""
+    levels = [(p.get("bullet") or {}).get("nestingLevel", 0)
+              for p, _, _ in native if p.get("bullet")]
+    after = next((e for e in _flat_paragraphs(content)
+                  if e.get("startIndex", 0) >= match["endIndex"]
+                  and not _is_empty_paragraph(e)), None)
+    if after is None:
+        return False
+    bullet = after["paragraph"].get("bullet")
+    if bullet:
+        return bullet.get("nestingLevel", 0) > min(levels)
+    start = after.get("startIndex", 0)
+    tab = _snapshot_tab(source, tab_id)
+    return any(any(isinstance(step, int) for step in path)
+               and any(a <= start < b for a, b in spans)
+               for _, name, spans in _owned_named_ranges(tab, tab_id)
+               if (path := _parse_prefix_range_name(name)))
 
 
 def _line_kept(line, paragraph, lists) -> bool:
@@ -3708,9 +3773,33 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
                             for _, name, spans in owned))
 
     blocks = [e for e in content if "paragraph" in e or "table" in e]
+
+    def item_content(element):
+        start = element.get("startIndex", 0)
+        return any(any(isinstance(step, int) for step in path)
+                   and any(a <= start < b for a, b in spans)
+                   for _, name, spans in owned
+                   if (path := _parse_prefix_range_name(name)))
+
     if position == "end":
-        beside = next((e for e in reversed(blocks) if not blank(e)), None)
         item = items[0]
+        # The item the new one would follow in the Markdown: past item
+        # content and deeper items, the list's item at the new item's level
+        # or the parent it would nest under.
+        beside = None
+        for element in reversed(blocks):
+            if blank(element):
+                continue
+            if "table" in element:
+                break
+            bullet = element["paragraph"].get("bullet")
+            if bullet:
+                if bullet.get("nestingLevel", 0) > item.list_depth:
+                    continue
+                beside = element
+                break
+            if not item_content(element):
+                break
         between = range(0, item.start)
     else:
         beside = next((e for e in blocks if not blank(e)), None)
@@ -3752,7 +3841,9 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
             joins = shown != 1
         if not joins:
             return
-    if numbered == ordered or (position == "end" and item.list_depth):
+    # Of the same kind, they join it (or nest in it as its sublist); another
+    # kind is its own native list, as in a write.
+    if numbered == ordered:
         raise GdocError("these list items would join the list beside them; "
                         + _LIST_RESTRUCTURE, exit_code=3)
 
@@ -4766,6 +4857,13 @@ def replace_formatted(
         ):
             # Collapsing/expanding cell wording still inherits the native
             # paragraph's custom properties; NORMAL_TEXT would reset them.
+            # That path keeps text styles only, so an image is refused.
+            if _parsed_images(parsed) or any(s.type == "image" for s in parsed.styles):
+                raise GdocError(
+                    "a cell replacement that changes the cell's number of lines "
+                    "cannot include an image; insert the image separately "
+                    "(insert-image), or keep the cell's line count", exit_code=3,
+                )
             paragraph = {"elements": [run for p, _, _ in native
                                       for run in p.get("elements", [])]}
             parts = [(match, (_inline_only(parsed), _inline_baseline(

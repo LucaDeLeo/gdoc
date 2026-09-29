@@ -1121,6 +1121,10 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             last_list_end = offset
 
     i = 0
+    # A fence on a list item's marker line is the item's literal text; its
+    # closing fence is literal too, so it can't open a block that swallows
+    # the rest of the input. (char, length) of that fence, until it closes.
+    marker_fence: tuple[str, int] | None = None
     table_separators: set[int] = set()
     while i < len(lines):
         if i in definition_lines or i in table_separators:
@@ -1138,6 +1142,11 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         # Fenced code block: ``` (or ~~~) ... ```
         fence_indent = len(line) - len(line.lstrip(" "))
         fence_m = _fence_open(line)
+        if fence_m and marker_fence and fence_m.group(1)[0] == marker_fence[0] \
+                and len(fence_m.group(1)) >= marker_fence[1] \
+                and not fence_m.group(2).strip(" \t"):
+            # The closer of a marker-line fence: literal item content.
+            marker_fence, fence_m = None, None
         if fence_m:
             list_levels.clear()
             fence = fence_m.group(1)
@@ -1314,6 +1323,9 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 leading_tabs=_list_level(bullet_m.group(1)),
             )
             note_deep(bullet_m.group(1), item)
+            opener = _fence_open(item)
+            if opener:
+                marker_fence = (opener.group(1)[0], len(opener.group(1)))
             i += 1
             continue
 
@@ -1339,6 +1351,9 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 start_number=int(line.lstrip().split(".", 1)[0]),
             )
             note_deep(numbered_m.group(1), item)
+            opener = _fence_open(item)
+            if opener:
+                marker_fence = (opener.group(1)[0], len(opener.group(1)))
             i += 1
             continue
 

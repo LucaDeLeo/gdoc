@@ -24,7 +24,22 @@ All notable changes to `gdoc` are documented here. This project follows
   in 0.21.x. With `--tab` it annotates that tab's native Markdown, placing
   comments by quoted text; a quote found only in another tab says so.
 - Targeted edits that would move list items a level in or out point to
-  `gdoc nest` and `gdoc unnest`.
+  `gdoc nest` and `gdoc unnest` when those would accept the items, and to
+  `write` otherwise.
+- `write` refuses a file whose leading `---` block names gdoc provenance but
+  can't be read, instead of writing it without its stale-file checks.
+- A file stamped only with `gdoc-version` whose body matches the doc is
+  `already in sync`, as in 0.21.1; the pull hook blocks edits to a stale one
+  and re-pulls a matching one.
+- Deleting a list item whose content or sub-items follow it is refused, since
+  they would join the item above. Inserted items that `write` would join to
+  the list above, past its item content or sub-items, are refused.
+- A fence on a list item's marker line, and its matching closer, stay literal
+  item text instead of opening a code block that swallows later blocks.
+- `edit --cell` refuses an image when the cell's number of lines changes or an
+  encoded line break (`&#10;`) is present, instead of dropping it.
+- `cat --comments` ignores the `<!-- -->` separator between touching runs when
+  matching quotes, and whole-document output reports truncation.
 
 - Default `write` and `push` read Markdown in gdoc's format instead of Google's
   Markdown import, as `write --tab` and `insert` already did: each line is one

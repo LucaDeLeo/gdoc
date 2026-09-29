@@ -1524,11 +1524,13 @@ def cmd_edit(args) -> int:
         # A cell holds inline text only, as its `cat` spelling reads; its
         # `<br>` breaks write back as paragraph breaks.
         from gdoc.mdparse import cell_inline, parse_inline
-        new_text = cell_inline(new_text)
+        typed, new_text = new_text, cell_inline(new_text)
         # The input's own final newline is already removed, so any newline
-        # here is a break, including one at either edge.
-        if "\n" in new_text and any(
-                s.type == "image" for s in parse_inline(new_text)[1]):
+        # here is a break, including one at either edge; an encoded one
+        # (`&#10;`) counts too.
+        decoded, spans = parse_inline(typed)
+        if ("\n" in new_text or "\n" in decoded) and any(
+                s.type == "image" for s in parse_inline(new_text)[1] + spans):
             # A multi-line cell is written paragraph by paragraph, which
             # keeps text styles only; refuse rather than drop the image.
             raise GdocError(
@@ -1750,7 +1752,11 @@ def cmd_nest(args) -> int:
 
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
-    if change_info and change_info.has_conflict:
+    # `cat` records per-tab read coverage rather than a Drive read version,
+    # so a missing version is no sign of a change; the batch below is
+    # pinned to the revision it reads either way.
+    if (change_info and change_info.last_read_version is not None
+            and change_info.has_conflict):
         print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import (
@@ -1999,22 +2005,55 @@ def _stale_recovery(doc_id: str, file_path: str) -> str:
     )
 
 
-def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
-                                force: bool) -> None:
-    """Refuse a file an older gdoc pulled, stamped only with a Drive
-    `gdoc-version`, when the doc has moved past that version.
+def _old_style_matches(doc_id: str, body: str) -> bool:
+    """Whether the doc's Drive Markdown export, which an older gdoc pulled
+    from, already equals *body*."""
+    from gdoc.api.drive import export_doc
 
-    Such a file has no `gdoc-revision`, so a current one is still refused
-    afterwards for lacking revision provenance (pull it again, or --force).
+    try:
+        current = export_doc(doc_id, mime_type="text/markdown")
+    except GdocError:
+        return False
+    return current.strip() == body.strip()
+
+
+def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
+                                force: bool, body: str | None = None) -> bool:
+    """Check a file an older gdoc pulled, stamped only with a Drive
+    `gdoc-version`. Returns True when its body already matches the doc, as
+    0.21.1 did (nothing to write); raises when the doc has moved past that
+    version.
+
+    Such a file has no `gdoc-revision`, so one that neither matches nor is
+    stale is still refused afterwards for lacking revision provenance (pull
+    it again, or --force).
     """
     stamp = _file_stamp(metadata, doc_id)
     if stamp is None or metadata.get("gdoc-revision") or force:
-        return
+        return False
+    if body is not None and _old_style_matches(doc_id, body):
+        return True
     from gdoc.api.drive import get_file_version
 
     current = get_file_version(doc_id).get("version")
     if current is not None and str(current) != stamp:
         raise _stale_file_error(doc_id, file_path or "file", stamp, current)
+    return False
+
+
+def _report_in_sync(args, doc_id: str) -> int:
+    """An old-style file that already matches the doc: nothing to write."""
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(in_sync=True))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print("status\tin_sync")
+    else:
+        print("OK already in sync (doc matches local content; nothing to write)")
+    return 0
 
 
 def cmd_write(args) -> int:
@@ -2040,6 +2079,17 @@ def cmd_write(args) -> int:
     from gdoc.frontmatter import parse_frontmatter
     raw = content
     metadata, content = parse_frontmatter(content)
+    from gdoc.frontmatter import unread_provenance
+
+    if unread_provenance(raw):
+        # Without the header, its revision checks can't run and the header
+        # itself would become text in the tab.
+        raise GdocError(
+            "this file starts with a gdoc frontmatter block that can't be read "
+            "(each line must be `key: value`; links, paths and code are not "
+            "keys). Nothing was sent. Fix or remove that line, or pull the tab "
+            "again.", exit_code=3,
+        )
     pulled_doc = metadata.get("gdoc")
     if pulled_doc and _resolve_doc_id(pulled_doc) != doc_id:
         raise GdocError(
@@ -2048,9 +2098,9 @@ def cmd_write(args) -> int:
             "frontmatter to copy the text into this one.", 3,
         )
 
-    if pulled_doc:
-        _refuse_stale_version_stamp(metadata, doc_id, file_path,
-                                    getattr(args, "force", False))
+    if pulled_doc and _refuse_stale_version_stamp(
+            metadata, doc_id, file_path, getattr(args, "force", False), content):
+        return _report_in_sync(args, doc_id)
 
     if (not pulled_doc and "revision" in metadata and "source" in metadata
             and not getattr(args, "force", False)):
@@ -2552,8 +2602,9 @@ def cmd_push(args) -> int:
         )
 
     doc_id = _resolve_doc_id(metadata["gdoc"])
-    _refuse_stale_version_stamp(metadata, doc_id, file_path,
-                                getattr(args, "force", False))
+    if _refuse_stale_version_stamp(metadata, doc_id, file_path,
+                                   getattr(args, "force", False), body):
+        return _report_in_sync(args, doc_id)
 
     details = {}
     result = _write_native_markdown(
@@ -2653,7 +2704,9 @@ def cmd_sync_hook(args) -> int:
         # A file an older gdoc stamped must not overwrite edits made after
         # it was pulled.
         try:
-            _refuse_stale_version_stamp(metadata, doc_id, file_path, False)
+            if _refuse_stale_version_stamp(metadata, doc_id, file_path, False,
+                                           body):
+                return 0
         except GdocError as e:
             # Exit 2 is how a Claude Code PostToolUse hook shows stderr to
             # the agent; exit 0 would hide that its edit never reached the doc.
@@ -2729,12 +2782,32 @@ def cmd_pull_hook(args) -> int:
 
         from gdoc.frontmatter import body_fingerprint
 
-        if metadata.get("gdoc-body-sha256") != body_fingerprint(body):
+        doc_id = _resolve_doc_id(metadata["gdoc"])
+        stamp = _file_stamp(metadata, doc_id)
+        if stamp is not None and not metadata.get("gdoc-revision"):
+            # A file an older gdoc pulled: re-pull it when it matches the
+            # doc; block an edit to a stale one, as 0.21.1 did.
+            if not _old_style_matches(doc_id, body):
+                from gdoc.api.drive import get_file_version
+
+                current = get_file_version(doc_id).get("version")
+                if current is not None and str(current) != stamp:
+                    print(
+                        f"SYNC: {file_path} is from doc version {stamp}; the doc "
+                        f"is now at version {current}. Left unchanged so local "
+                        "edits are not lost. To recover:\n"
+                        + _stale_recovery(doc_id, file_path),
+                        file=sys.stderr,
+                    )
+                    return 2
+                _hook_notice(data, f"SYNC: pull skipped for {file_path} (local "
+                             "edits not pushed; reconcile with a separate pull)")
+                return 0
+        elif metadata.get("gdoc-body-sha256") != body_fingerprint(body):
             _hook_notice(data, f"SYNC: pull skipped for {file_path} (local edits "
                          "not pushed, or no verified local baseline; reconcile "
                          "with a separate pull)")
             return 0
-        doc_id = _resolve_doc_id(metadata["gdoc"])
 
         from gdoc.api.docs import get_document_with_tabs
 

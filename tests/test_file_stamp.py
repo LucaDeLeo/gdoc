@@ -1,6 +1,8 @@
-"""Stale-file protection: `pull` stamps `gdoc-version`, uploads honour it.
+"""Stale-file protection for files an older gdoc pulled (0.21.1 to 0.22.0),
+stamped only with `gdoc-version`, and the merged rules for files `pull` now
+writes with `gdoc-revision` and a tab fingerprint.
 
-The scenario these tests pin down:
+The scenario the older tests pin down:
 
 1. `gdoc pull DOC draft.md` at version 1; edit draft.md.
 2. A collaborator edits the doc (version 2).
@@ -188,6 +190,9 @@ def _native_pull(monkeypatch, tmp_path):
 
     route = NativeRoute("cli", monkeypatch, tmp_path)
     route.load(NativeDoc(("p", "Alpha.")))
+    # The Drive export an older gdoc pulled from, for old-style files.
+    monkeypatch.setattr("gdoc.api.drive.export_doc",
+                        lambda *a, **k: "Alpha.\n")
     pulled = tmp_path / "d.md"
     assert cli.run_argv(["pull", "synthetic", str(pulled)], check_updates=False) == 0
     return route, pulled
@@ -253,13 +258,46 @@ class TestMergedRules:
         assert _run("write", "synthetic", str(pulled), "--force") == 0
         assert "Beta." in route.ok("cat")
 
-    def test_pull_hook_leaves_an_old_style_file(self, monkeypatch, tmp_path,
-                                                capsys):
+    @pytest.mark.parametrize("command", ["write", "push"])
+    def test_stale_old_style_file_matching_the_doc_is_in_sync(
+            self, monkeypatch, tmp_path, capsys, command):
+        """As 0.21.1 did: nothing to write, exit 0."""
+        route, pulled = _native_pull(monkeypatch, tmp_path)
+        _old_style(pulled, route.service.revision - 1, "Alpha.\n")
+        batches = len(route.service.batches)
+        argv = (["write", "synthetic", str(pulled)] if command == "write"
+                else ["push", str(pulled)])
+        assert _run(*argv) == 0
+        assert "already in sync" in capsys.readouterr().out
+        assert len(route.service.batches) == batches
+
+    def _hook(self, monkeypatch, pulled):
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
+            {"tool_input": {"file_path": str(pulled)}})))
+        return cmd_pull_hook(SimpleNamespace())
+
+    def test_pull_hook_blocks_a_stale_old_style_file(self, monkeypatch, tmp_path,
+                                                     capsys):
         route, pulled = _native_pull(monkeypatch, tmp_path)
         _old_style(pulled, route.service.revision - 1, "Local edit.\n")
         before = pulled.read_text()
-        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
-            {"tool_input": {"file_path": str(pulled)}})))
-        assert cmd_pull_hook(SimpleNamespace()) == 0
+        assert self._hook(monkeypatch, pulled) == 2
+        assert pulled.read_text() == before
+        assert "is from doc version" in capsys.readouterr().err
+
+    def test_pull_hook_restamps_a_matching_old_style_file(self, monkeypatch,
+                                                          tmp_path):
+        route, pulled = _native_pull(monkeypatch, tmp_path)
+        _old_style(pulled, route.service.revision - 1, "Alpha.\n")
+        assert self._hook(monkeypatch, pulled) == 0
+        text = pulled.read_text()
+        assert "gdoc-revision:" in text and "Alpha." in text
+
+    def test_pull_hook_skips_a_current_old_style_file_with_edits(
+            self, monkeypatch, tmp_path, capsys):
+        route, pulled = _native_pull(monkeypatch, tmp_path)
+        _old_style(pulled, route.service.revision, "Local edit.\n")
+        before = pulled.read_text()
+        assert self._hook(monkeypatch, pulled) == 0
         assert pulled.read_text() == before
         assert "pull skipped" in capsys.readouterr().err

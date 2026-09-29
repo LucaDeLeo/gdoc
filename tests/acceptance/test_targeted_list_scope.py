@@ -54,8 +54,13 @@ def _written(route, markdown):
     # inserted items joining the list beside them
     (BASE, "insert", {"text": "4. d\n", "tab": "t.0", "position": "end"},
      "1. a\n2. b\n3. c\n4. d\n"),
-    (BASE, "insert", {"text": "  - d\n", "tab": "t.0", "position": "end"},
-     "1. a\n2. b\n3. c\n  - d\n"),
+    (BASE, "insert", {"text": "  1. d\n", "tab": "t.0", "position": "end"},
+     "1. a\n2. b\n3. c\n  1. d\n"),
+    # past item content and deeper items, to the list at the new item's level
+    ("1. a\n  - b\n", "insert", {"text": "2. X\n", "tab": "t.0", "position": "end"},
+     "1. a\n  - b\n2. X\n"),
+    ("1. a\n\n   para\n", "insert", {"text": "2. X\n", "tab": "t.0", "position": "end"},
+     "1. a\n\n   para\n2. X\n"),
     ("- a\n- b\n", "insert", {"text": "- z\n", "tab": "t.0", "position": "start"},
      "- z\n- a\n- b\n"),
     # a blank line does not end a Markdown list
@@ -148,6 +153,10 @@ def test_a_whole_item_is_deleted(route):
     (BASE, "1. z\n\n", "start", "1. z\n\n1. a\n2. b\n3. c\n"),
     ("1. a\n2. b\n", "1. c\n", "end", "1. a\n2. b\n1. c\n"),
     ("1. a\n2. b\n", "\n1. c\n", "end", "1. a\n2. b\n\n1. c\n"),
+    # a sublist of another kind is its own list, as in a write
+    (BASE, "  - d\n", "end", "1. a\n2. b\n3. c\n  - d\n"),
+    ("1. a\n  - b\n", "- X\n", "end", "1. a\n  - b\n- X\n"),
+    ("- a\n  1. b\n", "1. X\n", "end", "- a\n  1. b\n1. X\n"),
     # a rule ends the list
     ("- a\n", "\n---\n\n- c\n", "end", "- a\n\n---\n\n- c\n"),
 ])

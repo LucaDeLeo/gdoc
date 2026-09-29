@@ -77,7 +77,10 @@ def _find_all(text: str, key: str) -> list[int]:
 
 
 # Chars that never start markup; a run of them is kept in one step.
-_PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
+_PLAIN = re.compile(r"[^\\&`!\[*~_<\n]+")
+# The empty HTML comment the exporter puts between touching emphasis or code
+# runs (`**a**<!-- -->*b*`) shows nothing.
+_RUN_SEPARATOR = "<!-- -->"
 # A fence may sit inside quotes and list items: quote markers, then the
 # indent (up to 3 spaces past the enclosing list item's content column).
 # Code inside such a fence is literal too.
@@ -339,6 +342,8 @@ def _visible_text(
         if m:
             keep(i, m.end())
             i = m.end()
+        elif md.startswith(_RUN_SEPARATOR, i) and i + len(_RUN_SEPARATOR) <= limit:
+            i += len(_RUN_SEPARATOR)
         elif ch == "\\" and i + 1 < limit and md[i + 1] != "\n":
             keep(i + 1, i + 2)
             i += 2

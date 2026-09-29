@@ -608,8 +608,8 @@ structure may read differently:
   gdoc limit, not one of the API gaps below.
 - Open a fenced code block inside a list item on its own line: the item's
   text, a blank line, then the fence indented to the item's content. A fence on
-  the marker line itself (`` 1. ``` ``) is the item's literal text, and a later
-  fence line then opens a code block of its own.
+  the marker line itself (`` 1. ``` ``) is the item's literal text, and so is
+  the first matching fence line after it, so the pair never opens a code block.
 - When emphasis spans close together, mark the inner one with underscores:
   `**bold _italic_**`, not `**bold *italic***`. Spans that open together read
   as CommonMark does (`***bold** then italic*`).
@@ -709,15 +709,21 @@ Google does not expose.
 
 Files pulled by gdoc 0.21.1 to 0.22.0 carry only `gdoc-version: N`, the Drive
 version their content came from, instead of `gdoc-revision`. When the doc has moved
-past that version, `push`, `write DOC FILE` (CLI and MCP) and the sync hook refuse
+past that version, `push`, `write DOC FILE` (and MCP `write` of such text) and the sync hook refuse
 such a file with exit 3: nothing is sent and the file is left untouched. The sync hook
 exits 2 instead, which Claude Code shows to the agent. The refusal prints recovery
 steps: pull a fresh copy to a new path (`gdoc pull DOC draft.latest.md`), see what
 changed with `gdoc diff DOC draft.md`, and carry your edits into the new file; `--force`
-discards the newer changes in the doc. At the current version such a file still has
-no revision provenance, so it needs a fresh pull or `--force`, as above. `pull` now
-records `gdoc-revision` and the tab fingerprint rather than `gdoc-version`, and a file
-with `gdoc-revision` ignores any `gdoc-version`.
+discards the newer changes in the doc. A file whose body already matches the doc's
+Markdown export is reported `already in sync` and nothing is sent. Otherwise, at the
+current version such a file still has no revision provenance, so it needs a fresh
+pull or `--force`, as above. The pull hook blocks an edit to a stale file (exit 2,
+with the same recovery steps), re-pulls one that matches the doc, and leaves a
+current file with local edits in place. `pull` now records `gdoc-revision` and the
+tab fingerprint rather than `gdoc-version`, and a file with `gdoc-revision` ignores
+any `gdoc-version`. A file whose leading `---` block names gdoc provenance but can't
+be read (a line that isn't `key: value`, such as a bare URL) is refused by `write`
+with nothing sent; fix or remove that line.
 
 ## Spreadsheets
 
@@ -829,7 +835,7 @@ gdoc cat --all-tabs DOC
 # ...content...
 ```
 
-`--comments` annotates one tab: the first, or the one `--tab` selects. Drive does not record which tab a comment's quoted text is in, so a comment whose text appears only in another tab is listed as `anchor in another tab`, and one whose text appears in several tabs as `anchor ambiguous`. `--all-tabs` cannot be combined with `--comments`. Both tab flags work with `--json` and `--plain`.
+Without `--tab`, `--comments` annotates the whole document's Markdown export and places comments from their live anchors. With `--tab`, it annotates that tab's Markdown and places comments where their quoted text occurs. Drive does not record which tab a quote is in, so a comment whose quote appears only in another tab is listed as `quoted text in another tab`, and one whose quote appears in several tabs as `quoted text ambiguous`. `--all-tabs` cannot be combined with `--comments`. Both tab flags work with `--json` and `--plain`.
 
 Tab Markdown export escapes literal syntax: a plain `1. Hello` paragraph now
 prints as `1\. Hello`, and `_`, `[`, and `<` gain backslashes. It also emits
@@ -919,14 +925,20 @@ makes the rest:
 - an added or removed item (including one split by an encoded line break,
   `&#10;`), or a paragraph turned into an item or back;
 - an item moved into or out of a quote or list item;
+- deleting an item whose content paragraphs or sub-items follow it, which would
+  then belong to the item above (delete them together);
 - inserted items that would join the list beside them.
 
-A later `edit --block` will make these as targeted edits.
+A later `edit --block` will make these as targeted edits. A refused level change
+names `gdoc nest` only when it would accept those items; it does not yet move items
+of a quoted list, of a loose list (blank lines between items), or an item that
+follows another item's content paragraphs.
 
 A table cell (`edit --cell`) holds inline text only: an item or
 heading marker there stays literal, as the cell's `cat` spelling reads, and
-`<br>` writes a line break. A cell replacement with a line break cannot include an
-image; insert the image separately.
+`<br>` writes a line break. A cell replacement with a line break (from `<br>`, a
+newline or `&#10;`), or one that changes the cell's number of lines, cannot include
+an image; insert the image separately.
 
 ### Deleting across paragraphs
 

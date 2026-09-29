@@ -86,6 +86,22 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     return metadata, body
 
 
+_PROVENANCE_LINE_RE = re.compile(
+    r"^(?:gdoc|gdoc-revision|gdoc-version|gdoc-tab-sha256)[ \t]*:", re.MULTILINE)
+
+
+def unread_provenance(content: str) -> bool:
+    """Whether *content* opens with a metadata block that names gdoc
+    provenance (a `gdoc`, `gdoc-revision`, `gdoc-version` or
+    `gdoc-tab-sha256` line) but that parse_frontmatter does not read. Such a
+    file's stale-file checks cannot run, and its header would be written as
+    body text."""
+    content = content.removeprefix("\ufeff")
+    match = _FRONTMATTER_RE.match(content)
+    return bool(match and _PROVENANCE_LINE_RE.search(match.group(1))
+                and not parse_frontmatter(content)[0])
+
+
 def add_frontmatter(body: str, metadata: dict) -> str:
     """Prepend YAML frontmatter to body.
 
@@ -224,27 +240,3 @@ def read_local_text(path) -> str:
     """Read source bytes as UTF-8 without normalizing frontmatter newlines."""
     with open(path, encoding="utf-8", newline="") as stream:
         return stream.read()
-
-
-def set_frontmatter_value(content: str, key: str, value: str) -> str:
-    """Set one key in content's frontmatter, leaving everything else as is.
-
-    Replaces every `key:` line in the leading frontmatter block, or
-    appends one when the key is absent. The body and the other keys are
-    kept byte-for-byte. Raises ValueError when content has no
-    frontmatter block.
-    """
-    match = _FRONTMATTER_RE.match(content)
-    if not match:
-        raise ValueError("no frontmatter block")
-    value = " ".join(str(value).splitlines())
-    lines = match.group(1).split("\n")
-    found = False
-    for i, line in enumerate(lines):
-        name, sep, _ = line.partition(":")
-        if sep and name.strip() == key:
-            lines[i] = f"{key}: {value}"
-            found = True
-    if not found:
-        lines.append(f"{key}: {value}")
-    return "---\n" + "\n".join(lines) + "\n---\n" + content[match.end():]
