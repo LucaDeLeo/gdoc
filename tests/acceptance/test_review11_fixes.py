@@ -113,3 +113,33 @@ def test_r3_11_nest_after_cat_does_not_warn(route):
             code = cli.run_argv(["nest", "synthetic", "b"], check_updates=False)
         output, error = "", err.getvalue()
     assert code == 0 and "doc changed since last read" not in output + error
+
+
+# Codex review of the round-3 fixes (F6-01 to F6-04).
+
+def test_f6_01_a_marker_fence_does_not_reach_past_its_item(route):
+    markdown = "1. ```\n\nOutside.\n\n```\ncode\n```\n\n## Next\n"
+    _written(route, markdown)
+    got = _read(route)
+    assert got.endswith("```\ncode\n```\n\n## Next\n")
+
+
+def test_f6_02_quoted_provenance_keys_are_recognised(route):
+    _written(route, "Alpha.\n")
+    text = ('---\n"gdoc": synthetic\n"gdoc-version": 1\nhttps://example.com/ref\n'
+            "---\nChanged.\n")
+    _refused(route, "write", "can't be read", text=text)
+
+
+def test_f6_03_a_child_deleted_before_its_parents_content_is_removed(route):
+    markdown = "1. parent\n  - child\n\n   parent detail\n2. next\n"
+    _written(route, markdown)
+    route.ok("edit", old_text="child\n", new_text="")
+    got = _read(route)
+    assert "child" not in got and "parent detail" in got
+
+
+def test_f6_04_an_empty_block_before_a_gdoc_line_is_body(route):
+    _written(route, "Alpha.\n")
+    route.ok("write", text="---\n---\ngdoc: example\n---\nBody.\n")
+    assert "gdoc: example" in _read(route)

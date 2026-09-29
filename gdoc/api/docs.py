@@ -3706,8 +3706,21 @@ def _refuse_list_restructure(parsed, markdown, native, whole, body, source,
 def _orphans_item_content(native, content, match, source, tab_id) -> bool:
     """Whether deleting whole list items leaves content they own (item
     content paragraphs, or deeper items) to join the item above them."""
-    levels = [(p.get("bullet") or {}).get("nestingLevel", 0)
-              for p, _, _ in native if p.get("bullet")]
+    tab = _snapshot_tab(source, tab_id)
+    lists = (tab or {}).get("lists", {})
+    levels, columns = [], []
+    for p, start, _ in native:
+        bullet = p.get("bullet")
+        if not bullet:
+            continue
+        level = bullet.get("nestingLevel", 0)
+        levels.append(level)
+        # gdoc writes a nested marker two spaces per level; its content
+        # starts after the marker (`- `, or `1. ` with its number).
+        marker = (len(str(_list_number(content, start, lists))) + 2
+                  if _list_is_ordered(lists, bullet.get("listId", ""), level)
+                  else 2)
+        columns.append(2 * level + marker)
     after = next((e for e in _flat_paragraphs(content)
                   if e.get("startIndex", 0) >= match["endIndex"]
                   and not _is_empty_paragraph(e)), None)
@@ -3717,8 +3730,9 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
     if bullet:
         return bullet.get("nestingLevel", 0) > min(levels)
     start = after.get("startIndex", 0)
-    tab = _snapshot_tab(source, tab_id)
-    return any(any(isinstance(step, int) for step in path)
+    # Item content records its column; it belongs to a deleted item only
+    # at that item's content column or deeper, not to an ancestor's.
+    return any(sum(step for step in path if isinstance(step, int)) >= min(columns)
                and any(a <= start < b for a, b in spans)
                for _, name, spans in _owned_named_ranges(tab, tab_id)
                if (path := _parse_prefix_range_name(name)))

@@ -1124,13 +1124,18 @@ def parse_markdown(text: str) -> ParsedMarkdown:
     # A fence on a list item's marker line is the item's literal text; its
     # closing fence is literal too, so it can't open a block that swallows
     # the rest of the input. (char, length) of that fence, until it closes.
-    marker_fence: tuple[str, int] | None = None
+    marker_fence: tuple[str, int, tuple] | None = None
     table_separators: set[int] = set()
     while i < len(lines):
         if i in definition_lines or i in table_separators:
             i += 1
             continue
         path, line = container_path(lines[i])
+        if marker_fence and line.strip(" \t") and not (
+                len(path) > len(marker_fence[2])
+                and path[:len(marker_fence[2])] == marker_fence[2]):
+            # Outside the item's content, a marker-line fence has no closer.
+            marker_fence = None
         if not line.strip(" \t") and path and path[-1] != "q":
             # A blank line inside list item content is a blank paragraph; only
             # its quote markers are containers (see get_tab_text).
@@ -1325,7 +1330,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             note_deep(bullet_m.group(1), item)
             opener = _fence_open(item)
             if opener:
-                marker_fence = (opener.group(1)[0], len(opener.group(1)))
+                marker_fence = (opener.group(1)[0], len(opener.group(1)), path)
             i += 1
             continue
 
@@ -1353,7 +1358,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             note_deep(numbered_m.group(1), item)
             opener = _fence_open(item)
             if opener:
-                marker_fence = (opener.group(1)[0], len(opener.group(1)))
+                marker_fence = (opener.group(1)[0], len(opener.group(1)), path)
             i += 1
             continue
 

@@ -87,7 +87,8 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
 
 
 _PROVENANCE_LINE_RE = re.compile(
-    r"^(?:gdoc|gdoc-revision|gdoc-version|gdoc-tab-sha256)[ \t]*:", re.MULTILINE)
+    r"""^(["']?)(?:gdoc|gdoc-revision|gdoc-version|gdoc-tab-sha256)\1[ \t]*:""",
+    re.MULTILINE)
 
 
 def unread_provenance(content: str) -> bool:
@@ -97,6 +98,8 @@ def unread_provenance(content: str) -> bool:
     file's stale-file checks cannot run, and its header would be written as
     body text."""
     content = content.removeprefix("\ufeff")
+    if _EMPTY_FRONTMATTER_RE.match(content):
+        return False  # An empty block: what follows is body, as parsed.
     match = _FRONTMATTER_RE.match(content)
     return bool(match and _PROVENANCE_LINE_RE.search(match.group(1))
                 and not parse_frontmatter(content)[0])

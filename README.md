@@ -609,7 +609,8 @@ structure may read differently:
 - Open a fenced code block inside a list item on its own line: the item's
   text, a blank line, then the fence indented to the item's content. A fence on
   the marker line itself (`` 1. ``` ``) is the item's literal text, and so is
-  the first matching fence line after it, so the pair never opens a code block.
+  the first matching fence line in that item's content, so the pair never opens
+  a code block. Outside the item, fences read as usual.
 - When emphasis spans close together, mark the inner one with underscores:
   `**bold _italic_**`, not `**bold *italic***`. Spans that open together read
   as CommonMark does (`***bold** then italic*`).
