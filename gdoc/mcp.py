@@ -64,6 +64,8 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     # writes
     "edit": False,
     "suggest": False,
+    "nest": False,
+    "unnest": False,
     "insert": False,
     "insert-image": False,
     "replace-image": False,

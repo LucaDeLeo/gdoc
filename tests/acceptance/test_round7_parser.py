@@ -177,7 +177,7 @@ def test_comment_fallback_never_decodes_nested_code(markdown):
     for anchor in ("a*bc", "a*bc d"):
         comment = {"id": "c1", "content": "check",
                    "quotedFileContent": {"value": anchor}}
-        assert "anchor deleted" in annotate_markdown(markdown, [comment])
+        assert "quoted text not found" in annotate_markdown(markdown, [comment])
     comment = {"id": "c2", "content": "check",
                "quotedFileContent": {"value": "a\\*bc **d**"}}
-    assert "anchor deleted" not in annotate_markdown(markdown, [comment])
+    assert "quoted text not found" not in annotate_markdown(markdown, [comment])

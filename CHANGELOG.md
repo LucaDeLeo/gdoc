@@ -4,7 +4,7 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.23.0] — 2026-09-29
 
 ### Added
 
@@ -15,6 +15,16 @@ All notable changes to `gdoc` are documented here. This project follows
   explicit sibling-tab collapse. Supported Markdown needs no loss override.
 
 ### Changed
+
+- Pulled files record the native `gdoc-revision` and a tab fingerprint instead
+  of 0.21.1's Drive `gdoc-version`. A file stamped only with `gdoc-version` is
+  still refused while stale, with 0.21.1's recovery steps, and otherwise needs a
+  fresh pull or `--force`.
+- `cat --comments` of the whole document places comments from live anchors, as
+  in 0.21.x. With `--tab` it annotates that tab's native Markdown, placing
+  comments by quoted text; a quote found only in another tab says so.
+- Targeted edits that would move list items a level in or out point to
+  `gdoc nest` and `gdoc unnest`.
 
 - Default `write` and `push` read Markdown in gdoc's format instead of Google's
   Markdown import, as `write --tab` and `insert` already did: each line is one
@@ -171,6 +181,70 @@ All notable changes to `gdoc` are documented here. This project follows
   lookup. Markdown `export` and `pull` name the tab they read. Sync hooks
   report skips to the agent, identical local replacements leave the file in
   place, and comment anchors no longer match through escapes in code.
+
+
+## [0.22.0] — 2026-09-28
+
+### Added
+- **List nesting: `gdoc nest DOC TEXT` and `gdoc unnest DOC TEXT`.** Move a
+  list item, or a range of items (`--to TEXT`), with their sub-items by
+  `--levels N` (default 1), like Tab and Shift-Tab in Google Docs. The items
+  are rebuilt in place in one `requiredRevisionId`-pinned batch so they rejoin
+  their own native list: the list ID, a UI-restarted start number, text and
+  marker styles, paragraph spacing, heading IDs, comment anchors and
+  bookmarks are kept, and nothing else in the tab is rewritten. The result
+  is read back, with the moved items found by their text so edits elsewhere
+  in the tab do not matter; an item not at its planned level, list, marker,
+  paragraph style or indent, a blank line whose indent changed, or a
+  changed paragraph just before or after the moved items is reported as a
+  warning with `"verified": false` (the change is saved, exit 0).
+  Refused before any write (exit 3):
+  - ambiguous or missing text, non-list or in-table targets;
+  - moves that would rebuild a list's first item, skip a level, or unnest past
+    the top level;
+  - checkbox and custom-glyph lists, and numbered presets other than
+    `1. a. i.` (for example `1) a) i)`);
+  - items that start with a tab, carry a hand-set indent, hold pending
+    suggestions, anchor a floating image or drawing, or overlap a named range;
+  - items whose bullet or number has its own formatting (anything but the
+    bold, font and size of a fully formatted item), or a style covering the
+    whole item but not its marker;
+  - moves that would merge, split or re-home lists (ranges across lists, items
+    right after another list's item, an unnest that would sweep in a deeper
+    item of another list, sub-items that are a separate list).
+
+  A 5xx or dropped connection on the write says the outcome is unknown, a
+  stale-revision error is checked against the document before it says
+  "re-run", and failures after a saved write are warnings, so a caller never
+  retries a change that was applied. Honors `--tab` and `--account`; exposed
+  over MCP as `gdoc_nest` and `gdoc_unnest` (write tools).
+
+## [0.21.1] — 2026-09-28
+
+### Fixed
+- **A stale pulled file can no longer overwrite newer edits.** Conflict
+  detection compared the doc against the version this machine last read,
+  and a pulled file recorded no version of its own. So `gdoc pull DOC
+  draft.md` at version 1, a collaborator's edit (version 2), and any
+  `gdoc cat DOC` on this machine let `gdoc push draft.md` delete the
+  collaborator's edit. `pull` now stamps the file with `gdoc-version:
+  <Drive version>` (read before the export, so the stamp is never newer
+  than the content; `pull --revision` files get no stamp), and `push`,
+  `write DOC FILE` (when the file's `gdoc:` names DOC), the sync hook,
+  and MCP `write` use that stamp as the baseline: a mismatch refuses with
+  exit 3 unless `--force` or the doc already equals the file. The refusal
+  sends nothing, leaves the file untouched, and names a recovery that
+  pulls into a new path (`gdoc pull DOC draft.latest.md`, then `gdoc diff`),
+  since re-pulling the refused file would overwrite its edits. The sync
+  hook reports this refusal with exit 2 so Claude Code shows it to the
+  agent; its other skips stay silent. After an
+  upload the stamp advances to the version in the upload response; a tab
+  write, which reports no version of its own, leaves the stamp and warns.
+  The advance writes a sibling file and swaps it in, so a failed write
+  never truncates the source. The pull hook stamps what it pulls; when a
+  stamped file is behind the doc it refreshes the file only if the file
+  already matches the doc, and otherwise leaves it untouched and exits 2
+  with the same recovery steps. Unstamped files keep the old rule.
 
 ## [0.21.0] — 2026-08-26
 

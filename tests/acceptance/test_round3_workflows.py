@@ -282,14 +282,16 @@ def test_comment_annotation_is_scoped_to_the_selected_tab(scenario, monkeypatch)
          "quotedFileContent": {"value": "prose"}},
     ]
     monkeypatch.setattr("gdoc.api.comments.list_comments", lambda *a, **kw: comments)
-    first = scenario.ok("cat", comments=True)
-    assert "[#c1 open] [anchor in another tab]" in first
-    assert '[#c2 open] Bo on "First tab"' in first
-    assert "[#c3 open] [anchor deleted]" in first
-    assert "[#c4 open] [anchor ambiguous]" in first
+    # With --tab, comments are placed by quote in that tab's native Markdown
+    # (the whole-document view uses live anchors instead).
+    first = scenario.ok("cat", comments=True, tab="One")
+    assert "[#c1 open] [quoted text in another tab]" in first
+    assert '[#c2 open] [quoted text found] Bo on "First tab"' in first
+    assert "[#c3 open] [quoted text not found (edited or detached)]" in first
+    assert "[#c4 open] [quoted text ambiguous]" in first
     second = scenario.ok("cat", comments=True, tab="Two")
-    assert '[#c1 open] Ann on "Second tab  prose"' in second
-    assert "[#c2 open] [anchor in another tab]" in second
+    assert '[#c1 open] [quoted text found] Ann on "Second tab' in second
+    assert "[#c2 open] [quoted text in another tab]" in second
 
 
 def test_file_diff_compares_the_same_tab_markdown_as_cat_and_pull(

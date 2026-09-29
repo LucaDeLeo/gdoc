@@ -410,9 +410,11 @@ def test_t15_unicode_space_fallback_visible_in_read(scenario, monkeypatch):
         "replies": [],
     }
     monkeypatch.setattr("gdoc.api.comments.list_comments", lambda *a, **kw: [comment])
-    output = scenario.ok("cat", comments=True)
+    # One tab's native Markdown, where comments are placed by quote.
+    output = scenario.ok("cat", comments=True, tab=scenario.document["tabs"][0]
+                         ["tabProperties"]["tabId"])
     assert "Check manifest" in output
-    assert "[anchor deleted]" not in output
+    assert "[quoted text not found" not in output
     assert "[UNANCHORED]" not in output
 
 

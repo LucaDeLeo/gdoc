@@ -1,6 +1,7 @@
 """CLI parser, subcommand dispatch, and exception handler."""
 
 import argparse
+import io
 import os
 import sys
 from dataclasses import dataclass, field
@@ -258,6 +259,123 @@ def cmd_revisions(args) -> int:
     return 0
 
 
+def _export_with_anchors(
+    doc_id: str, read_comments,
+) -> tuple[list[dict], str, dict | None, str]:
+    """The comments, markdown export and live comment anchors from one version.
+
+    Live anchors show whether each comment is still attached; Drive's
+    quoted text alone can't (it never changes after an edit). Anchors are
+    placed by counting occurrences of their text, so they must come from
+    the version that was exported: the Drive file version (visible to any
+    reader) is checked before and after. The comments are listed again
+    after the export, so one added, removed or resolved during the read
+    is caught too (Drive's file version doesn't reliably track comments).
+    If either changed, the whole read is repeated once. If it keeps
+    changing, or can't be confirmed, comments keep their attached/detached
+    status but lose their line.
+
+    *read_comments* lists the comments; it is called at least twice.
+
+    Returns (comments, markdown, anchors, source). *source* says where
+    comment labels come from, and is reported as ``anchors`` in ``--json``:
+
+    - ``live``: live anchors, with line placement.
+    - ``live_no_locations``: live anchors for attached/detached status,
+      but no line placement (the version or the comments kept changing,
+      or the version couldn't be read). That status is from the last
+      anchor read, just before the export, so it may miss an edit made
+      between the two. Comments without a live anchor are unplaced too.
+    - ``quoted_text``: anchors couldn't be read (anchors None); the caller
+      places comments by quoted text. If the comments kept changing,
+      their quotes are dropped so none is placed.
+    - ``none``: there are no comments, nothing else was read.
+    """
+    from google.auth.exceptions import TransportError
+    from httplib2 import HttpLib2Error
+
+    from gdoc.api.docs import get_comment_anchors
+    from gdoc.api.drive import export_doc, get_file_version
+    from gdoc.util import AuthError, PreviewUnavailableError
+
+    def version():
+        try:
+            return get_file_version(doc_id).get("version")
+        except AuthError:
+            raise
+        except (GdocError, HttpLib2Error, TransportError, OSError):
+            return None
+
+    def ids(comments):
+        return sorted(str(c.get("id")) for c in comments)
+
+    comments_changed = "comments changed while the document was being read"
+    problem = "the document changed while it was being read"
+    comments = read_comments()
+    anchors: dict | None = {}
+    preview_error = None
+    for _attempt in range(2):
+        if not comments:
+            # No comments, nothing to place: skip the anchor read.
+            markdown = export_doc(doc_id, mime_type="text/markdown")
+            latest = read_comments()
+            if not latest:
+                return latest, markdown, {}, "none"
+            comments, problem = latest, comments_changed
+            continue
+        before = version()
+        try:
+            anchors = get_comment_anchors(doc_id)
+        except PreviewUnavailableError as e:
+            # Warned about once the result is known: a retry may recover.
+            preview_error, anchors = e, None
+        markdown = export_doc(doc_id, mime_type="text/markdown")
+        after = version() if anchors is not None else None
+        latest = read_comments()
+        if ids(latest) != ids(comments):
+            comments, problem = latest, comments_changed
+            continue
+        comments = latest
+        if anchors is None:
+            print(
+                f"WARN: live comment anchors unavailable ({preview_error}); "
+                "comments are placed where their quoted text occurs, which "
+                "does not show whether they are still attached",
+                file=sys.stderr,
+            )
+            return comments, markdown, None, "quoted_text"
+        if before is None or after is None:
+            problem = "could not confirm the document's version"
+            break
+        if before == after:
+            return comments, markdown, anchors, "live"
+        problem = "the document changed while it was being read"
+    # Unsettled: list every comment without a location. A comment with no
+    # live anchor would otherwise be placed by a quote from another read.
+    unplaced = [
+        c if anchors is not None and c.get("id") in anchors
+        else {k: v for k, v in c.items() if k != "quotedFileContent"}
+        for c in comments
+    ]
+    if anchors is None:
+        print(
+            f"WARN: live comment anchors unavailable ({preview_error}), and "
+            f"{problem}; comments are listed without a location",
+            file=sys.stderr,
+        )
+        return unplaced, markdown, None, "quoted_text"
+    print(
+        f"WARN: {problem}; comments are listed without a location, and "
+        "their attached/detached status comes from a read just before the "
+        "text shown, so an edit in between may not be reflected",
+        file=sys.stderr,
+    )
+    return unplaced, markdown, {
+        cid: None if live is None else {**live, "occurrences": 0}
+        for cid, live in anchors.items()
+    }, "live_no_locations"
+
+
 def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -339,6 +457,43 @@ def cmd_cat(args) -> int:
         )
         return 0
 
+    if getattr(args, "comments", False) and not tab:
+        # Annotated view of the whole document: line-numbered content with
+        # comments placed from live anchors, read from one Drive version.
+        from gdoc.api.comments import list_comments
+        include_resolved = getattr(args, "all", False)
+        comments, markdown, anchors, source = _export_with_anchors(
+            doc_id,
+            lambda: list_comments(
+                doc_id,
+                include_resolved=include_resolved,
+                include_anchor=True,
+            ),
+        )
+
+        if no_images:
+            from gdoc.mdimport import strip_images
+            markdown = strip_images(markdown)
+
+        from gdoc.annotate import annotate_markdown
+        annotated = annotate_markdown(
+            markdown, comments, show_resolved=include_resolved, anchors=anchors,
+        )
+        annotated = _truncate_bytes(annotated, max_bytes)
+
+        from gdoc.format import format_json, get_output_mode
+        if get_output_mode(args) == "json":
+            print(format_json(content=annotated, anchors=source))
+        else:
+            print(annotated, end="")
+
+        # An annotated view is not a complete read: it sets no baseline.
+        from gdoc.state import update_state_after_command
+        update_state_after_command(
+            doc_id, change_info, command="cat-content", quiet=quiet,
+        )
+        return 0
+
     from gdoc.api.docs import (
         flatten_tabs,
         get_document_with_tabs,
@@ -375,6 +530,8 @@ def cmd_cat(args) -> int:
         comments = list_comments(
             doc_id, include_resolved=include_resolved, include_anchor=True,
         )
+        # One tab's native Markdown: live anchors are counted over the whole
+        # document's export, so comments are placed by their quoted text.
         others = [get_tab_text(other, markdown=True) for other in tabs
                   if other["id"] != selected[0]["id"]]
         content = annotate_markdown(content, comments, show_resolved=include_resolved,
@@ -1563,6 +1720,292 @@ def _comparable_markdown(text: str) -> str:
     return text.replace("\r\n", "\n").removesuffix("\n")
 
 
+def cmd_nest(args) -> int:
+    """Handler for `gdoc nest` and `gdoc unnest`.
+
+    Moves one list item, or a contiguous run of items (`--to`), with their
+    sub-items by `--levels` levels. The items are rebuilt in place in one
+    revision-pinned batch, so they stay in their native list (same list
+    ID, numbering and comment anchors) and nothing else in the tab is
+    rewritten. See gdoc/listnest.py for the method and what is refused.
+    """
+    doc_id = _resolve_doc_id(args.doc)
+    if args.levels < 1:
+        raise GdocError("--levels must be at least 1", exit_code=3)
+    delta = args.levels if args.command == "nest" else -args.levels
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+    if change_info and change_info.has_conflict:
+        print("WARN: doc changed since last read", file=sys.stderr)
+
+    from gdoc.api.docs import (
+        StaleRevisionError,
+        batch_update_pinned,
+        get_document_with_tabs,
+        resolve_raw_tab,
+    )
+    from gdoc.listnest import (
+        check_result,
+        is_unchanged,
+        locate_item,
+        plan_nesting,
+        verify,
+    )
+
+    def reread_tab() -> dict | None:
+        """This tab in a fresh read, found by ID only (never by title)."""
+        def walk(ts):
+            for t in ts:
+                yield t
+                yield from walk(t.get("childTabs", []))
+        for t in walk(get_document_with_tabs(doc_id).get("tabs", [])):
+            if t.get("tabProperties", {}).get("tabId") == tab_id:
+                return t
+        return None
+
+    doc = get_document_with_tabs(doc_id)
+    revision_id = doc.get("revisionId", "")
+    if not revision_id:
+        # Never write unpinned: the plan's indexes are only valid at the
+        # revision they were read from. Docs returns a revision ID only to
+        # users who can edit.
+        raise GdocError(
+            "the document read returned no revision ID, so it cannot be "
+            "edited safely (nesting needs edit access)",
+            exit_code=3,
+        )
+    tabs = doc.get("tabs", [])
+    tab_name = getattr(args, "tab", None)
+    if tab_name:
+        raw_tab = resolve_raw_tab(tabs, tab_name)
+        if raw_tab is None:
+            raise GdocError(f"tab not found: {tab_name}", exit_code=3)
+    elif tabs:
+        raw_tab = tabs[0]
+    else:
+        raise GdocError(f"document has no tabs: {doc_id}")
+    tab_id = raw_tab.get("tabProperties", {}).get("tabId", "")
+    document_tab = raw_tab.get("documentTab", {})
+    body = document_tab.get("body", {})
+
+    first = locate_item(body, args.text)
+    last = locate_item(body, args.to) if args.to is not None else first
+    plan = plan_nesting(document_tab, tab_id, first, last, delta)
+
+    try:
+        batch_update_pinned(doc_id, plan.requests, revision_id)
+    except StaleRevisionError:
+        # The HTTP client resends a POST once when the connection drops
+        # without a reply; if Google applied the first attempt, the resend
+        # fails the pin. Check before telling the caller to re-run, which
+        # would move the items again.
+        try:
+            again = reread_tab()
+        except Exception as e:  # noqa: BLE001 — the write may have landed
+            raise GdocError(
+                "the write reported a changed document and the document "
+                f"could not be re-read to check ({e}). The change may "
+                "already be applied: inspect the list before retrying."
+            )
+        again_tab = (again or {}).get("documentTab", {})
+        if again is not None and is_unchanged(again_tab, plan):
+            raise  # provably not applied: re-running is safe
+        if again is None or check_result(again_tab, plan):
+            # Neither the planned result nor the original: someone else
+            # edited, and our write may or may not be part of it.
+            raise GdocError(
+                "the write reported a changed document, and the list is "
+                "neither as planned nor as it was. The change may already "
+                "be applied: inspect the list before retrying."
+            )
+        resent = (
+            "the write reported a changed document, but the list is "
+            "already exactly as planned (a retried request); not re-applied"
+        )
+    else:
+        resent = None
+
+    # From here the change is saved. A failed follow-up read must not be
+    # reported as a failed write: a caller that retried would move the
+    # items twice. So read errors become warnings.
+    verb = "nested" if delta > 0 else "unnested"
+    warnings = [resent] if resent else []
+
+    # The rebuild relies on how createParagraphBullets assigns levels and
+    # joins lists, so read the tab back and say so if it did not land. The
+    # change is saved either way, so an unexpected or unverifiable result
+    # is a warning (exit 0), never a failure a caller would retry.
+    verified = False
+    try:
+        after = reread_tab()
+    except Exception as e:  # noqa: BLE001 — post-mutation, see above
+        warnings.append(
+            f"{verb} and saved, but the result could not be read back to "
+            f"verify it: {e}. Check the list before changing it again"
+        )
+    else:
+        if after is None:
+            found, problems = False, ["the tab is gone"]
+        else:
+            found, problems = verify(after.get("documentTab", {}), plan)
+        verified = not problems
+        if problems and not found:
+            warnings.append(
+                f"{verb} and saved, but the result could not be verified: "
+                + "; ".join(problems)
+                + ". Check the list before changing it again"
+            )
+        elif problems:
+            warnings.append(
+                f"{verb} and saved, but the list is not as planned: "
+                + "; ".join(problems)
+                + ". Check the list before changing it again; re-running "
+                "would move the items again"
+            )
+
+    from gdoc.api.drive import get_file_version
+
+    command_version = None
+    try:
+        command_version = get_file_version(doc_id).get("version")
+    except Exception as e:  # noqa: BLE001 — post-mutation, see above
+        warnings.append(
+            f"{verb} but the document version could not be refreshed: {e}; "
+            "awareness state not updated"
+        )
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        lines = [format_json(moved=plan.moved, levels=delta, verified=verified)]
+    elif mode == "plain":
+        lines = [
+            f"id\t{doc_id}", "status\tupdated",
+            f"verified\t{'yes' if verified else 'no'}",
+        ]
+    else:
+        items = "item" if plan.moved == 1 else "items"
+        lvls = "level" if args.levels == 1 else "levels"
+        lines = [f"OK {verb} {plan.moved} {items} by {args.levels} {lvls}"]
+    _print_after_write(lines, [f"WARN: {w}" for w in warnings])
+    if command_version is None:
+        return 0
+
+    from gdoc.state import update_state_after_command
+
+    try:
+        update_state_after_command(
+            doc_id, change_info, command=args.command,
+            quiet=quiet, command_version=command_version,
+        )
+    except Exception as e:  # noqa: BLE001 — post-mutation, see above
+        _print_after_write(
+            [], [f"WARN: {verb} but awareness state was not persisted: {e}"],
+        )
+    return 0
+
+
+def _print_after_write(out: list[str], err: list[str]) -> None:
+    """Print after a saved non-idempotent write without risking the exit code.
+
+    A closed pipe (`gdoc nest ... | head -0`) or a full disk behind a
+    redirect would otherwise raise here, or at interpreter exit, turning a
+    saved change into a failure a caller might retry. Output that cannot
+    be delivered is dropped instead.
+    """
+    for stream, lines in ((sys.stdout, out), (sys.stderr, err)):
+        try:
+            for line in lines:
+                print(line, file=stream)
+            stream.flush()
+        except (OSError, ValueError):
+            try:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull, stream.fileno())
+            except (OSError, ValueError, io.UnsupportedOperation):
+                pass
+
+
+# Frontmatter key `pull` stamps with the Drive `version` the file's
+# content came from. Uploads from a stamped file use it as the baseline.
+_STAMP_KEY = "gdoc-version"
+
+
+def _file_stamp(metadata: dict, doc_id: str) -> str | None:
+    """The version stamp a pulled file carries for doc_id, if any.
+
+    A stamp describes the doc named by the same frontmatter's `gdoc:` key,
+    so it is ignored when that key is missing or names another doc.
+    """
+    stamp = metadata.get(_STAMP_KEY)
+    target = metadata.get("gdoc")
+    if not stamp or not target:
+        return None
+    try:
+        if _resolve_doc_id(target) != doc_id:
+            return None
+    except GdocError:
+        return None
+    return stamp
+
+
+def _stale_file_error(
+    doc_id: str, file_path: str, stamp: str, current_version,
+) -> GdocError:
+    """Refusal for a stamped file whose doc has moved on.
+
+    The recovery pulls into a new path: `gdoc pull` overwrites its target,
+    so re-pulling the refused file would destroy the edits just protected.
+    """
+    return GdocError(
+        f"{file_path} is from doc version {stamp}; the doc is now at "
+        f"version {current_version}. Nothing was sent and {file_path} "
+        "is unchanged. To recover:\n"
+        + _stale_recovery(doc_id, file_path)
+        + "\n  4. Use --force only to discard the newer changes in the doc.",
+        exit_code=3,
+    )
+
+
+def _stale_recovery(doc_id: str, file_path: str) -> str:
+    """Recovery steps for a stale stamped file, via a new path."""
+    import os
+    import shlex
+
+    root, ext = os.path.splitext(file_path)
+    latest = f"{root}.latest{ext or '.md'}"
+    f, new = shlex.quote(file_path), shlex.quote(latest)
+    return (
+        f"  1. gdoc pull {doc_id} {new}   (fresh copy at the current version)\n"
+        f"  2. gdoc diff {doc_id} {f}   (what changed in the doc)\n"
+        f"  3. Carry your edits into {new} and push it, "
+        "or apply small changes with 'gdoc edit'."
+    )
+
+
+def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
+                                force: bool) -> None:
+    """Refuse a file an older gdoc pulled, stamped only with a Drive
+    `gdoc-version`, when the doc has moved past that version.
+
+    Such a file has no `gdoc-revision`, so a current one is still refused
+    afterwards for lacking revision provenance (pull it again, or --force).
+    """
+    stamp = _file_stamp(metadata, doc_id)
+    if stamp is None or metadata.get("gdoc-revision") or force:
+        return
+    from gdoc.api.drive import get_file_version
+
+    current = get_file_version(doc_id).get("version")
+    if current is not None and str(current) != stamp:
+        raise _stale_file_error(doc_id, file_path or "file", stamp, current)
+
+
 def cmd_write(args) -> int:
     """Handler for `gdoc write`."""
     import os
@@ -1593,6 +2036,10 @@ def cmd_write(args) -> int:
             "Use `gdoc push` to update its own document, or remove its "
             "frontmatter to copy the text into this one.", 3,
         )
+
+    if pulled_doc:
+        _refuse_stale_version_stamp(metadata, doc_id, file_path,
+                                    getattr(args, "force", False))
 
     if (not pulled_doc and "revision" in metadata and "source" in metadata
             and not getattr(args, "force", False)):
@@ -2094,6 +2541,8 @@ def cmd_push(args) -> int:
         )
 
     doc_id = _resolve_doc_id(metadata["gdoc"])
+    _refuse_stale_version_stamp(metadata, doc_id, file_path,
+                                getattr(args, "force", False))
 
     details = {}
     result = _write_native_markdown(
@@ -2188,6 +2637,17 @@ def cmd_sync_hook(args) -> int:
             return 0
 
         doc_id = _resolve_doc_id(metadata["gdoc"])
+        title = metadata.get("title", doc_id)
+
+        # A file an older gdoc stamped must not overwrite edits made after
+        # it was pulled.
+        try:
+            _refuse_stale_version_stamp(metadata, doc_id, file_path, False)
+        except GdocError as e:
+            # Exit 2 is how a Claude Code PostToolUse hook shows stderr to
+            # the agent; exit 0 would hide that its edit never reached the doc.
+            print(f'SYNC: not pushed to "{title}": {e}', file=sys.stderr)
+            return 2
 
         from contextlib import redirect_stdout
         from types import SimpleNamespace
@@ -4636,7 +5096,8 @@ def build_parser() -> GdocArgumentParser:
                "block markers are literal. A complete paragraph can explicitly "
                "change its heading or quote style. List items are only reworded "
                "in place, each keeping its list, kind, level and number, or "
-               "deleted; other list changes need write. Use --cell for whole-cell "
+               "deleted; use nest/unnest for level changes and write for other "
+               "list changes. Use --cell for whole-cell "
                "replacement; a cell holds text, not a nested table. Plain prose "
                "replacing cell list items "
                "removes their bullets and sets NORMAL_TEXT; an empty replacement "
@@ -4730,6 +5191,39 @@ def build_parser() -> GdocArgumentParser:
         "require --all for multiple matches"
     )
     suggest_p.set_defaults(func=cmd_suggest)
+
+    # nest / unnest
+    for name, verb in (("nest", "Nest"), ("unnest", "Unnest")):
+        nest_p = sub.add_parser(
+            name, parents=[output_parent],
+            help=f"{verb} list items by one or more levels",
+            epilog="Targets the list item containing TEXT (unique, "
+                   "case-insensitive, as in `edit`); --to extends the "
+                   "change to a later item of the same list. Sub-items "
+                   "move with their items. The items stay in their "
+                   "native list, so numbering, a restarted start number "
+                   "and comments are kept. Works on default numbered "
+                   "(1. a. i.) and bullet lists; refuses checkbox or "
+                   "custom-glyph lists, items in tables, and moves that "
+                   "would merge or split lists.",
+        )
+        nest_p.add_argument("doc", help="Document ID or URL")
+        nest_p.add_argument("text", help="Text of the (first) list item to move")
+        nest_p.add_argument(
+            "--to", help="Text of the last list item of a range to move",
+        )
+        nest_p.add_argument(
+            "--levels", type=int, default=1,
+            help="How many levels to move (default: 1)",
+        )
+        nest_p.add_argument(
+            "--tab", help="Target a specific tab by title or ID "
+                          "(default: the first tab)",
+        )
+        nest_p.add_argument(
+            "--quiet", action="store_true", help="Skip pre-flight checks",
+        )
+        nest_p.set_defaults(func=cmd_nest)
 
     # diff
     diff_p = sub.add_parser(

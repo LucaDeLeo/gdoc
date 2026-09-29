@@ -375,7 +375,8 @@ class NativeDoc:
                     {"glyphType": t, "glyphFormat": f"%{k}."}
                     for k, t in enumerate(["DECIMAL", "ALPHA", "ROMAN"] * 3)],
                 "BULLET_DISC_CIRCLE_SQUARE": [
-                    {"glyphSymbol": c} for c in "●○■" * 3],
+                    {"glyphSymbol": c, "glyphFormat": f"%{k}"}
+                    for k, c in enumerate("●○■" * 3)],
             }.get(preset, [{"glyphType": "DECIMAL", "glyphFormat": f"%{k})"}
                            if preset.startswith("NUMBERED") else {"glyphSymbol": "❖"}
                            for k in range(9)])

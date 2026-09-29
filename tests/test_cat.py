@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 import pytest
 
@@ -36,6 +36,7 @@ def _make_args(**overrides):
 def _doc_mime(doc_mime):
     """Keep spreadsheet detection on the Docs path for this module."""
 
+
 @pytest.fixture(autouse=True)
 def native_snapshot(mocker):
     return mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
@@ -44,6 +45,14 @@ def native_snapshot(mocker):
             "documentTab": {"body": {"content": []}},
         }],
     })
+
+
+@pytest.fixture(autouse=True)
+def _no_live_anchors(monkeypatch):
+    """Keep `cat --comments` off the network: no comment has a live anchor."""
+    monkeypatch.setattr(
+        "gdoc.api.docs.get_comment_anchors", lambda doc_id: {},
+    )
 
 
 class TestCatMarkdown:
@@ -114,9 +123,10 @@ class TestCatComments:
         args = _make_args(comments=True, quiet=True)
         rc = cmd_cat(args)
         assert rc == 0
-        mock_list.assert_called_once_with(
+        # Listed before and after the export, to catch a change between.
+        assert mock_list.call_args_list == [call(
             "abc123", include_resolved=False, include_anchor=True,
-        )
+        )] * 2
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -130,16 +140,17 @@ class TestCatComments:
         args = _make_args(comments=True, quiet=True, **{"all": True})
         rc = cmd_cat(args)
         assert rc == 0
-        mock_list.assert_called_once_with(
+        # Listed before and after the export, to catch a change between.
+        assert mock_list.call_args_list == [call(
             "abc123", include_resolved=True, include_anchor=True,
-        )
+        )] * 2
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.list_comments")
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.docs.get_tab_text", return_value="Some content here\n")
+    @patch("gdoc.api.drive.export_doc", return_value="Some content here\n")
     def test_cat_comments_output_annotated(
         self, mock_export, _svc, mock_list, _csvc, _pf, _update, capsys
     ):
@@ -480,7 +491,7 @@ class TestCatNoImages:
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.list_comments", return_value=[])
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.docs.get_tab_text", side_effect=_render_images)
+    @patch("gdoc.api.drive.export_doc", return_value=_MD_WITH_IMAGE)
     def test_no_images_with_comments(
         self, _export, _svc, _list, _csvc, _pf, _update, capsys,
     ):

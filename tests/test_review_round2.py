@@ -200,7 +200,7 @@ def test_comment_anchors_decode_prose_escapes_but_not_code(markdown, found):
 
     comment = {"id": "c1", "content": "check", "quotedFileContent": {"value": "a*bc"}}
     result = annotate_markdown(markdown, [comment])
-    assert ("anchor deleted" not in result) is found
+    assert ("quoted text not found" not in result) is found
 
 
 def test_unchanged_publication_keeps_the_inode_and_makes_no_copy(tmp_path):
