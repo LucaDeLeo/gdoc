@@ -1043,7 +1043,10 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 if level > leading_tabs:
                     del list_levels[level]
             previous = list_levels.get(leading_tabs)
-            number = previous[1] + 1 if previous and previous[0] == bullet_preset else 1
+            # A list counts from its first number, so `3.` then `4.` after a
+            # blank line continues it.
+            number = (previous[1] + 1 if previous and previous[0] == bullet_preset
+                      else start_number)
             list_levels[leading_tabs] = (bullet_preset, number)
         para_start = offset
         if container:

@@ -528,6 +528,7 @@ def test_cell_paragraphs_become_one_list(route):
 @pytest.mark.parametrize("base,old,new", [
     ("1. a\n2. b\n3. c\n4. d\n", "b\nc", "2. B\n1. C"),
     ("1. a\n2. b\n3. c\n", "a\nb", "- A\n1. B"),
+    ("1. a\n2. b\n3. c\n", "b", "- x\n1. y"),
 ])
 def test_restarts_that_renumber_later_items_are_refused(route, base, old, new):
     """Round 6 (Codex R6-2)."""
@@ -538,3 +539,28 @@ def test_restarts_that_renumber_later_items_are_refused(route, base, old, new):
     code, output, error = route.call("edit", old_text=old, new_text=new)
     assert code != 0 and "renumbering" in output + error
     assert len(route.service.batches) == batches
+
+
+def test_other_numbered_styles_are_not_the_default_preset():
+    """Round 6 (Claude R6-1): A. B. and roman lists are not gdoc's preset."""
+    from gdoc.api.docs import _default_preset
+
+    for glyph in ("UPPER_ALPHA", "UPPER_ROMAN", "ALPHA"):
+        lists = {"L": {"listProperties": {"nestingLevels": [
+            {"glyphType": glyph, "glyphFormat": f"%{k}."} for k in range(9)]}}}
+        assert not _default_preset(lists, "L")
+
+
+@pytest.mark.parametrize("base,command,arguments,expected", [
+    ("1. a\n2. b\n", "insert", {"text": "3. c\n\n4. d\n", "tab": "t.0",
+                                "position": "end"}, "1. a\n2. b\n3. c\n\n4. d\n"),
+    ("1. a\n2. b\n3. c\n", "edit", {"old_text": "b", "new_text": "2. b\n\n3. x"},
+     "1. a\n2. b\n\n3. x\n4. c\n"),
+])
+def test_continuation_across_a_blank_line(route, base, command, arguments, expected):
+    """Round 6 (Claude R6-2): `3.` then `4.` after a blank line continues."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    route.ok(command, **arguments)
+    assert _read(route) == expected

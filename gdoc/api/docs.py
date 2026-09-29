@@ -3573,13 +3573,14 @@ def _default_preset(lists: dict, list_id: str) -> bool:
     if not levels:
         return False
     numbered = levels[0].get("glyphType") == "DECIMAL"
+    if not numbered and levels[0].get("glyphSymbol") != "●":
+        return False
     for k, level in enumerate(levels):
         if numbered:
-            if (level.get("glyphType", ["DECIMAL", "ALPHA", "ROMAN"][k % 3])
-                    != ["DECIMAL", "ALPHA", "ROMAN"][k % 3]
+            if (level.get("glyphType") != ["DECIMAL", "ALPHA", "ROMAN"][k % 3]
                     or level.get("glyphFormat", f"%{k}.") != f"%{k}."):
                 return False
-        elif level.get("glyphSymbol", "●○■"[k % 3]) != "●○■"[k % 3]:
+        elif level.get("glyphSymbol") != "●○■"[k % 3]:
             return False
     return True
 
@@ -3622,8 +3623,9 @@ def _continued_numbers(parsed, above: int, level: int = 0) -> dict:
     a list whose item above, at that level, shows ``above``."""
     top = sorted((s for s in parsed.styles if s.type == "bullets"
                   and s.list_depth == level), key=lambda s: s.start)
-    # Only the first top-level list continues; a restart ends it.
-    top = [s for s in top if top and s.list_group == top[0].list_group]
+    # Only the first list continues; a restart or another block ends it.
+    top = [s for s in top if top and s.list_group == top[0].list_group
+           and s.list_block == top[0].list_block]
     return {item.start: above + k for k, item in enumerate(top, 1)}
 
 
