@@ -86,35 +86,60 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     return metadata, body
 
 
-def provenance_header_problem(content: str) -> str | None:
-    """Why *content*'s opening metadata block can't be trusted, or None.
+# Leading text that renders as nothing: whitespace (including blank lines),
+# byte-order marks, zero-width characters and HTML comments.
+_INVISIBLE_PREFIX_RE = re.compile(
+    r"(?:[\s\ufeff\u200b-\u200d\u2060]+|<!--.*?-->)*", re.DOTALL)
+# A dash run, counting Unicode dashes, and a `...` closer.
+_DASH_RUN_RE = re.compile(r"[-\u2010-\u2015\u2212\ufe58\ufe63\uff0d]{3,}[ \t]*")
+_BLOCK_CLOSE_RE = re.compile(
+    r"(?:[-\u2010-\u2015\u2212\ufe58\ufe63\uff0d]{3,}|\.\.\.)[ \t]*")
+# A gdoc key (`gdoc`, `gdoc-*`) in any case: starting a line, indented,
+# quoted, commented out or as a list item, or inside a flow mapping.
+_GDOC_KEY_RE = re.compile(
+    r"(?:^[\s#-]*|[{,]\s*)[\"']?gdoc(?:-[^\s:\uff1a\"',}]*)?[\"']?\s*[:\uff1a]",
+    re.IGNORECASE)
 
-    A block that mentions `gdoc` anywhere is taken to carry gdoc
-    provenance, so it must be read exactly: it closes with a `---` line,
-    every line in it is a `key: value` line, and it names the document
-    (`gdoc: ID`). Otherwise its stale-file checks could not run and the
-    header would be written as text. Blocks without `gdoc` are unaffected.
+
+def provenance_header_problem(content: str) -> str | None:
+    """Why *content*'s pulled-file header can't be trusted, or None.
+
+    A pulled-file header is an opening `---` block, after anything that
+    renders as nothing, with a line naming a `gdoc` or `gdoc-*` key. It must
+    be read exactly: it starts the file (after at most one byte-order mark),
+    opens and closes with `---` lines, holds only `key: value` lines, and
+    names the document (`gdoc: ID`). Otherwise its stale-file checks could
+    not run and the header would be written as text. Other front matter,
+    and a body that opens with a rule, are unaffected.
     """
-    # Any line ending, and any run of three or more dashes, counts here:
-    # the block is recognised broadly, then must be read exactly.
-    lines = re.split(r"\r\n|\r|\n", content.removeprefix("\ufeff"))
-    if not re.fullmatch(r"-{3,}[ \t]*", lines[0]):
+    content = content.removeprefix("\ufeff")
+    prefix = _INVISIBLE_PREFIX_RE.match(content).end()
+    # Stop the prefix at the start of the opener's line.
+    prefix = max(content.rfind("\n", 0, prefix), content.rfind("\r", 0, prefix)) + 1
+    lines = re.split(r"\r\n|\r|\n", content[prefix:])
+    opener = re.sub(r"^[\s\ufeff\u200b-\u200d\u2060]+", "", lines[0])
+    if not _DASH_RUN_RE.fullmatch(opener):
         return None
     close = next((k for k in range(1, len(lines))
-                  if re.fullmatch(r"(?:-{3,}|\.\.\.)[ \t]*", lines[k])), None)
+                  if _BLOCK_CLOSE_RE.fullmatch(lines[k])), None)
     block = lines[1:close] if close is not None else lines[1:]
-    if not any("gdoc" in line for line in block):
+    if not any(_GDOC_KEY_RE.search(line) for line in block):
         return None
+    if prefix or opener != lines[0]:
+        return "something comes before its opening `---` line"
     if close is None:
         return "its opening `---` block never closes"
     if lines[0] != "---" or lines[close] != "---" or "\n" not in content:
         return "its opening block must open and close with `---` lines"
+    first = next((line for line in block if not line.startswith("#")), "")
+    if not first.strip():
+        return "its opening block starts with a blank line, so it is read as text"
     for line in block:
         if line.strip() and not _KEY_LINE_RE.match(line):
             return ("its opening block has a line that isn't `key: value`: "
-                    f"{line.strip()!r}")
+                    f"{line.rstrip()!r}")
     if not parse_frontmatter(content)[0].get("gdoc"):
-        return "its opening block doesn't name the document (`gdoc: ID`)"
+        return "its opening block doesn't name the document with a `gdoc: ID` line"
     return None
 
 

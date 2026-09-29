@@ -607,9 +607,11 @@ structure may read differently:
   the ninth level and `write`/`insert` warn with the affected lines. This is a
   gdoc limit, not one of the API gaps below.
 - Open a fenced code block inside a list item on its own line: the item's
-  text, a blank line, then the fence indented to the item's content. Input with
-  a fence on the marker line itself (`` 1. ``` ``, `` - ~~~ ``, `` - > ``` ``)
-  is refused with nothing sent.
+  text, a blank line, then the fence indented to the item's content, and close
+  it at that indentation before the item ends (in a quote, before the quote
+  ends). Input with a fence on a marker line (`` 1. ``` ``, `` 1) ``` ``,
+  `` + ~~~ ``, `` - > ``` ``), or one its item or quote never closes, is refused
+  with nothing sent.
 - When emphasis spans close together, mark the inner one with underscores:
   `**bold _italic_**`, not `**bold *italic***`. Spans that open together read
   as CommonMark does (`***bold** then italic*`).
@@ -723,12 +725,15 @@ pull or `--force`, as above. The pull hook blocks an edit to a stale file (exit 
 with the same recovery steps), re-pulls one that matches the doc, and leaves a
 current file with local edits in place. `pull` now records `gdoc-revision` and the
 tab fingerprint rather than `gdoc-version`, and a file with `gdoc-revision` ignores
-any `gdoc-version`. When a file starts with a `---` block that mentions `gdoc`
-anywhere, the block must be read exactly as gdoc frontmatter: closed by a `---`
-line, every line `key: value`, naming the document with `gdoc: ID`. Otherwise
+any `gdoc-version`. A pulled-file header is an opening `---` block with a
+`gdoc` or `gdoc-*` key (in any case, indented or not), after anything that shows
+as nothing: blank lines, spaces, byte-order marks, zero-width characters or HTML
+comments. It must be read exactly: first in the file, opened and closed by `---`
+lines, every line `key: value`, naming the document with `gdoc: ID`. Otherwise
 `write` (CLI and MCP) and `push` refuse it with exit 3 and nothing sent, and the
-sync hook reports the refusal (exit 2); an unclosed block that mentions `gdoc` is
-refused too. Fix the header, or remove it to copy the text.
+sync hook reports the refusal (exit 2); the message names the cause. Fix the
+header, or remove it to copy the text. Other front matter, and a body that opens
+with a rule, are unaffected.
 
 ## Spreadsheets
 
@@ -931,12 +936,13 @@ makes the rest:
   `&#10;`), or a paragraph turned into an item or back;
 - an item moved into or out of a quote or list item;
 - deleting an item when anything but a blank line, top-level text or the next
-  item at its level follows it (content paragraphs, sub-items, a quote, a rule,
+  item at its level (as `cat` shows it; in a table cell, the rest of the cell)
+  follows it (content paragraphs, sub-items, a quote, a rule,
   an empty heading, code or a table), since that may be the item's and would
   join the item above; delete it together with the item;
 - inserted items that would, or may, join a list above them: beside it, below
-  its deeper items, inside another item's content, or, for a numbered item
-  asking for a number other than 1, after any numbered list of its level.
+  its deeper items, inside another item's content, or, for a numbered list
+  starting at a number other than 1, when the tab has a numbered list.
 
 A later `edit --block` will make these as targeted edits. A refused level change
 names `gdoc nest` only when it would accept those items and they have no

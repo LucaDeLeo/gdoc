@@ -240,7 +240,7 @@ def _code_spans(text: str) -> list[re.Match]:
 
 # A fence opener after a list marker (and any further markers or quote
 # markers on the same line): `1. ```, `- ~~~`, `- > ````.
-_MARKER_LINE_FENCE_RE = re.compile(r"(?:(?:[-*+]|\d+[.)])[ \t]+|>[ \t]?)*")
+_MARKER_LINE_FENCE_RE = re.compile(r"(?:[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+|>))*")
 
 
 def _refuse_marker_line_fence(item: str, line_index: int) -> None:
@@ -1173,21 +1173,33 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             code_start = offset
             opened_at = i
 
-            def closes(later):
-                found = _FENCE_CLOSE_RE.match(
-                    _strip_path(later, path, lenient=True).lstrip(" "))
-                return bool(found and found.group(1)[0] == fence_char
-                            and len(found.group(1)) >= len(fence))
+            def closed() -> bool:
+                """Whether a closing fence follows while the item or quote
+                that holds the opener is still open."""
+                for later in lines[i + 1:]:
+                    # A blank line without its quote marker ends the quote.
+                    inner = (None if "q" in path and not later.strip()
+                             else _strip_path(later, path))
+                    if inner is None:
+                        return False
+                    inner = inner[min(fence_indent,
+                                      len(inner) - len(inner.lstrip(" "))):]
+                    found = _FENCE_CLOSE_RE.match(inner)
+                    if found and found.group(1)[0] == fence_char and len(
+                            found.group(1)) >= len(fence):
+                        return True
+                return False
 
-            if path and not any(closes(later) for later in lines[i + 1:]):
+            if path and not closed():
                 # Inside a list item or quote, an unclosed fence would take in
                 # every later block; refuse instead.
                 from gdoc.util import GdocError
 
                 raise GdocError(
                     f"line {opened_at + 1} opens a code block inside a list item "
-                    "or quote that is never closed. Close it with a matching "
-                    "fence line. Nothing was sent.", exit_code=3,
+                    "or quote that is never closed before the item or quote "
+                    "ends. Close it with a matching fence line at the same "
+                    "indentation. Nothing was sent.", exit_code=3,
                 )
             i += 1
             while i < len(lines):
@@ -1394,6 +1406,8 @@ def parse_markdown(text: str) -> ParsedMarkdown:
 
         # Normal paragraph line. Explicit NORMAL_TEXT so inserted paragraphs
         # don't inherit the style of the paragraph at the insertion point.
+        # `1)` is not a list marker here, but other readers take it as one.
+        _refuse_marker_line_fence(line, i)
         inline_text, inline_styles = _parse_inline(line, references)
         emit_paragraph(
             inline_text, inline_styles, {"namedStyleType": "NORMAL_TEXT"},

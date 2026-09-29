@@ -26,19 +26,23 @@ All notable changes to `gdoc` are documented here. This project follows
 - Targeted edits that would move list items a level in or out point to
   `gdoc nest` and `gdoc unnest` when those would accept the items, and to
   `write` otherwise.
-- A file whose opening `---` block mentions `gdoc` must be read exactly as gdoc
-  frontmatter; otherwise `write`, `push` and MCP `write` refuse it, and the sync
-  hook reports the refusal, instead of writing it without stale-file checks.
+- A pulled-file header (an opening `---` block with a `gdoc` or `gdoc-*` key,
+  even after blank lines, spaces, byte-order marks or zero-width characters)
+  must be read exactly as gdoc frontmatter; otherwise `write`, `push` and MCP
+  `write` refuse it, and the sync hook reports the refusal, instead of writing
+  it without stale-file checks. Other front matter is unaffected.
 - A file stamped only with `gdoc-version` whose body matches the doc is
   `already in sync`, as in 0.21.1; the pull hook blocks edits to a stale one
   and re-pulls a matching one.
 - Deleting a list item is refused when anything but a blank line, top-level
   text or the next item at its level follows it, since that content may be the
   item's and would join the item above. Inserted items that `write` would or
-  may join to a list above them are refused, including a numbered item asking
-  for a number other than 1 when the tab has a numbered list of its level.
-- Input with a code fence on a list item's marker line (`` 1. ``` ``) is
-  refused; the message gives the supported spelling.
+  may join to a list above them are refused, including a numbered list starting
+  at a number other than 1 when the tab has a numbered list.
+- Input with a code fence on a list item's marker line (`` 1. ``` ``,
+  `` 1) ``` ``) is refused, and so is a fence in a list item or quote that is
+  not closed before the item or quote ends; the messages give the supported
+  spelling.
 - `edit --cell` refuses an image when the cell's number of lines changes or an
   encoded line break (`&#10;`) is present, instead of dropping it.
 - `cat --comments` ignores the `<!-- -->` separator between touching runs when

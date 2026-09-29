@@ -626,6 +626,20 @@ def _indent_nesting_level(native_level: int, indent: dict, definitions: list) ->
     return max(native_level, closest)
 
 
+def _shown_level(paragraph: dict, lists: dict) -> int:
+    """The nesting `cat` shows for a list paragraph."""
+    bullet = paragraph["bullet"]
+    native_level = bullet.get("nestingLevel", 0)
+    definitions = lists.get(bullet.get("listId", ""), {}).get(
+        "listProperties", {},
+    ).get("nestingLevels", [])
+    inherited = definitions[native_level] if native_level < len(definitions) else {}
+    indent_start = paragraph.get("paragraphStyle", {}).get(
+        "indentStart", inherited.get("indentStart", {}),
+    )
+    return _indent_nesting_level(native_level, indent_start, definitions)
+
+
 def _paragraph_markdown(
     paragraph: dict, lists: dict, ordered_counters: dict
 ) -> str:
@@ -667,15 +681,7 @@ def _paragraph_markdown(
     bullet = paragraph.get("bullet")
     if bullet is not None:
         native_level = bullet.get("nestingLevel", 0)
-        level = native_level
-        definitions = lists.get(bullet.get("listId", ""), {}).get(
-            "listProperties", {},
-        ).get("nestingLevels", [])
-        inherited = definitions[native_level] if native_level < len(definitions) else {}
-        indent_start = paragraph.get("paragraphStyle", {}).get(
-            "indentStart", inherited.get("indentStart", {}),
-        )
-        level = _indent_nesting_level(native_level, indent_start, definitions)
+        level = _shown_level(paragraph, lists)
         list_id = bullet.get("listId", "")
         # List IDs carry continuity even across intervening paragraphs/lists.
         for key in list(ordered_counters):
@@ -3734,10 +3740,22 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
         return frozenset(path for name in covering(start)
                          if (path := _parse_prefix_range_name(name)))
 
-    items = [(p["bullet"].get("nestingLevel", 0), start)
+    lists = (tab or {}).get("lists", {})
+    # Levels as `cat` shows them.
+    items = [(_shown_level(p, lists), start)
              for p, start, _ in native if p.get("bullet")]
     level = min(item_level for item_level, _ in items)
     home = containers(min(start for _, start in items))
+    # In a table cell, what follows is the rest of the cell.
+    at = match["startIndex"]
+    while table := next((e["table"] for e in content if "table" in e
+                         and e.get("startIndex", 0) <= at < e.get("endIndex", 0)),
+                        None):
+        content = next((cell.get("content", [])
+                        for row in table.get("tableRows", [])
+                        for cell in row.get("tableCells", [])
+                        if cell.get("startIndex", 0) <= at
+                        < cell.get("endIndex", 0)), [])
     blank = False
     for element in content:
         start = element.get("startIndex", 0)
@@ -3756,7 +3774,7 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
             blank = True  # a plain blank line
             continue
         if bullet:
-            return not (bullet.get("nestingLevel", 0) <= level
+            return not (_shown_level(paragraph, lists) <= level
                         and containers(start) == home)
         # Top-level text after a blank line ends the list; without one it
         # could read as the item's continuation. Anything else may be the
@@ -3853,7 +3871,8 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
         item = items[-1]
         between = range(item.end, len(parsed.plain_text))
     # Only blank lines may separate the new item from the tab's list.
-    touching = (not parsed.plain_text[between.start:between.stop].strip("\n")
+    # A whitespace-only line is blank in a write.
+    touching = (not parsed.plain_text[between.start:between.stop].strip()
                 and not any(t.plain_text_offset in between for t in parsed.tables)
                 and not any(c.start < between.stop and c.end > between.start
                             for c in parsed.code_blocks)
@@ -3861,14 +3880,10 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
                             and (s.style.get("namedStyleType", "NORMAL_TEXT")
                                  != "NORMAL_TEXT" or "borderBottom" in s.style)
                             for s in parsed.styles))
-    # A numbered item asking for a number other than 1 continues an earlier
-    # numbered list of its level in a write, even across other blocks.
-    # Any numbered item of the inserted text with another number than 1 may
-    # continue a numbered list of the tab in a write; which one is not
-    # worked out.
-    starts = [line for line in markdown.split("\n")
-              if (number := re.match(r"[\s>]*(\d+)[.)](?:[ \t]|$)", line))
-              and int(number[1]) != 1]
+    # A numbered item that starts a list at a number other than 1 may
+    # continue a numbered list of the tab in a write, even across other
+    # blocks; which one is not worked out.
+    starts = parsed.non_default_list_starts
     numbered_join = position == "end" and bool(starts) and any(
         _list_is_ordered(tab.get("lists", {}), b.get("listId", ""),
                          b.get("nestingLevel", 0))
