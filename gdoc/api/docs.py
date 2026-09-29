@@ -1,8 +1,11 @@
 """Google Docs API v1 wrapper functions with error translation."""
 
 import re
+from array import array
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import pairwise
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -12,6 +15,7 @@ from gdoc.util import (
     AuthError,
     GdocError,
     PreviewUnavailableError,
+    find_overlapping,
     fold_typography,
 )
 
@@ -877,6 +881,23 @@ def get_document(doc_id: str) -> dict:
 def _utf16_len(ch: str) -> int:
     """Width of one code point in UTF-16 code units (Docs API indices)."""
     return 2 if ord(ch) > 0xFFFF else 1
+
+
+def _text_runs(content: list[dict]):
+    """(start index, text) of every text run, tables included, in order."""
+    for element in content:
+        paragraph = element.get("paragraph")
+        if paragraph is not None:
+            for pe in paragraph.get("elements", []):
+                text_run = pe.get("textRun")
+                if text_run is not None:
+                    yield pe.get("startIndex", 0), text_run.get("content", "")
+            continue
+        table = element.get("table")
+        if table is not None:
+            for row in table.get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    yield from _text_runs(cell.get("content", []))
 
 
 def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
@@ -2354,6 +2375,44 @@ def _token_identity(account: str | None) -> tuple[str | None, str | None]:
     return (data.get("client_id"), data.get("refresh_token"))
 
 
+def _comments_view_get(doc_id: str, fields: str | None = None):
+    """Raw ``documents.get`` with the preview-only ``commentsViewMode``.
+
+    Sent as a raw authorized GET because the bundled discovery document
+    predates the field and the generated client refuses unknown parameters.
+    Google requires the two companions ("Comments view mode may only be
+    specified if tabs content is also requested" / "... if inline
+    suggestions are also explicitly requested"). Returns the ``requests``
+    response; transport and credential exceptions propagate.
+    """
+    from google.auth.transport.requests import AuthorizedSession
+
+    from gdoc.auth import get_credentials
+
+    account, _stamp = account_cache_key()
+    session = AuthorizedSession(get_credentials(account))
+    params = {
+        "includeTabsContent": "true",
+        "suggestionsViewMode": "SUGGESTIONS_INLINE",
+        "commentsViewMode": "COMMENTS_VIEW_MODE_INCLUDED",
+    }
+    if fields:
+        params["fields"] = fields
+    return session.get(
+        f"https://docs.googleapis.com/v1/documents/{doc_id}",
+        params=params,
+        timeout=60,
+    )
+
+
+def _preview_field_rejected(resp) -> bool:
+    """400 naming the preview field: the project is not preview-enrolled."""
+    if resp.status_code != 400:
+        return False
+    detail = resp.text.lower()
+    return "unknown name" in detail or "cannot find field" in detail
+
+
 def check_suggest_preview_access(doc_id: str) -> None:
     """Non-mutating gate: is this OAuth client's project preview-enrolled?
 
@@ -2364,33 +2423,12 @@ def check_suggest_preview_access(doc_id: str) -> None:
     a registered project echoes it (HTTP 200), an unregistered one rejects
     it (400 ``Unknown name "comments_view_mode"``). Same account, document,
     and scopes — only the client project changes the answer.
-
-    Sent as a raw authorized GET because the bundled discovery document
-    predates the field and the generated client refuses unknown parameters.
     """
     from google.auth.exceptions import GoogleAuthError, TransportError
-    from google.auth.transport.requests import AuthorizedSession
     from requests.exceptions import RequestException
 
-    from gdoc.auth import get_credentials
-
-    account, _stamp = account_cache_key()
     try:
-        session = AuthorizedSession(get_credentials(account))
-        resp = session.get(
-            f"https://docs.googleapis.com/v1/documents/{doc_id}",
-            params={
-                # Google requires the two companions ("Comments view mode
-                # may only be specified if tabs content is also requested"
-                # / "... if inline suggestions are also explicitly
-                # requested").
-                "includeTabsContent": "true",
-                "suggestionsViewMode": "SUGGESTIONS_INLINE",
-                "commentsViewMode": "COMMENTS_VIEW_MODE_INCLUDED",
-                "fields": "documentId,commentsViewMode",
-            },
-            timeout=60,
-        )
+        resp = _comments_view_get(doc_id, fields="documentId,commentsViewMode")
     except TransportError as e:
         # google-auth wraps a network failure during token refresh in
         # TransportError (a GoogleAuthError subclass) — it is a transport
@@ -2422,10 +2460,7 @@ def check_suggest_preview_access(doc_id: str) -> None:
                 "mode cannot be trusted. No change was made."
             )
         return
-    detail = resp.text.lower()
-    if status == 400 and (
-        "unknown name" in detail or "cannot find field" in detail
-    ):
+    if _preview_field_rejected(resp):
         raise GdocError(
             "suggest mode not available: the OAuth client's Cloud project "
             "is not enrolled in the Google Workspace Developer Preview "
@@ -2441,6 +2476,203 @@ def check_suggest_preview_access(doc_id: str) -> None:
     if status == 404:
         raise GdocError(f"Document not found: {doc_id}")
     raise GdocError(f"API error ({status}): {resp.reason}")
+
+
+def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
+    """Live comment anchors, from the Docs API Developer Preview.
+
+    Drive's comment fields (``anchor``, ``quotedFileContent``) never change
+    after an edit, so they cannot show whether a comment is still attached.
+    ``documents.get`` with ``commentsViewMode`` returns each tab's
+    ``commentAnchors``: the ranges each comment covers now, matching what
+    the Docs UI highlights. A comment with an anchor ID but no range left
+    is detached (the UI says "Original content deleted").
+
+    Returns ``{comment_id: anchor}`` for every comment the preview reports
+    with an anchor ID. ``anchor`` is None when detached (no range left),
+    otherwise:
+
+    - ``text``: the anchored text now, in document order; empty when the
+      anchor covers only non-text content such as an image.
+    - ``key``: the anchored text in the paragraph where the anchor ends,
+      stripped — the text ``cat --comments`` looks for to pick a line.
+    - ``occurrence`` / ``occurrences``: which occurrence of ``key`` this is
+      (0-based) and how many there are, over every tab's text in tab order
+      (with each tab's title before it when there are several tabs, as in
+      the markdown export). Zero occurrences when ``key`` can't be located.
+
+    Comments missing from the result have no live anchor (for example,
+    comments created through the Drive API with only a quote).
+
+    Raises PreviewUnavailableError whenever the anchors can't be read but
+    the document otherwise can: the OAuth client's project is not
+    preview-enrolled (the field is rejected, or accepted but not applied),
+    access is refused (403), or the request fails (network, rate limit,
+    server error). Callers fall back to quoted text. Only expired
+    credentials (AuthError) and a missing document (GdocError) propagate.
+    """
+    from google.auth.exceptions import GoogleAuthError, TransportError
+    from requests.exceptions import RequestException
+
+    try:
+        # No fields mask: Google rejects masks that expand childTabs.
+        resp = _comments_view_get(doc_id)
+    except TransportError as e:
+        # A network failure during token refresh, not bad credentials.
+        raise PreviewUnavailableError(f"network error: {e}")
+    except GoogleAuthError as e:
+        raise AuthError(f"Authentication expired ({e}). Run `gdoc auth`.")
+    except RequestException as e:
+        raise PreviewUnavailableError(f"network error: {e}")
+    status = resp.status_code
+    if _preview_field_rejected(resp):
+        raise PreviewUnavailableError(
+            "the OAuth client's Cloud project is not enrolled in the "
+            "Google Workspace Developer Preview"
+        )
+    if status == 401:
+        raise AuthError("Authentication expired. Run `gdoc auth`.")
+    if status == 404:
+        raise GdocError(f"Document not found: {doc_id}")
+    if status == 403:
+        raise PreviewUnavailableError(
+            "permission denied (403); the comments view needs comment or "
+            "edit access"
+        )
+    if status != 200:
+        raise PreviewUnavailableError(f"API error ({status}): {resp.reason}")
+    try:
+        document = resp.json()
+    except ValueError:
+        raise PreviewUnavailableError("unreadable document response")
+    if document.get("commentsViewMode") != "COMMENTS_VIEW_MODE_INCLUDED":
+        raise PreviewUnavailableError(
+            "the server did not apply the Developer Preview comments view"
+        )
+
+    def walk(ts: list[dict]):
+        for t in ts:
+            yield t
+            yield from walk(t.get("childTabs", []))
+
+    # Every tab's text as one string, tab after tab, plus each tab's map
+    # from doc index to position in that string. The markdown export of a
+    # document with several tabs heads each tab with its title, so those
+    # titles are counted too. A single-tab export usually has no title
+    # heading (one that once had more tabs can keep it); a count that then
+    # disagrees with the markdown leaves the comment unplaced, not misplaced.
+    tabs = list(walk(document.get("tabs", [])))
+    text_parts: list[str] = []
+    # tab ID -> (position of the tab's first char, each char's doc index)
+    position: dict[str, tuple[int, array]] = {}
+    ranges_by_anchor: dict[str, list[tuple[str, int, int]]] = {}
+    offset = 0
+    for tab in tabs:
+        tab_id = tab.get("tabProperties", {}).get("tabId", "")
+        title = tab.get("tabProperties", {}).get("title", "")
+        if len(tabs) > 1:
+            text_parts.append(title + "\n")
+            offset += len(title) + 1
+        doc_tab = tab.get("documentTab", {})
+        # One compact int per char (a per-char dict of tuples costs ~200
+        # bytes a char on a book-length document).
+        indices = array("q")
+        pieces: list[str] = []
+        for start, run in _text_runs(
+            doc_tab.get("body", {}).get("content", []),
+        ):
+            # Only chars beyond the BMP take two UTF-16 units; a lone
+            # surrogate (which can't be encoded) takes one.
+            if not run or max(run) <= "\uffff":
+                indices.extend(range(start, start + len(run)))
+            else:
+                # Doc indices are UTF-16 units: an emoji advances by 2.
+                i = start
+                for ch in run:
+                    indices.append(i)
+                    i += _utf16_len(ch)
+            pieces.append(run)
+        tab_text = "".join(pieces)
+        if any(b <= a for a, b in pairwise(indices)):
+            # Runs out of document order: sort chars by doc index.
+            order = sorted(range(len(indices)), key=indices.__getitem__)
+            indices = array("q", (indices[i] for i in order))
+            tab_text = "".join(tab_text[i] for i in order)
+        position[tab_id] = (offset, indices)
+        text_parts.append(tab_text)
+        offset += len(tab_text)
+        for anchor_id, anchor in doc_tab.get("commentAnchors", {}).items():
+            for r in anchor.get("ranges", []):
+                # A range in a header, footer or footnote (segmentId) is
+                # indexed within that segment, not the body: it keeps the
+                # comment attached but contributes no body text.
+                segment = r.get("segmentId")
+                ranges_by_anchor.setdefault(anchor_id, []).append((
+                    r.get("tabId") or tab_id,
+                    0 if segment else r.get("startIndex", 0),
+                    0 if segment else r.get("endIndex", 0),
+                ))
+    full_text = "".join(text_parts)
+
+    def find_all(key: str) -> list[int]:
+        return list(find_overlapping(full_text, key))
+
+    anchors: dict[str, dict | None] = {}
+    for comment in document.get("comments", []):
+        comment_id = comment.get("commentId")
+        anchor_id = comment.get("anchorId")
+        if not comment_id or not anchor_id:
+            continue
+        # Chars whose doc index falls in a range; the second UTF-16 unit
+        # of an emoji has no char of its own.
+        spots: list[int] = []
+        for tab_id, start, end in ranges_by_anchor.get(anchor_id, []):
+            if tab_id not in position:
+                continue
+            base, indices = position[tab_id]
+            spots.extend(range(
+                base + bisect_left(indices, start),
+                base + bisect_left(indices, end),
+            ))
+        spots.sort()
+        if anchor_id not in ranges_by_anchor:
+            anchors[comment_id] = None
+            continue
+        if not spots:
+            # Still attached, but only to non-text content (an image).
+            anchors[comment_id] = {
+                "text": "", "key": "", "occurrence": 0, "occurrences": 0,
+            }
+            continue
+        text = "".join(full_text[p] for p in spots)
+        # A soft line break (vertical tab) ends a markdown line too.
+        lines_text = text.replace("\x0b", "\n")
+        # The last paragraph that holds anchored text: its part of the
+        # anchor, and where that part starts in the full text.
+        line_start = len(text)
+        while True:
+            cut = lines_text.rfind("\n", 0, line_start)
+            part = text[cut + 1:line_start]
+            if part.strip() or cut == -1:
+                break
+            line_start = cut
+        key = part.strip()
+        occurrence = occurrences = 0
+        if key:
+            key_pos = spots[cut + 1 + (len(part) - len(part.lstrip()))]
+            starts = find_all(key)
+            # Split ranges can make key text that never occurs as one run;
+            # zero occurrences leaves the comment unplaced.
+            if key_pos in starts:
+                occurrence = starts.index(key_pos)
+                occurrences = len(starts)
+        anchors[comment_id] = {
+            "text": text,
+            "key": key,
+            "occurrence": occurrence,
+            "occurrences": occurrences,
+        }
+    return anchors
 
 
 def _reject_overlapping_matches(matches: list[dict]) -> None:

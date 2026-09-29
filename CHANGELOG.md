@@ -24,6 +24,33 @@ All notable changes to `gdoc` are documented here. This project follows
   stay on the Drive API. The four new commands are exposed over MCP as
   writes; the delete commands require `force: true` there.
 
+## [0.21.1] — 2026-09-28
+
+### Fixed
+- **A stale pulled file can no longer overwrite newer edits.** Conflict
+  detection compared the doc against the version this machine last read,
+  and a pulled file recorded no version of its own. So `gdoc pull DOC
+  draft.md` at version 1, a collaborator's edit (version 2), and any
+  `gdoc cat DOC` on this machine let `gdoc push draft.md` delete the
+  collaborator's edit. `pull` now stamps the file with `gdoc-version:
+  <Drive version>` (read before the export, so the stamp is never newer
+  than the content; `pull --revision` files get no stamp), and `push`,
+  `write DOC FILE` (when the file's `gdoc:` names DOC), the sync hook,
+  and MCP `write` use that stamp as the baseline: a mismatch refuses with
+  exit 3 unless `--force` or the doc already equals the file. The refusal
+  sends nothing, leaves the file untouched, and names a recovery that
+  pulls into a new path (`gdoc pull DOC draft.latest.md`, then `gdoc diff`),
+  since re-pulling the refused file would overwrite its edits. The sync
+  hook reports this refusal with exit 2 so Claude Code shows it to the
+  agent; its other skips stay silent. After an
+  upload the stamp advances to the version in the upload response; a tab
+  write, which reports no version of its own, leaves the stamp and warns.
+  The advance writes a sibling file and swaps it in, so a failed write
+  never truncates the source. The pull hook stamps what it pulls; when a
+  stamped file is behind the doc it refreshes the file only if the file
+  already matches the doc, and otherwise leaves it untouched and exits 2
+  with the same recovery steps. Unstamped files keep the old rule.
+
 ## [0.21.0] — 2026-08-26
 
 ### Added
@@ -74,6 +101,7 @@ All notable changes to `gdoc` are documented here. This project follows
   once at call entry** instead of per service access, so a
   `gdoc auth --set-default` made while a command runs can no longer hand
   the same command's read and write to different accounts.
+
 ## [0.20.1] — 2026-08-15
 
 ### Changed
