@@ -204,6 +204,8 @@ def test_f1_01_cell_breaks_follow_the_table_rules(route, new, cell):
 
 @pytest.mark.parametrize("new", [
     "a<br>![i](http://x/i.png)", "![i](http://x/i.png)<br>a", "a\n![i](http://x/i.png)",
+    "<br>![i](http://x/i.png)", "![i](http://x/i.png)<br>",
+    "<br>![i](http://x/i.png)<br>", "![i](http://x/i.png)\n\n",
 ])
 def test_r2_02_a_multi_line_cell_with_an_image_is_refused(route, new):
     """Round-2 review R2-02: an image in a multi-line cell is refused before
@@ -215,9 +217,11 @@ def test_r2_02_a_multi_line_cell_with_an_image_is_refused(route, new):
     assert len(route.service.batches) == batches and _read(route) == before
 
 
-def test_r2_02_a_one_line_cell_keeps_its_image(route):
+@pytest.mark.parametrize("new", ["a ![i](http://x/i.png)", "![i](http://x/i.png)\n"])
+def test_r2_02_a_one_line_cell_keeps_its_image(route, new):
+    """One line, even with the final newline stdin or a file adds."""
     _written(route, "| k | v |\n| --- | --- |\n| S | old |\n")
-    route.ok("edit", cell="1,1", tab="Main", new_text="a ![i](http://x/i.png)")
+    route.ok("edit", cell="1,1", tab="Main", new_text=new)
     assert "gdoc-image:" in _read(route)
 
 

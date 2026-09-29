@@ -1357,7 +1357,9 @@ def cmd_edit(args) -> int:
         # `<br>` breaks write back as paragraph breaks.
         from gdoc.mdparse import cell_inline, parse_inline
         new_text = cell_inline(new_text)
-        if "\n" in new_text.strip("\n") and any(
+        # The input's own final newline is already removed, so any newline
+        # here is a break, including one at either edge.
+        if "\n" in new_text and any(
                 s.type == "image" for s in parse_inline(new_text)[1]):
             # A multi-line cell is written paragraph by paragraph, which
             # keeps text styles only; refuse rather than drop the image.
