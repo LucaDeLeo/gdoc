@@ -2005,15 +2005,27 @@ def _stale_recovery(doc_id: str, file_path: str) -> str:
     )
 
 
-def _old_style_matches(doc_id: str, body: str) -> bool:
-    """Whether *body* already equals the doc: its first tab's Markdown as
-    `cat` reads it, or the Drive Markdown export an older gdoc pulled from."""
-    from gdoc.api.docs import flatten_tabs, get_document_with_tabs, get_tab_text
+def _old_style_matches(doc_id: str, body: str, tab: str | None = None) -> bool:
+    """Whether *body* already equals the doc: the target tab's Markdown as
+    `cat` reads it (the first tab unless *tab* names one), or the Drive
+    Markdown export an older gdoc pulled from."""
+    from gdoc.api.docs import (
+        flatten_tabs,
+        get_document_with_tabs,
+        get_tab_text,
+        resolve_tab,
+    )
     from gdoc.api.drive import export_doc
 
     tabs = flatten_tabs(get_document_with_tabs(doc_id).get("tabs", []))
-    if tabs and get_tab_text(tabs[0], markdown=True).strip() == body.strip():
+    try:
+        target = resolve_tab(tabs, tab) if tab else (tabs[0] if tabs else None)
+    except GdocError:
+        target = None
+    if target and get_tab_text(target, markdown=True).strip() == body.strip():
         return True
+    if tab and target is not (tabs[0] if tabs else None) and len(tabs) > 1:
+        return False  # The whole-document export is not that tab.
     try:
         current = export_doc(doc_id, mime_type="text/markdown")
     except GdocError:
@@ -2022,7 +2034,8 @@ def _old_style_matches(doc_id: str, body: str) -> bool:
 
 
 def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
-                                force: bool, body: str | None = None) -> bool:
+                                force: bool, body: str | None = None,
+                                tab: str | None = None) -> bool:
     """Check a file an older gdoc pulled, stamped only with a Drive
     `gdoc-version`. Returns True when its body already matches the doc, as
     0.21.1 did (nothing to write); raises when the doc has moved past that
@@ -2035,7 +2048,8 @@ def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
     stamp = _file_stamp(metadata, doc_id)
     if stamp is None or metadata.get("gdoc-revision") or force:
         return False
-    if body is not None and _old_style_matches(doc_id, body):
+    if body is not None and _old_style_matches(
+            doc_id, body, tab or metadata.get("tab") or None):
         return True
     from gdoc.api.drive import get_file_version
 
@@ -2103,7 +2117,8 @@ def cmd_write(args) -> int:
         )
 
     if pulled_doc and _refuse_stale_version_stamp(
-            metadata, doc_id, file_path, getattr(args, "force", False), content):
+            metadata, doc_id, file_path, getattr(args, "force", False), content,
+            tab_name):
         return _report_in_sync(args, doc_id)
 
     if (not pulled_doc and "revision" in metadata and "source" in metadata
@@ -2791,7 +2806,7 @@ def cmd_pull_hook(args) -> int:
         if stamp is not None and not metadata.get("gdoc-revision"):
             # A file an older gdoc pulled: re-pull it when it matches the
             # doc; block an edit to a stale one, as 0.21.1 did.
-            if not _old_style_matches(doc_id, body):
+            if not _old_style_matches(doc_id, body, metadata.get("tab") or None):
                 from gdoc.api.drive import get_file_version
 
                 current = get_file_version(doc_id).get("version")

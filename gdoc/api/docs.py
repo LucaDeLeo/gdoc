@@ -3704,23 +3704,14 @@ def _refuse_list_restructure(parsed, markdown, native, whole, body, source,
 
 
 def _orphans_item_content(native, content, match, source, tab_id) -> bool:
-    """Whether deleting whole list items leaves content they own (item
-    content paragraphs, or deeper items) to join the item above them."""
+    """Whether deleting whole list items leaves content they may own (item
+    content paragraphs, or deeper items) to join the item above them. The
+    parser accepts item content at any indent, so content counts as an
+    ancestor's only at or before that ancestor's content column."""
     tab = _snapshot_tab(source, tab_id)
     lists = (tab or {}).get("lists", {})
-    levels, columns = [], []
-    for p, start, _ in native:
-        bullet = p.get("bullet")
-        if not bullet:
-            continue
-        level = bullet.get("nestingLevel", 0)
-        levels.append(level)
-        # gdoc writes a nested marker two spaces per level; its content
-        # starts after the marker (`- `, or `1. ` with its number).
-        marker = (len(str(_list_number(content, start, lists))) + 2
-                  if _list_is_ordered(lists, bullet.get("listId", ""), level)
-                  else 2)
-        columns.append(2 * level + marker)
+    levels = [(p.get("bullet") or {}).get("nestingLevel", 0)
+              for p, _, _ in native if p.get("bullet")]
     after = next((e for e in _flat_paragraphs(content)
                   if e.get("startIndex", 0) >= match["endIndex"]
                   and not _is_empty_paragraph(e)), None)
@@ -3730,12 +3721,27 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
     if bullet:
         return bullet.get("nestingLevel", 0) > min(levels)
     start = after.get("startIndex", 0)
-    # Item content records its column; it belongs to a deleted item only
-    # at that item's content column or deeper, not to an ancestor's.
-    return any(sum(step for step in path if isinstance(step, int)) >= min(columns)
-               and any(a <= start < b for a, b in spans)
+    columns = [sum(step for step in path if isinstance(step, int))
                for _, name, spans in _owned_named_ranges(tab, tab_id)
-               if (path := _parse_prefix_range_name(name)))
+               if (path := _parse_prefix_range_name(name))
+               and any(isinstance(step, int) for step in path)
+               and any(a <= start < b for a, b in spans)]
+    if not columns:
+        return False
+    level = min(levels)
+    parent = next((e for e in reversed(list(_flat_paragraphs(content)))
+                   if e.get("endIndex", 0) <= native[0][1]
+                   and (e["paragraph"].get("bullet") or {}).get(
+                       "nestingLevel", -1) == level - 1), None) if level else None
+    if parent is None:
+        return True
+    pbullet = parent["paragraph"]["bullet"]
+    # gdoc writes a nested marker two spaces per level; content starts after
+    # the marker (`- `, or `1. ` with its number).
+    marker = (len(str(_list_number(content, parent.get("startIndex", 0), lists))) + 2
+              if _list_is_ordered(lists, pbullet.get("listId", ""), level - 1)
+              else 2)
+    return max(columns) > 2 * (level - 1) + marker
 
 
 def _line_kept(line, paragraph, lists) -> bool:

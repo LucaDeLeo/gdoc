@@ -143,3 +143,28 @@ def test_f6_04_an_empty_block_before_a_gdoc_line_is_body(route):
     _written(route, "Alpha.\n")
     route.ok("write", text="---\n---\ngdoc: example\n---\nBody.\n")
     assert "gdoc: example" in _read(route)
+
+
+@pytest.mark.parametrize("indent", [" ", "  "])
+def test_f6b_01_content_indented_less_than_the_marker_is_refused(route, indent):
+    """Codex F6b-01: the parser accepts item content at any indent, so it is
+    the deleted item's unless it provably belongs to an ancestor."""
+    _written(route, f"1. alpha\n2. bravo\n\n{indent}detail\n3. charlie\n")
+    _refused(route, "edit", "list's structure", old_text="bravo\n", new_text="")
+
+
+def test_f6b_02_old_style_match_compares_the_target_tab(monkeypatch):
+    from gdoc import cli
+    from tests.native_model import NativeDoc
+
+    def tab(tid, title, text):
+        return {"tabProperties": {"tabId": tid, "title": title},
+                "documentTab": NativeDoc(("p", text)).document_tab(tid)}
+
+    monkeypatch.setattr("gdoc.api.docs.get_document_with_tabs", lambda *_: {
+        "tabs": [tab("t.0", "Main", "Alpha."), tab("t.1", "Other", "Different.")]})
+    monkeypatch.setattr("gdoc.api.drive.export_doc", lambda *a, **k: "x\n")
+    assert cli._old_style_matches("doc", "Alpha.\n")
+    assert not cli._old_style_matches("doc", "Alpha.\n", "t.1")
+    assert not cli._old_style_matches("doc", "Alpha.\n", "Other")
+    assert cli._old_style_matches("doc", "Different.\n", "Other")
