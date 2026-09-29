@@ -2005,10 +2005,12 @@ def _stale_recovery(doc_id: str, file_path: str) -> str:
     )
 
 
-def _old_style_matches(doc_id: str, body: str, tab: str | None = None) -> bool:
-    """Whether *body* already equals the doc: the target tab's Markdown as
-    `cat` reads it (the first tab unless *tab* names one), or the Drive
-    Markdown export an older gdoc pulled from."""
+def _old_style_matches(doc_id: str, body: str,
+                       tab: str | None = None) -> dict | None:
+    """The matched tab's ID and revision when *body* already equals the doc:
+    the target tab's Markdown as `cat` reads it (the first tab unless *tab*
+    names one), or the Drive Markdown export an older gdoc pulled from.
+    Only line endings and one final newline are ignored."""
     from gdoc.api.docs import (
         flatten_tabs,
         get_document_with_tabs,
@@ -2017,25 +2019,30 @@ def _old_style_matches(doc_id: str, body: str, tab: str | None = None) -> bool:
     )
     from gdoc.api.drive import export_doc
 
-    tabs = flatten_tabs(get_document_with_tabs(doc_id).get("tabs", []))
+    document = get_document_with_tabs(doc_id)
+    tabs = flatten_tabs(document.get("tabs", []))
     try:
         target = resolve_tab(tabs, tab) if tab else (tabs[0] if tabs else None)
     except GdocError:
-        return False  # A named tab that doesn't resolve matches nothing.
-    if target and get_tab_text(target, markdown=True).strip() == body.strip():
-        return True
-    if tab and target is not (tabs[0] if tabs else None) and len(tabs) > 1:
-        return False  # The whole-document export is not that tab.
+        return None  # A named tab that doesn't resolve matches nothing.
+    if target is None:
+        return None
+    found = {"tab_id": target["id"], "revision_id": document.get("revisionId", "")}
+    wanted = _comparable_markdown(body)
+    if _comparable_markdown(get_tab_text(target, markdown=True)) == wanted:
+        return found
+    if target is not tabs[0] and len(tabs) > 1:
+        return None  # The whole-document export is not that tab.
     try:
         current = export_doc(doc_id, mime_type="text/markdown")
     except GdocError:
-        return False
-    return current.strip() == body.strip()
+        return None
+    return found if _comparable_markdown(current) == wanted else None
 
 
 def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
                                 force: bool, body: str | None = None,
-                                tab: str | None = None) -> bool:
+                                tab: str | None = None) -> dict | None:
     """Check a file an older gdoc pulled, stamped only with a Drive
     `gdoc-version`. Returns True when its body already matches the doc, as
     0.21.1 did (nothing to write); raises when the doc has moved past that
@@ -2047,27 +2054,44 @@ def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
     """
     stamp = _file_stamp(metadata, doc_id)
     if stamp is None or metadata.get("gdoc-revision") or force:
-        return False
-    if body is not None and _old_style_matches(
-            doc_id, body, tab or metadata.get("tab") or None):
-        return True
+        return None
+    match = body is not None and _old_style_matches(
+        doc_id, body, tab or metadata.get("tab") or None)
+    if match:
+        return match
     from gdoc.api.drive import get_file_version
 
     current = get_file_version(doc_id).get("version")
     if current is not None and str(current) != stamp:
         raise _stale_file_error(doc_id, file_path or "file", stamp, current)
-    return False
+    return None
 
 
-def _report_in_sync(args, doc_id: str) -> int:
+def _refuse_unreadable_provenance(content: str) -> None:
+    """Refuse input whose opening block mentions gdoc but can't be read
+    exactly: its revision checks couldn't run, and the header itself would
+    become text in the tab. Shared by write, push and the sync hook."""
+    from gdoc.frontmatter import provenance_header_problem
+
+    problem = provenance_header_problem(content)
+    if problem:
+        raise GdocError(
+            f"this file looks like a pulled file, but {problem}. Nothing was "
+            "sent. Fix the header, remove it to copy the text, or pull the "
+            "tab again.", exit_code=3,
+        )
+
+
+def _report_in_sync(args, doc_id: str, match: dict) -> int:
     """An old-style file that already matches the doc: nothing to write."""
     from gdoc.format import format_json, get_output_mode
 
     mode = get_output_mode(args)
     if mode == "json":
-        print(format_json(in_sync=True))
+        print(format_json(in_sync=True, **match))
     elif mode == "plain":
         print(f"id\t{doc_id}")
+        print(f"tab_id\t{match['tab_id']}")
         print("status\tin_sync")
     else:
         print("OK already in sync (doc matches local content; nothing to write)")
@@ -2096,18 +2120,8 @@ def cmd_write(args) -> int:
     # document and tab; writing it elsewhere must be explicit.
     from gdoc.frontmatter import parse_frontmatter
     raw = content
+    _refuse_unreadable_provenance(raw)
     metadata, content = parse_frontmatter(content)
-    from gdoc.frontmatter import unread_provenance
-
-    if unread_provenance(raw):
-        # Without the header, its revision checks can't run and the header
-        # itself would become text in the tab.
-        raise GdocError(
-            "this file starts with a gdoc frontmatter block that can't be read "
-            "(each line must be `key: value`; links, paths and code are not "
-            "keys). Nothing was sent. Fix or remove that line, or pull the tab "
-            "again.", exit_code=3,
-        )
     pulled_doc = metadata.get("gdoc")
     if pulled_doc and _resolve_doc_id(pulled_doc) != doc_id:
         raise GdocError(
@@ -2116,10 +2130,13 @@ def cmd_write(args) -> int:
             "frontmatter to copy the text into this one.", 3,
         )
 
-    if pulled_doc and _refuse_stale_version_stamp(
-            metadata, doc_id, file_path, getattr(args, "force", False), content,
-            tab_name):
-        return _report_in_sync(args, doc_id)
+    # A collapse is asked for explicitly, so a matching first tab is no
+    # reason to skip it.
+    match = pulled_doc and _refuse_stale_version_stamp(
+        metadata, doc_id, file_path, getattr(args, "force", False),
+        None if getattr(args, "force_collapse_tabs", False) else content, tab_name)
+    if match:
+        return _report_in_sync(args, doc_id, match)
 
     if (not pulled_doc and "revision" in metadata and "source" in metadata
             and not getattr(args, "force", False)):
@@ -2604,6 +2621,7 @@ def cmd_push(args) -> int:
     # Parse frontmatter
     from gdoc.frontmatter import parse_frontmatter
 
+    _refuse_unreadable_provenance(content)
     metadata, body = parse_frontmatter(content)
     if "gdoc" not in metadata:
         # pull --revision writes both keys; requiring both avoids
@@ -2621,9 +2639,11 @@ def cmd_push(args) -> int:
         )
 
     doc_id = _resolve_doc_id(metadata["gdoc"])
-    if _refuse_stale_version_stamp(metadata, doc_id, file_path,
-                                   getattr(args, "force", False), body):
-        return _report_in_sync(args, doc_id)
+    match = _refuse_stale_version_stamp(
+        metadata, doc_id, file_path, getattr(args, "force", False),
+        None if getattr(args, "force_collapse_tabs", False) else body)
+    if match:
+        return _report_in_sync(args, doc_id, match)
 
     details = {}
     result = _write_native_markdown(
@@ -2713,6 +2733,12 @@ def cmd_sync_hook(args) -> int:
 
         from gdoc.frontmatter import parse_frontmatter
 
+        try:
+            _refuse_unreadable_provenance(content)
+        except GdocError as e:
+            # Exit 2 shows stderr to the agent; its edit did not sync.
+            print(f"SYNC: not pushed {file_path}: {e}", file=sys.stderr)
+            return 2
         metadata, body = parse_frontmatter(content)
         if "gdoc" not in metadata:
             return 0

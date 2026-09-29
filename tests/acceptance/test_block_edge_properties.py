@@ -167,20 +167,40 @@ def _refusal_expected(body, i, j, doc=None):
 
 
 def _orphans_item_content(doc, body, i, j):
+    """Mirror of the product rule: after the removed run, past plain blanks,
+    only the end, top-level text, or an item at the removed items' level or
+    shallower in their container makes the removal safe."""
     from gdoc.api.docs import _parse_prefix_range_name
 
-    levels = [p["bullet"].get("nestingLevel", 0) for kind, _, _, _, p in body[i:j + 1]
-              if kind == "p" and p.get("bullet")]
-    if not levels:
+    items = [(p["bullet"].get("nestingLevel", 0), start)
+             for kind, _, start, _, p in body[i:j + 1]
+             if kind == "p" and p.get("bullet")]
+    if not items:
         return False
+
+    def covering(start):
+        return [name for name, a, b in doc.named if name and a <= start < b]
+
+    def containers(start):
+        return frozenset(path for name in covering(start)
+                         if (path := _parse_prefix_range_name(name)))
+
+    level = min(item_level for item_level, _ in items)
+    home = containers(min(start for _, start in items))
     for kind, text, start, _, paragraph in body[j + 1:]:
-        if kind == "p" and not text:
+        if kind == "t":
+            return True
+        style = paragraph.get("paragraphStyle", {})
+        bullet = paragraph.get("bullet")
+        if (not text and not bullet and not covering(start)
+                and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
+                and not (style.get("borderBottom") or {}).get("width", {}).get(
+                    "magnitude")):
             continue
-        if kind == "p" and paragraph.get("bullet"):
-            return paragraph["bullet"].get("nestingLevel", 0) > min(levels)
-        return any(name and a <= start < b and any(
-            isinstance(step, int) for step in _parse_prefix_range_name(name) or ())
-            for name, a, b in doc.named)
+        if bullet:
+            return not (bullet.get("nestingLevel", 0) <= level
+                        and containers(start) == home)
+        return bool(covering(start)) or not text
     return False
 
 
@@ -201,10 +221,12 @@ def test_i1_to_i4_removing_whole_paragraphs(route, seed):
     body, shape = _body(doc), _shape(doc)
     for i, j, old in _runs(rng, body):
         doc = _written(route, markdown)
+        # Judged on the document before the edit changes it.
+        refusal = _refusal_expected(body, i, j, doc)
         batches = len(route.service.batches)
         code, output, error = route.call("edit", old_text=old, new_text="")
         context = (markdown, old, output + error)
-        if _refusal_expected(body, i, j, doc):
+        if refusal:
             assert code != 0 and len(route.service.batches) == batches, context
             assert "unexpected error" not in output + error, context
             continue

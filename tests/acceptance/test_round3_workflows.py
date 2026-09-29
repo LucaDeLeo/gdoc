@@ -5,6 +5,7 @@ import json
 import pytest
 
 from gdoc.mdparse import parse_markdown, utf16_len
+from gdoc.util import GdocError
 from tests.acceptance.conftest import paragraph
 from tests.acceptance.test_workflows import existing_image, read, requests
 
@@ -110,10 +111,9 @@ def test_rename_image_references_changes_only_image_destinations():
     )
     renamed = rename_image_references(source, {"old": "new"})
     listed = "- ```\n  ![](gdoc-image:old)\n  ```\n"
-    # gdoc reads a fence on a list marker line as item text, so this
-    # destination is an image, as the writer also treats it.
-    assert parse_markdown(listed).images[0].uri == "gdoc-image:old"
-    assert "gdoc-image:new" in rename_image_references(listed, {"old": "new"})
+    # A fence on a list marker line is refused as input.
+    with pytest.raises(GdocError, match="marker line"):
+        parse_markdown(listed)
     assert renamed == (
         "```\n![](gdoc-image:old)\n```\n"
         "![](gdoc-image:new) prose gdoc-image:old `![](gdoc-image:old)` "

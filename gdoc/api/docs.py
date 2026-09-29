@@ -3623,6 +3623,13 @@ def _level_change_advice(parsed, lines, native, source, tab_id) -> str:
     first, last = index.get(native[0][1]), index.get(native[-1][1])
     if first is None or last is None:
         return _LIST_RESTRUCTURE
+    # `nest` moves an item's sub-items with it, which this edit doesn't ask.
+    following = next((e for e in content[last + 1:]
+                      if "paragraph" in e and not _is_empty_paragraph(e)), None)
+    if following is not None and (following["paragraph"].get("bullet") or {}).get(
+            "nestingLevel", -1) > (native[-1][0].get("bullet") or {}).get(
+                "nestingLevel", 0):
+        return _LIST_RESTRUCTURE
     try:
         plan_nesting(tab, tab_id or "", first, last, deltas.pop())
     except GdocError:
@@ -3704,82 +3711,52 @@ def _refuse_list_restructure(parsed, markdown, native, whole, body, source,
 
 
 def _orphans_item_content(native, content, match, source, tab_id) -> bool:
-    """Whether deleting whole list items leaves content they may own (item
-    content paragraphs, or deeper items) to join the item above them. The
-    parser accepts item content at any indent, so content counts as an
-    ancestor's only at or before that ancestor's content column."""
+    """Whether deleting whole list items could leave content that belongs
+    to them, which would then join the item above.
+
+    Nothing about ownership is inferred. After the match, plain blank lines
+    are skipped; the deletion is safe only when what follows is the end of
+    the tab, top-level text, or an item at the deleted items' level or
+    shallower in their own container. Anything else (item content, a
+    deeper item, a quote, a rule, an empty heading, code or a table) might
+    be theirs, so the deletion is refused unless the match covers it too.
+    """
     tab = _snapshot_tab(source, tab_id)
-    lists = (tab or {}).get("lists", {})
-    levels = [(p.get("bullet") or {}).get("nestingLevel", 0)
-              for p, _, _ in native if p.get("bullet")]
-    after = next((e for e in _flat_paragraphs(content)
-                  if e.get("startIndex", 0) >= match["endIndex"]
-                  and not _is_empty_paragraph(e)), None)
-    if after is None:
-        return False
-    bullet = after["paragraph"].get("bullet")
-    if bullet:
-        return bullet.get("nestingLevel", 0) > min(levels)
-    start = after.get("startIndex", 0)
-    columns = [sum(step for step in path if isinstance(step, int))
-               for _, name, spans in _owned_named_ranges(tab, tab_id)
-               if (path := _parse_prefix_range_name(name))
-               and any(isinstance(step, int) for step in path)
-               and any(a <= start < b for a, b in spans)]
-    if not columns:
-        return False
-    level = min(levels)
-    ranges = [(path, spans) for _, name, spans in _owned_named_ranges(tab, tab_id)
-              if (path := _parse_prefix_range_name(name))]
+    owned = list(_owned_named_ranges(tab, tab_id))
 
-    def containers(element):
+    def covering(start):
+        return [name for _, name, spans in owned
+                if any(a <= start < b for a, b in spans)]
+
+    def containers(start):
+        return frozenset(path for name in covering(start)
+                         if (path := _parse_prefix_range_name(name)))
+
+    items = [(p["bullet"].get("nestingLevel", 0), start)
+             for p, start, _ in native if p.get("bullet")]
+    level = min(item_level for item_level, _ in items)
+    home = containers(min(start for _, start in items))
+    for element in content:
         start = element.get("startIndex", 0)
-        return frozenset(path for path, spans in ranges
-                         if any(a <= start < b for a, b in spans))
-
-    # The parent is the nearest earlier item one level up in the same list
-    # context: the walk stops at anything that ends the list.
-    home = containers({"startIndex": native[0][1]})
-    parent = None
-    for element in reversed([e for e in content if "paragraph" in e or "table" in e]):
-        if element.get("endIndex", 0) > native[0][1] or not level:
+        if start < match["endIndex"] or not (
+                "paragraph" in element or "table" in element):
             continue
         if "table" in element:
-            break
-        if _is_empty_paragraph(element):
-            style = element["paragraph"].get("paragraphStyle", {})
-            start = element.get("startIndex", 0)
-            plain = (not element["paragraph"].get("bullet")
-                     and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
-                     and not (style.get("borderBottom") or {}).get(
-                         "width", {}).get("magnitude")
-                     and not any(not _parse_prefix_range_name(name)
-                                 and any(a <= start < b for a, b in spans)
-                                 for _, name, spans in _owned_named_ranges(
-                                     tab, tab_id)))
-            if plain:
-                continue  # a blank line does not end a list
-            break  # a rule, an empty heading or an empty code line does
-        found = (element["paragraph"].get("bullet") or {})
-        where = containers(element)
-        if not found:
-            if any(isinstance(step, int) for path in where for step in path):
-                continue  # item content of an earlier item
-            break
-        if where != home or found.get("nestingLevel", 0) < level - 1:
-            break
-        if found.get("nestingLevel", 0) == level - 1:
-            parent = element
-            break
-    if parent is None:
-        return True
-    pbullet = parent["paragraph"]["bullet"]
-    # gdoc writes a nested marker two spaces per level; content starts after
-    # the marker (`- `, or `1. ` with its number).
-    marker = (len(str(_list_number(content, parent.get("startIndex", 0), lists))) + 2
-              if _list_is_ordered(lists, pbullet.get("listId", ""), level - 1)
-              else 2)
-    return max(columns) > 2 * (level - 1) + marker
+            return True
+        paragraph = element["paragraph"]
+        style = paragraph.get("paragraphStyle", {})
+        bullet = paragraph.get("bullet")
+        if (_is_empty_paragraph(element) and not bullet and not covering(start)
+                and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
+                and not (style.get("borderBottom") or {}).get("width", {}).get(
+                    "magnitude")):
+            continue  # a plain blank line
+        if bullet:
+            return not (bullet.get("nestingLevel", 0) <= level
+                        and containers(start) == home)
+        # Top-level text ends the list; anything else may be the items'.
+        return bool(covering(start)) or _is_empty_paragraph(element)
+    return False
 
 
 def _line_kept(line, paragraph, lists) -> bool:
@@ -3845,6 +3822,7 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
         # content and deeper items, the list's item at the new item's level
         # or the parent it would nest under.
         beside = None
+        skipped = False
         for element in reversed(blocks):
             if blank(element):
                 continue
@@ -3853,13 +3831,18 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
             bullet = element["paragraph"].get("bullet")
             if bullet:
                 if bullet.get("nestingLevel", 0) > item.list_depth:
+                    skipped = True
                     continue
                 beside = element
                 break
             if not item_content(element):
                 break
+        # Deeper items with nothing at the new item's level above them:
+        # whether a write would join them is not worked out.
+        orphan_above = skipped and beside is None
         between = range(0, item.start)
     else:
+        orphan_above = False
         beside = next((e for e in blocks if not blank(e)), None)
         item = items[-1]
         between = range(item.end, len(parsed.plain_text))
@@ -3872,6 +3855,22 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
                             and (s.style.get("namedStyleType", "NORMAL_TEXT")
                                  != "NORMAL_TEXT" or "borderBottom" in s.style)
                             for s in parsed.styles))
+    # A numbered item asking for a number other than 1 continues an earlier
+    # numbered list of its level in a write, even across other blocks.
+    first_number = re.match(r"[\s>]*(\d+)[.)]", markdown.lstrip("\n"))
+    if (position == "end" and item.style["bulletPreset"].startswith("NUMBERED")
+            and first_number and int(first_number[1]) != 1
+            and any(_list_is_ordered(tab.get("lists", {}), b.get("listId", ""),
+                                     b.get("nestingLevel", 0))
+                    and b.get("nestingLevel", 0) == item.list_depth
+                    for e in blocks if "paragraph" in e
+                    for b in [e["paragraph"].get("bullet")] if b)):
+        numbered_join = True
+    else:
+        numbered_join = False
+    if (touching and orphan_above) or numbered_join:
+        raise GdocError("these list items may join the list above them; "
+                        + _LIST_RESTRUCTURE, exit_code=3)
     bullet = (beside or {}).get("paragraph", {}).get("bullet")
     if not touching or not bullet:
         return
@@ -3883,6 +3882,11 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
                       if s.type == "markdown_prefix"
                       and s.start <= item.start < s.end), ())
     if beside_paths != ({item_path} if item_path else set()):
+        if any(isinstance(step, int) for path in beside_paths for step in path):
+            # The item above is inside another item's content, whose list
+            # the new items may continue; refuse rather than work it out.
+            raise GdocError("these list items may join the list above them; "
+                            + _LIST_RESTRUCTURE, exit_code=3)
         return
     lists = tab.get("lists", {})
     level = bullet.get("nestingLevel", 0)
@@ -3900,7 +3904,11 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
         if not joins:
             return
     # Of the same kind, they join it (or nest in it as its sublist); another
-    # kind is its own native list, as in a write.
+    # kind is its own native list, as in a write, unless later inserted items
+    # come back to the list's level and join it there.
+    if position == "end" and item.list_depth > level and any(
+            other.list_depth <= level for other in items[1:]):
+        numbered = ordered
     if numbered == ordered:
         raise GdocError("these list items would join the list beside them; "
                         + _LIST_RESTRUCTURE, exit_code=3)

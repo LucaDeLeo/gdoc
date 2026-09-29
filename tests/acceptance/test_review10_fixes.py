@@ -137,9 +137,18 @@ def test_r1_07_a_level_change_does_not_take_the_slot_silently(
 
 
 def test_r1_08_insert_does_not_continue_a_list_across_a_quote(route):
-    want = _oracle(route, "> 1. x\n> 2. y\n3. a\n")
+    """Round 4 made this conservative: an appended numbered item asking for
+    a number other than 1 may continue an earlier numbered list, so it is
+    refused; write makes the change."""
+    _written(route, "> 1. x\n> 2. y\n")
+    code, output, error = route.call("insert", text="3. a\n", tab="t.0",
+                                     position="end")
+    assert code != 0 and "list's structure" in output + error
+    route.ok("write", text="> 1. x\n> 2. y\n3. a\n")
+    # A restart at 1 is its own list, as in a write.
+    want = _oracle(route, "> 1. x\n> 2. y\n1. a\n")
     doc = _written(route, "> 1. x\n> 2. y\n")
-    route.ok("insert", text="3. a\n", tab="t.0", position="end")
+    route.ok("insert", text="1. a\n", tab="t.0", position="end")
     assert (_read(route), _native(doc)) == want
 
 

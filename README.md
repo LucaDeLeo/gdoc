@@ -607,10 +607,9 @@ structure may read differently:
   the ninth level and `write`/`insert` warn with the affected lines. This is a
   gdoc limit, not one of the API gaps below.
 - Open a fenced code block inside a list item on its own line: the item's
-  text, a blank line, then the fence indented to the item's content. A fence on
-  the marker line itself (`` 1. ``` ``) is the item's literal text, and so is
-  the first matching fence line in that item's content, so the pair never opens
-  a code block. Outside the item, fences read as usual.
+  text, a blank line, then the fence indented to the item's content. Input with
+  a fence on the marker line itself (`` 1. ``` ``, `` - ~~~ ``, `` - > ``` ``)
+  is refused with nothing sent.
 - When emphasis spans close together, mark the inner one with underscores:
   `**bold _italic_**`, not `**bold *italic***`. Spans that open together read
   as CommonMark does (`***bold** then italic*`).
@@ -715,16 +714,21 @@ such a file with exit 3: nothing is sent and the file is left untouched. The syn
 exits 2 instead, which Claude Code shows to the agent. The refusal prints recovery
 steps: pull a fresh copy to a new path (`gdoc pull DOC draft.latest.md`), see what
 changed with `gdoc diff DOC draft.md`, and carry your edits into the new file; `--force`
-discards the newer changes in the doc. A file whose body already matches the doc's
-Markdown export is reported `already in sync` and nothing is sent. Otherwise, at the
+discards the newer changes in the doc. A file whose body already matches the target
+tab's Markdown, or the doc's Markdown export for the first tab (ignoring only line
+endings and one final newline), is reported `already in sync` and nothing is sent;
+`--force-collapse-tabs` skips that shortcut. Otherwise, at the
 current version such a file still has no revision provenance, so it needs a fresh
 pull or `--force`, as above. The pull hook blocks an edit to a stale file (exit 2,
 with the same recovery steps), re-pulls one that matches the doc, and leaves a
 current file with local edits in place. `pull` now records `gdoc-revision` and the
 tab fingerprint rather than `gdoc-version`, and a file with `gdoc-revision` ignores
-any `gdoc-version`. A file whose leading `---` block names gdoc provenance but can't
-be read (a line that isn't `key: value`, such as a bare URL) is refused by `write`
-with nothing sent; fix or remove that line.
+any `gdoc-version`. When a file starts with a `---` block that mentions `gdoc`
+anywhere, the block must be read exactly as gdoc frontmatter: closed by a `---`
+line, every line `key: value`, naming the document with `gdoc: ID`. Otherwise
+`write` (CLI and MCP) and `push` refuse it with exit 3 and nothing sent, and the
+sync hook reports the refusal (exit 2); an unclosed block that mentions `gdoc` is
+refused too. Fix the header, or remove it to copy the text.
 
 ## Spreadsheets
 
@@ -926,12 +930,17 @@ makes the rest:
 - an added or removed item (including one split by an encoded line break,
   `&#10;`), or a paragraph turned into an item or back;
 - an item moved into or out of a quote or list item;
-- deleting an item whose content paragraphs or sub-items follow it, which would
-  then belong to the item above (delete them together);
-- inserted items that would join the list beside them.
+- deleting an item when anything but a blank line, top-level text or the next
+  item at its level follows it (content paragraphs, sub-items, a quote, a rule,
+  an empty heading, code or a table), since that may be the item's and would
+  join the item above; delete it together with the item;
+- inserted items that would, or may, join a list above them: beside it, below
+  its deeper items, inside another item's content, or, for a numbered item
+  asking for a number other than 1, after any numbered list of its level.
 
 A later `edit --block` will make these as targeted edits. A refused level change
-names `gdoc nest` only when it would accept those items; it does not yet move items
+names `gdoc nest` only when it would accept those items and they have no
+sub-items (`nest` moves sub-items with them); it does not yet move items
 of a quoted list, of a loose list (blank lines between items), or an item that
 follows another item's content paragraphs.
 

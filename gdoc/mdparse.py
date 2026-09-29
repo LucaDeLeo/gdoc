@@ -238,6 +238,28 @@ def _code_spans(text: str) -> list[re.Match]:
     return spans
 
 
+# A fence opener after a list marker (and any further markers or quote
+# markers on the same line): `1. ```, `- ~~~`, `- > ````.
+_MARKER_LINE_FENCE_RE = re.compile(r"(?:(?:[-*+]|\d+[.)])[ \t]+|>[ \t]?)*")
+
+
+def _refuse_marker_line_fence(item: str, line_index: int) -> None:
+    """Refuse a code fence opened on a list item's marker line: Markdown
+    readers disagree about it, and a later fence line could then swallow
+    the rest of the input."""
+    rest = item[_MARKER_LINE_FENCE_RE.match(item).end():]
+    if _fence_open(rest):
+        from gdoc.util import GdocError
+
+        raise GdocError(
+            f"line {line_index + 1} opens a code block on a list item's marker "
+            "line, which gdoc does not read. Put the item's text on the marker "
+            "line, then a blank line, then the fence indented to the item's "
+            "content (`1. Install` / blank / `   ```bash`). Nothing was sent.",
+            exit_code=3,
+        )
+
+
 def cell_inline(text: str) -> str:
     """A table cell holds inline text only. Decode its ``<br>`` line breaks
     as a pipe-table cell does (not escaped ones, not inside code spans), then
@@ -251,7 +273,10 @@ def cell_inline(text: str) -> str:
     def inline(line):
         indent = line[:len(line) - len(line.lstrip(" \t"))]
         stripped = line[len(indent):]
-        parsed = parse_markdown(stripped)
+        try:
+            parsed = parse_markdown(stripped)
+        except Exception:  # a spelling gdoc refuses as a block stays literal
+            return indent + "\\" + stripped
         plain, _ = parse_inline(stripped)
         if (parsed.plain_text.rstrip("\n") == plain and not parsed.tables
                 and not parsed.code_blocks and all(
@@ -1121,21 +1146,12 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             last_list_end = offset
 
     i = 0
-    # A fence on a list item's marker line is the item's literal text; its
-    # closing fence is literal too, so it can't open a block that swallows
-    # the rest of the input. (char, length) of that fence, until it closes.
-    marker_fence: tuple[str, int, tuple] | None = None
     table_separators: set[int] = set()
     while i < len(lines):
         if i in definition_lines or i in table_separators:
             i += 1
             continue
         path, line = container_path(lines[i])
-        if marker_fence and line.strip(" \t") and not (
-                len(path) > len(marker_fence[2])
-                and path[:len(marker_fence[2])] == marker_fence[2]):
-            # Outside the item's content, a marker-line fence has no closer.
-            marker_fence = None
         if not line.strip(" \t") and path and path[-1] != "q":
             # A blank line inside list item content is a blank paragraph; only
             # its quote markers are containers (see get_tab_text).
@@ -1147,11 +1163,6 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         # Fenced code block: ``` (or ~~~) ... ```
         fence_indent = len(line) - len(line.lstrip(" "))
         fence_m = _fence_open(line)
-        if fence_m and marker_fence and fence_m.group(1)[0] == marker_fence[0] \
-                and len(fence_m.group(1)) >= marker_fence[1] \
-                and not fence_m.group(2).strip(" \t"):
-            # The closer of a marker-line fence: literal item content.
-            marker_fence, fence_m = None, None
         if fence_m:
             list_levels.clear()
             fence = fence_m.group(1)
@@ -1311,6 +1322,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         bullet_m = _BULLET_RE.match(line)
         if bullet_m:
             item = bullet_m.group(2) or ""
+            _refuse_marker_line_fence(item, i)
             heading = _HEADING_RE.match(item)
             named = _NAMED_STYLE_RE.match(item)
             item_style = "NORMAL_TEXT"
@@ -1328,9 +1340,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 leading_tabs=_list_level(bullet_m.group(1)),
             )
             note_deep(bullet_m.group(1), item)
-            opener = _fence_open(item)
-            if opener:
-                marker_fence = (opener.group(1)[0], len(opener.group(1)), path)
+
             i += 1
             continue
 
@@ -1338,6 +1348,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         numbered_m = _NUMBERED_RE.match(line)
         if numbered_m:
             item = numbered_m.group(2) or ""
+            _refuse_marker_line_fence(item, i)
             heading = _HEADING_RE.match(item)
             named = _NAMED_STYLE_RE.match(item)
             item_style = "NORMAL_TEXT"
@@ -1356,9 +1367,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 start_number=int(line.lstrip().split(".", 1)[0]),
             )
             note_deep(numbered_m.group(1), item)
-            opener = _fence_open(item)
-            if opener:
-                marker_fence = (opener.group(1)[0], len(opener.group(1)), path)
+
             i += 1
             continue
 

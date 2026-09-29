@@ -26,16 +26,19 @@ All notable changes to `gdoc` are documented here. This project follows
 - Targeted edits that would move list items a level in or out point to
   `gdoc nest` and `gdoc unnest` when those would accept the items, and to
   `write` otherwise.
-- `write` refuses a file whose leading `---` block names gdoc provenance but
-  can't be read, instead of writing it without its stale-file checks.
+- A file whose opening `---` block mentions `gdoc` must be read exactly as gdoc
+  frontmatter; otherwise `write`, `push` and MCP `write` refuse it, and the sync
+  hook reports the refusal, instead of writing it without stale-file checks.
 - A file stamped only with `gdoc-version` whose body matches the doc is
   `already in sync`, as in 0.21.1; the pull hook blocks edits to a stale one
   and re-pulls a matching one.
-- Deleting a list item whose content or sub-items follow it is refused, since
-  they would join the item above. Inserted items that `write` would join to
-  the list above, past its item content or sub-items, are refused.
-- A fence on a list item's marker line, and its matching closer, stay literal
-  item text instead of opening a code block that swallows later blocks.
+- Deleting a list item is refused when anything but a blank line, top-level
+  text or the next item at its level follows it, since that content may be the
+  item's and would join the item above. Inserted items that `write` would or
+  may join to a list above them are refused, including a numbered item asking
+  for a number other than 1 when the tab has a numbered list of its level.
+- Input with a code fence on a list item's marker line (`` 1. ``` ``) is
+  refused; the message gives the supported spelling.
 - `edit --cell` refuses an image when the cell's number of lines changes or an
   encoded line break (`&#10;`) is present, instead of dropping it.
 - `cat --comments` ignores the `<!-- -->` separator between touching runs when

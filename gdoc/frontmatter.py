@@ -86,23 +86,36 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     return metadata, body
 
 
-_PROVENANCE_LINE_RE = re.compile(
-    r"""^(["']?)(?:gdoc|gdoc-revision|gdoc-version|gdoc-tab-sha256)\1[ \t]*:""",
-    re.MULTILINE)
+def provenance_header_problem(content: str) -> str | None:
+    """Why *content*'s opening metadata block can't be trusted, or None.
 
-
-def unread_provenance(content: str) -> bool:
-    """Whether *content* opens with a metadata block that names gdoc
-    provenance (a `gdoc`, `gdoc-revision`, `gdoc-version` or
-    `gdoc-tab-sha256` line) but that parse_frontmatter does not read. Such a
-    file's stale-file checks cannot run, and its header would be written as
-    body text."""
-    content = content.removeprefix("\ufeff")
-    if _EMPTY_FRONTMATTER_RE.match(content):
-        return False  # An empty block: what follows is body, as parsed.
-    match = _FRONTMATTER_RE.match(content)
-    return bool(match and _PROVENANCE_LINE_RE.search(match.group(1))
-                and not parse_frontmatter(content)[0])
+    A block that mentions `gdoc` anywhere is taken to carry gdoc
+    provenance, so it must be read exactly: it closes with a `---` line,
+    every line in it is a `key: value` line, and it names the document
+    (`gdoc: ID`). Otherwise its stale-file checks could not run and the
+    header would be written as text. Blocks without `gdoc` are unaffected.
+    """
+    # Any line ending, and any run of three or more dashes, counts here:
+    # the block is recognised broadly, then must be read exactly.
+    lines = re.split(r"\r\n|\r|\n", content.removeprefix("\ufeff"))
+    if not re.fullmatch(r"-{3,}[ \t]*", lines[0]):
+        return None
+    close = next((k for k in range(1, len(lines))
+                  if re.fullmatch(r"(?:-{3,}|\.\.\.)[ \t]*", lines[k])), None)
+    block = lines[1:close] if close is not None else lines[1:]
+    if not any("gdoc" in line for line in block):
+        return None
+    if close is None:
+        return "its opening `---` block never closes"
+    if lines[0] != "---" or lines[close] != "---" or "\n" not in content:
+        return "its opening block must open and close with `---` lines"
+    for line in block:
+        if line.strip() and not _KEY_LINE_RE.match(line):
+            return ("its opening block has a line that isn't `key: value`: "
+                    f"{line.strip()!r}")
+    if not parse_frontmatter(content)[0].get("gdoc"):
+        return "its opening block doesn't name the document (`gdoc: ID`)"
+    return None
 
 
 def add_frontmatter(body: str, metadata: dict) -> str:

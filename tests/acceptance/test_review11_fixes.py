@@ -50,20 +50,16 @@ def test_r3_01_an_item_deleted_with_its_content_is_removed(route):
     assert _read(route) == "1. alpha\n2. charlie\n"
 
 
-@pytest.mark.parametrize("fence", ["```bash", "~~~"])
-def test_r3_02_a_fence_on_a_marker_line_stays_in_its_item(route, fence):
-    closer = fence[:3]
-    markdown = (f"1. {fence}\n   npm install\n   {closer}\n2. Run it\n\n"
-                "## Next\n\nMore prose.\n")
-    _written(route, markdown)
-    got = _read(route)
-    # Both fence lines are literal item text; later blocks are untouched.
-    fence_text = "\\" + "\\".join(fence[:3]) + fence[3:]
-    closer_text = "\\" + "\\".join(closer)
-    assert got == (f"1. {fence_text}\n   npm install\n   {closer_text}\n2. Run it"
-                   "\n\n## Next\n\nMore prose.\n")
-    route.ok("write", text=got)
-    assert _read(route) == got
+@pytest.mark.parametrize("fence", ["```bash", "~~~", "> ```", "- ```py"])
+def test_r3_02_a_fence_on_a_marker_line_is_refused(route, fence):
+    """Round 4: refused outright, with the canonical spelling in the message,
+    so no spelling can swallow later blocks."""
+    _written(route, "Alpha.\n")
+    _refused(route, "write", "marker line",
+             text=f"1. {fence}\n   npm install\n   ```\n2. Run it\n\n## Next\n")
+    canonical = "1. Install\n\n   ```\n   npm install\n   ```\n2. Run it\n\n## Next\n"
+    route.ok("write", text=canonical.replace("```\n   npm", "```bash\n   npm"))
+    assert _read(route) == canonical  # fence info strings are not kept
 
 
 @pytest.mark.parametrize("new", [IMAGE, "x " + IMAGE])
@@ -84,7 +80,7 @@ def test_r3_04_an_unreadable_pulled_header_is_refused(route, extra):
     _written(route, "Alpha.\nBeta.\n")
     text = (f"---\ngdoc: synthetic\ntitle: T\ngdoc-version: 1\n{extra}\n---\n"
             "Alpha edited.\nBeta.\n")
-    _refused(route, "write", "can't be read", text=text)
+    _refused(route, "write", "looks like a pulled file", text=text)
 
 
 def test_r3_12_level_change_names_nest_only_when_it_would_work(route):
@@ -117,26 +113,26 @@ def test_r3_11_nest_after_cat_does_not_warn(route):
 
 # Codex review of the round-3 fixes (F6-01 to F6-04).
 
-def test_f6_01_a_marker_fence_does_not_reach_past_its_item(route):
-    markdown = "1. ```\n\nOutside.\n\n```\ncode\n```\n\n## Next\n"
-    _written(route, markdown)
-    got = _read(route)
-    assert got.endswith("```\ncode\n```\n\n## Next\n")
+def test_f6_01_a_marker_fence_before_other_code_is_refused(route):
+    _written(route, "Alpha.\n")
+    _refused(route, "write", "marker line",
+             text="1. ```\n\nOutside.\n\n```\ncode\n```\n\n## Next\n")
 
 
 def test_f6_02_quoted_provenance_keys_are_recognised(route):
     _written(route, "Alpha.\n")
     text = ('---\n"gdoc": synthetic\n"gdoc-version": 1\nhttps://example.com/ref\n'
             "---\nChanged.\n")
-    _refused(route, "write", "can't be read", text=text)
+    _refused(route, "write", "looks like a pulled file", text=text)
 
 
-def test_f6_03_a_child_deleted_before_its_parents_content_is_removed(route):
+def test_f6_03_a_child_deleted_before_item_content_is_refused(route):
+    """Round 4 made this conservative: ownership of the content after a
+    deleted item is never inferred, so any item content there refuses."""
     markdown = "1. parent\n  - child\n\n   parent detail\n2. next\n"
     _written(route, markdown)
-    route.ok("edit", old_text="child\n", new_text="")
-    got = _read(route)
-    assert "child" not in got and "parent detail" in got
+    _refused(route, "edit", "list's structure", old_text="child\n", new_text="")
+    route.ok("write", text="1. parent\n\n   parent detail\n2. next\n")
 
 
 def test_f6_04_an_empty_block_before_a_gdoc_line_is_body(route):
