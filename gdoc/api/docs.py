@@ -3738,6 +3738,7 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
              for p, start, _ in native if p.get("bullet")]
     level = min(item_level for item_level, _ in items)
     home = containers(min(start for _, start in items))
+    blank = False
     for element in content:
         start = element.get("startIndex", 0)
         if start < match["endIndex"] or not (
@@ -3752,12 +3753,15 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
                 and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
                 and not (style.get("borderBottom") or {}).get("width", {}).get(
                     "magnitude")):
-            continue  # a plain blank line
+            blank = True  # a plain blank line
+            continue
         if bullet:
             return not (bullet.get("nestingLevel", 0) <= level
                         and containers(start) == home)
-        # Top-level text ends the list; anything else may be the items'.
-        return bool(covering(start)) or _is_empty_paragraph(element)
+        # Top-level text after a blank line ends the list; without one it
+        # could read as the item's continuation. Anything else may be the
+        # items'.
+        return bool(covering(start)) or _is_empty_paragraph(element) or not blank
     return False
 
 

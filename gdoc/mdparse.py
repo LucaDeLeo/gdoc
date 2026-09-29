@@ -1171,6 +1171,24 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             fence = fence_m.group(1)
             fence_char = fence[0]
             code_start = offset
+            opened_at = i
+
+            def closes(later):
+                found = _FENCE_CLOSE_RE.match(
+                    _strip_path(later, path, lenient=True).lstrip(" "))
+                return bool(found and found.group(1)[0] == fence_char
+                            and len(found.group(1)) >= len(fence))
+
+            if path and not any(closes(later) for later in lines[i + 1:]):
+                # Inside a list item or quote, an unclosed fence would take in
+                # every later block; refuse instead.
+                from gdoc.util import GdocError
+
+                raise GdocError(
+                    f"line {opened_at + 1} opens a code block inside a list item "
+                    "or quote that is never closed. Close it with a matching "
+                    "fence line. Nothing was sent.", exit_code=3,
+                )
             i += 1
             while i < len(lines):
                 code_line = _strip_path(lines[i], path, lenient=True)

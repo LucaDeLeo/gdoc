@@ -187,6 +187,7 @@ def _orphans_item_content(doc, body, i, j):
 
     level = min(item_level for item_level, _ in items)
     home = containers(min(start for _, start in items))
+    blank = False
     for kind, text, start, _, paragraph in body[j + 1:]:
         if kind == "t":
             return True
@@ -196,11 +197,12 @@ def _orphans_item_content(doc, body, i, j):
                 and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
                 and not (style.get("borderBottom") or {}).get("width", {}).get(
                     "magnitude")):
+            blank = True
             continue
         if bullet:
             return not (bullet.get("nestingLevel", 0) <= level
                         and containers(start) == home)
-        return bool(covering(start)) or not text
+        return bool(covering(start)) or not text or not blank
     return False
 
 

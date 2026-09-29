@@ -201,3 +201,18 @@ def test_f7b_any_other_number_is_refused(route, inserted):
     _refused(route, "insert", "list's structure", text=inserted, tab="t.0",
              position="end")
     route.ok("write", text="1. a\n2. b\n" + inserted)
+
+
+# Round-4 repro rerun at 7ac21a8: the two remaining defects.
+
+def test_an_unclosed_fence_in_an_item_is_refused(route):
+    _written(route, "Alpha.\n")
+    _refused(route, "write", "never closed",
+             text="1. a\n\n   ```\n   x\n2. b\n\n## H\n\nprose\n")
+    route.ok("write", text="1. a\n\n   ```\n   x\n   ```\n2. b\n\n## H\n\nprose\n")
+
+
+def test_deleting_an_item_before_unseparated_text_is_refused(route):
+    _written(route, "- parent\n  1. DELETE\nDETAIL\n- next\n")
+    _refused(route, "edit", "list's structure", old_text="DELETE\n", new_text="")
+    route.ok("write", text="- parent\nDETAIL\n- next\n")
