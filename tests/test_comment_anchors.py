@@ -572,6 +572,22 @@ class TestQuoteFallback:
         result = annotate_markdown(md, [_comment("c1", "target")])
         assert _annotation_line(result, "c1") == 1
 
+    @pytest.mark.parametrize("anchors", [None, {}], ids=["no-live", "no-entry"])
+    def test_quote_repeated_in_a_footnote_is_ambiguous(self, anchors):
+        md = (
+            "Repeated claim in body.[^1]\n\n"
+            "[^1]: Repeated claim in footnote.\n"
+        )
+        result = annotate_markdown(
+            md, [_comment("c1", "Repeated claim")], anchors=anchors,
+        )
+        assert "[#c1 open] [quoted text ambiguous]" in result
+
+    def test_quote_only_in_a_footnote_is_placed_there(self):
+        md = "Body text.[^1]\n\n[^1]: Only the footnote says this.\n"
+        result = annotate_markdown(md, [_comment("c1", "footnote says")])
+        assert _annotation_line(result, "c1") == 3
+
     def test_quote_not_found_is_not_called_deleted(self):
         result = annotate_markdown(EDITS_MD, EDITS_COMMENTS)
         assert (

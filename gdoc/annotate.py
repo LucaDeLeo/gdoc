@@ -78,11 +78,11 @@ def _find_all(text: str, key: str) -> list[int]:
 
 
 # Markdown that isn't visible text: a code fence (keeps its contents), a
-# list marker, an escape (keeps the escaped char), an
-# HTML entity (keeps the decoded char), a code span (keeps its contents),
-# an image, a link (keeps its label), a reference definition line, a
-# footnote reference, or an emphasis marker. Underscores inside a word
-# are literal, as in CommonMark.
+# list marker, an escape (keeps the escaped char), an HTML entity (keeps
+# the decoded char), a code span (keeps its contents), an image, a link
+# (keeps its label), a footnote definition (see _visible_text), a
+# reference definition line, a footnote reference, or an emphasis marker.
+# Underscores inside a word are literal, as in CommonMark.
 _MARKUP = re.compile(
     r"^(?P<fence>```|~~~)[^\n]*\n(?P<block>(?s:.*?))^(?P=fence)[^\n]*$"
     r"|^[ \t]*(?:\d+[.)]|[-*+])[ \t]+"
@@ -91,6 +91,7 @@ _MARKUP = re.compile(
     r"|(?P<ticks>`+)(?P<code>.+?)(?P=ticks)"
     r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
     r"|\[(?P<label>(?:\\.|[^\]\\])*)\]\([^)]*\)"
+    r"|^(?P<footnote>\[\^[^\]]+\]:)[^\n]*$"
     r"|^\[[^\]]+\]:[^\n]*$"
     r"|\[\^[^\]]+\]"
     r"|\*+|~~|(?<!\w)_+|_+(?!\w)",
@@ -98,8 +99,15 @@ _MARKUP = re.compile(
 )
 
 
-def _visible_text(markdown: str) -> tuple[str, array]:
-    """The markdown's visible text, and each char's index in *markdown*."""
+def _visible_text(
+    markdown: str, footnotes: bool = False,
+) -> tuple[str, array]:
+    """The markdown's visible text, and each char's index in *markdown*.
+
+    Footnote definitions are dropped unless *footnotes* is set: live
+    anchors are counted against the document body, which doesn't hold
+    footnote text, while a quote search must see every copy of the quote.
+    """
     chars: list[str] = []
     where = array("q")  # one compact int per char
 
@@ -123,6 +131,8 @@ def _visible_text(markdown: str) -> tuple[str, array]:
                 keep(m.start("code"), m.end("code"))
             elif m["label"] is not None:
                 scan(m.start("label"), m.end("label"))
+            elif m["footnote"] is not None and footnotes:
+                scan(m.end("footnote"), m.end())
             pos = m.end()
         keep(pos, end)
 
@@ -200,7 +210,8 @@ def annotate_markdown(
             (c, anchor_text, note),
         )
 
-    visible = None  # built on first use
+    visible = None  # built on first use, for live anchors
+    visible_all = None  # with footnote text, for quote searches
     for c in comments:
         if c.get("id") in anchors:
             live = anchors[c["id"]]
@@ -230,9 +241,9 @@ def annotate_markdown(
 
         # Searched in the visible text, like live anchors, so a copy inside
         # a link target can't stand in for text split by formatting.
-        if visible is None:
-            visible = _visible_text(markdown)
-        text, where = visible
+        if visible_all is None:
+            visible_all = _visible_text(markdown, footnotes=True)
+        text, where = visible_all
         starts = _find_all(text, anchor_text)
         if not starts:
             unanchored.append((c, "quoted text not found (edited or detached)"))
