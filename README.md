@@ -438,11 +438,11 @@ Comments are placed from their live anchors: the text each comment covers now, a
 With `--json`, `"anchors"` says where the labels came from:
 
 - `"live"`: live anchors, with comments placed on their lines.
-- `"live_no_locations"`: live anchors for `[detached]` status, but no lines, because the document kept changing during the read (or its version couldn't be read). The status comes from a read just before the text shown, so it may miss an edit made in between.
+- `"live_no_locations"`: live anchors for `[detached]` status, but no lines, because the document or its comments kept changing during the read (or its version couldn't be read). The status comes from a read just before the text shown, so it may miss an edit made in between.
 - `"quoted_text"`: live anchors couldn't be read (see below).
 - `"none"`: there were no comments, so nothing was read.
 
-When live anchors can't be read (no preview access, no comment access on the document, or the request fails), gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment.
+When live anchors can't be read (no preview access, no comment access on the document, or the request fails), gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment. If comments keep being added or removed during the read, a `WARN` says so and no comment is placed.
 
 ## Revision history & diffs
 

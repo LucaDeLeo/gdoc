@@ -258,29 +258,36 @@ def cmd_revisions(args) -> int:
 
 
 def _export_with_anchors(
-    doc_id: str, want_anchors: bool,
-) -> tuple[str, dict | None, str]:
-    """The markdown export and the live comment anchors from one version.
+    doc_id: str, read_comments,
+) -> tuple[list[dict], str, dict | None, str]:
+    """The comments, markdown export and live comment anchors from one version.
 
     Live anchors show whether each comment is still attached; Drive's
     quoted text alone can't (it never changes after an edit). Anchors are
     placed by counting occurrences of their text, so they must come from
     the version that was exported: the Drive file version (visible to any
-    reader) is checked before and after, and the pair re-read once if it
-    changed. If it keeps changing, or can't be confirmed, comments keep
-    their attached/detached status but lose their line.
+    reader) is checked before and after. The comments are listed again
+    after the export, so one added, removed or resolved during the read
+    is caught too (Drive's file version doesn't reliably track comments).
+    If either changed, the whole read is repeated once. If it keeps
+    changing, or can't be confirmed, comments keep their attached/detached
+    status but lose their line.
 
-    Returns (markdown, anchors, source). *source* says where comment
-    labels come from, and is reported as ``anchors`` in ``--json``:
+    *read_comments* lists the comments; it is called at least twice.
+
+    Returns (comments, markdown, anchors, source). *source* says where
+    comment labels come from, and is reported as ``anchors`` in ``--json``:
 
     - ``live``: live anchors, with line placement.
     - ``live_no_locations``: live anchors for attached/detached status,
-      but no line placement (the version kept changing or couldn't be read).
-      That status is from the last anchor read, just before the export, so
-      it may miss an edit made between the two.
+      but no line placement (the version or the comments kept changing,
+      or the version couldn't be read). That status is from the last
+      anchor read, just before the export, so it may miss an edit made
+      between the two. Comments without a live anchor are unplaced too.
     - ``quoted_text``: anchors couldn't be read (anchors None); the caller
-      places comments by quoted text.
-    - ``none``: *want_anchors* is False (no comments), nothing was read.
+      places comments by quoted text. If the comments kept changing,
+      their quotes are dropped so none is placed.
+    - ``none``: there are no comments, nothing else was read.
     """
     from google.auth.exceptions import TransportError
     from httplib2 import HttpLib2Error
@@ -288,10 +295,6 @@ def _export_with_anchors(
     from gdoc.api.docs import get_comment_anchors
     from gdoc.api.drive import export_doc, get_file_version
     from gdoc.util import AuthError, PreviewUnavailableError
-
-    if not want_anchors:
-        # No comments, nothing to place: skip the full-document read.
-        return export_doc(doc_id, mime_type="text/markdown"), {}, "none"
 
     def version():
         try:
@@ -301,36 +304,71 @@ def _export_with_anchors(
         except (GdocError, HttpLib2Error, TransportError, OSError):
             return None
 
+    def ids(comments):
+        return sorted(str(c.get("id")) for c in comments)
+
+    comments_changed = "comments changed while the document was being read"
     problem = "the document changed while it was being read"
+    comments = read_comments()
+    anchors: dict | None = {}
+    warned = False
     for _attempt in range(2):
+        if not comments:
+            # No comments, nothing to place: skip the anchor read.
+            markdown = export_doc(doc_id, mime_type="text/markdown")
+            latest = read_comments()
+            if not latest:
+                return latest, markdown, {}, "none"
+            comments, problem = latest, comments_changed
+            continue
         before = version()
         try:
             anchors = get_comment_anchors(doc_id)
         except PreviewUnavailableError as e:
-            print(
-                f"WARN: live comment anchors unavailable ({e}); comments "
-                "are placed where their quoted text occurs, which does not "
-                "show whether they are still attached",
-                file=sys.stderr,
-            )
-            return (
-                export_doc(doc_id, mime_type="text/markdown"), None,
-                "quoted_text",
-            )
+            if not warned:
+                print(
+                    f"WARN: live comment anchors unavailable ({e}); comments "
+                    "are placed where their quoted text occurs, which does "
+                    "not show whether they are still attached",
+                    file=sys.stderr,
+                )
+                warned = True
+            anchors = None
         markdown = export_doc(doc_id, mime_type="text/markdown")
-        after = version()
+        after = version() if anchors is not None else None
+        latest = read_comments()
+        if ids(latest) != ids(comments):
+            comments, problem = latest, comments_changed
+            continue
+        comments = latest
+        if anchors is None:
+            return comments, markdown, None, "quoted_text"
         if before is None or after is None:
             problem = "could not confirm the document's version"
             break
         if before == after:
-            return markdown, anchors, "live"
+            return comments, markdown, anchors, "live"
+        problem = "the document changed while it was being read"
+    # Unsettled: list every comment without a location. A comment with no
+    # live anchor would otherwise be placed by a quote from another read.
+    unplaced = [
+        c if anchors is not None and c.get("id") in anchors
+        else {k: v for k, v in c.items() if k != "quotedFileContent"}
+        for c in comments
+    ]
+    if anchors is None:
+        print(
+            f"WARN: {problem}; comments are listed without a location",
+            file=sys.stderr,
+        )
+        return unplaced, markdown, None, "quoted_text"
     print(
         f"WARN: {problem}; comments are listed without a location, and "
         "their attached/detached status comes from a read just before the "
         "text shown, so an edit in between may not be reflected",
         file=sys.stderr,
     )
-    return markdown, {
+    return unplaced, markdown, {
         cid: None if live is None else {**live, "occurrences": 0}
         for cid, live in anchors.items()
     }, "live_no_locations"
@@ -467,13 +505,13 @@ def cmd_cat(args) -> int:
         # Annotated view: line-numbered content + inline comment annotations
         from gdoc.api.comments import list_comments
         include_resolved = getattr(args, "all", False)
-        comments = list_comments(
+        comments, markdown, anchors, source = _export_with_anchors(
             doc_id,
-            include_resolved=include_resolved,
-            include_anchor=True,
-        )
-        markdown, anchors, source = _export_with_anchors(
-            doc_id, bool(comments),
+            lambda: list_comments(
+                doc_id,
+                include_resolved=include_resolved,
+                include_anchor=True,
+            ),
         )
 
         if no_images:

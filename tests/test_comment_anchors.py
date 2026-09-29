@@ -977,6 +977,145 @@ class TestCatOutput:
         assert data["anchors"] == "quoted_text"
 
 
+# A comment on "untouched comment" with no live anchor (created through the
+# Drive API with only a quote): placed by its quote whenever it is listed.
+_QUOTE_ONLY = _comment("quoteonly", "untouched comment")
+
+
+class TestCommentSetChanges:
+    """Comments listed before the anchor/export read are listed again
+    after it; a different set repeats the whole read."""
+
+    @staticmethod
+    def _lists(monkeypatch, *values):
+        """list_comments results in turn; returns the call counts."""
+        seq = iter(values)
+        calls = {"list": 0, "anchors": 0, "export": 0}
+
+        def list_comments(*a, **k):
+            calls["list"] += 1
+            return next(seq)
+
+        anchors = _anchors(EDITS_DOC)
+
+        def get_comment_anchors(doc_id):
+            calls["anchors"] += 1
+            return anchors
+
+        def export_doc(doc_id, mime_type):
+            calls["export"] += 1
+            return EDITS_MD
+
+        monkeypatch.setattr("gdoc.api.comments.list_comments", list_comments)
+        monkeypatch.setattr(
+            "gdoc.api.docs.get_comment_anchors", get_comment_anchors,
+        )
+        monkeypatch.setattr("gdoc.api.drive.export_doc", export_doc)
+        return calls
+
+    def test_stable_set_is_listed_once_more_and_not_retried(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        calls = self._lists(monkeypatch, EDITS_COMMENTS, EDITS_COMMENTS)
+        assert cmd_cat(_cat_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert json.loads(captured.out)["anchors"] == "live"
+        assert calls == {"list": 2, "anchors": 1, "export": 1}
+
+    def test_comment_added_between_reads_is_shown(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        added = EDITS_COMMENTS + [_QUOTE_ONLY]
+        calls = self._lists(monkeypatch, EDITS_COMMENTS, added, added)
+        assert cmd_cat(_cat_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        data = json.loads(captured.out)
+        assert data["anchors"] == "live"
+        assert _annotation_line(data["content"], "quoteonly") == 7
+        assert calls == {"list": 3, "anchors": 2, "export": 2}
+
+    def test_comment_deleted_between_reads_is_not_placed(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        """Deleted before the anchor read, so it has no live anchor; its
+        stale quote must not place it."""
+        before = EDITS_COMMENTS + [_QUOTE_ONLY]
+        calls = self._lists(
+            monkeypatch, before, EDITS_COMMENTS, EDITS_COMMENTS,
+        )
+        assert cmd_cat(_cat_args()) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert "#quoteonly" not in captured.out
+        assert calls == {"list": 3, "anchors": 2, "export": 2}
+
+    def test_comment_deleted_between_reads_without_preview(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        """The quoted-text fallback re-lists too."""
+        before = EDITS_COMMENTS + [_QUOTE_ONLY]
+        calls = self._lists(
+            monkeypatch, before, EDITS_COMMENTS, EDITS_COMMENTS,
+        )
+        _no_preview(monkeypatch)
+        assert cmd_cat(_cat_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert captured.err.count("WARN") == 1
+        data = json.loads(captured.out)
+        assert data["anchors"] == "quoted_text"
+        assert "#quoteonly" not in data["content"]
+        assert calls["list"] == 3 and calls["export"] == 2
+
+    def test_comment_added_to_a_doc_with_none_is_shown(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        calls = self._lists(monkeypatch, [], EDITS_COMMENTS, EDITS_COMMENTS)
+        assert cmd_cat(_cat_args(json=True)) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["anchors"] == "live"
+        assert _annotation_line(data["content"], "reword") == 1
+        assert calls == {"list": 3, "anchors": 1, "export": 2}
+
+    def test_set_that_keeps_changing_places_nothing(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        added = EDITS_COMMENTS + [_QUOTE_ONLY]
+        calls = self._lists(
+            monkeypatch, EDITS_COMMENTS, EDITS_COMMENTS[1:], added,
+        )
+        assert cmd_cat(_cat_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert "WARN: comments changed while the document was being read" in (
+            captured.err
+        )
+        data = json.loads(captured.out)
+        assert data["anchors"] == "live_no_locations"
+        # The latest set, none on a line.
+        assert _annotation_line(data["content"], "quoteonly") is None
+        assert _annotation_line(data["content"], "control") is None
+        assert "[#control open] [attached, location not found]" in (
+            data["content"]
+        )
+        assert calls == {"list": 3, "anchors": 2, "export": 2}
+
+    def test_set_that_keeps_changing_without_preview_places_nothing(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        added = EDITS_COMMENTS + [_QUOTE_ONLY]
+        self._lists(monkeypatch, EDITS_COMMENTS, EDITS_COMMENTS[1:], added)
+        _no_preview(monkeypatch)
+        assert cmd_cat(_cat_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert "WARN: comments changed" in captured.err
+        data = json.loads(captured.out)
+        assert data["anchors"] == "quoted_text"
+        assert _annotation_line(data["content"], "quoteonly") is None
+        assert _annotation_line(data["content"], "control") is None
+        assert "quoted text found" not in data["content"]
+
+
 class TestMcp:
     def test_same_output_as_the_cli(self, edited_doc, capsys):
         cmd_cat(_cat_args())

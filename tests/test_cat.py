@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
@@ -109,9 +109,10 @@ class TestCatComments:
         args = _make_args(comments=True, quiet=True)
         rc = cmd_cat(args)
         assert rc == 0
-        mock_list.assert_called_once_with(
+        # Listed before and after the export, to catch a change between.
+        assert mock_list.call_args_list == [call(
             "abc123", include_resolved=False, include_anchor=True,
-        )
+        )] * 2
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -125,9 +126,10 @@ class TestCatComments:
         args = _make_args(comments=True, quiet=True, **{"all": True})
         rc = cmd_cat(args)
         assert rc == 0
-        mock_list.assert_called_once_with(
+        # Listed before and after the export, to catch a change between.
+        assert mock_list.call_args_list == [call(
             "abc123", include_resolved=True, include_anchor=True,
-        )
+        )] * 2
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
