@@ -3729,10 +3729,36 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
     if not columns:
         return False
     level = min(levels)
-    parent = next((e for e in reversed(list(_flat_paragraphs(content)))
-                   if e.get("endIndex", 0) <= native[0][1]
-                   and (e["paragraph"].get("bullet") or {}).get(
-                       "nestingLevel", -1) == level - 1), None) if level else None
+    ranges = [(path, spans) for _, name, spans in _owned_named_ranges(tab, tab_id)
+              if (path := _parse_prefix_range_name(name))]
+
+    def containers(element):
+        start = element.get("startIndex", 0)
+        return frozenset(path for path, spans in ranges
+                         if any(a <= start < b for a, b in spans))
+
+    # The parent is the nearest earlier item one level up in the same list
+    # context: the walk stops at anything that ends the list.
+    home = containers({"startIndex": native[0][1]})
+    parent = None
+    for element in reversed([e for e in content if "paragraph" in e or "table" in e]):
+        if element.get("endIndex", 0) > native[0][1] or not level:
+            continue
+        if "table" in element:
+            break
+        if _is_empty_paragraph(element):
+            continue
+        found = (element["paragraph"].get("bullet") or {})
+        where = containers(element)
+        if not found:
+            if any(isinstance(step, int) for path in where for step in path):
+                continue  # item content of an earlier item
+            break
+        if where != home or found.get("nestingLevel", 0) < level - 1:
+            break
+        if found.get("nestingLevel", 0) == level - 1:
+            parent = element
+            break
     if parent is None:
         return True
     pbullet = parent["paragraph"]["bullet"]

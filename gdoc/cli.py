@@ -2021,7 +2021,7 @@ def _old_style_matches(doc_id: str, body: str, tab: str | None = None) -> bool:
     try:
         target = resolve_tab(tabs, tab) if tab else (tabs[0] if tabs else None)
     except GdocError:
-        target = None
+        return False  # A named tab that doesn't resolve matches nothing.
     if target and get_tab_text(target, markdown=True).strip() == body.strip():
         return True
     if tab and target is not (tabs[0] if tabs else None) and len(tabs) > 1:

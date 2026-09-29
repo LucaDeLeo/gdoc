@@ -168,3 +168,20 @@ def test_f6b_02_old_style_match_compares_the_target_tab(monkeypatch):
     assert not cli._old_style_matches("doc", "Alpha.\n", "t.1")
     assert not cli._old_style_matches("doc", "Alpha.\n", "Other")
     assert cli._old_style_matches("doc", "Different.\n", "Other")
+
+
+def test_f6c_01_a_parent_must_be_in_the_same_list_context(route):
+    outer = "".join(f"{k}. outer {k}\n" for k in range(1, 11))
+    _written(route, outer + "\n>   - child\n>\n>     detail\n>   - next\n")
+    _refused(route, "edit", "list's structure", old_text="child\n", new_text="")
+
+
+def test_f6c_02_a_missing_target_tab_matches_nothing(monkeypatch):
+    from gdoc import cli
+    from tests.native_model import NativeDoc
+
+    monkeypatch.setattr("gdoc.api.docs.get_document_with_tabs", lambda *_: {
+        "tabs": [{"tabProperties": {"tabId": "t.0", "title": "Main"},
+                  "documentTab": NativeDoc(("p", "Alpha.")).document_tab("t.0")}]})
+    monkeypatch.setattr("gdoc.api.drive.export_doc", lambda *a, **k: "Alpha.\n")
+    assert not cli._old_style_matches("doc", "Alpha.\n", "Missing")
