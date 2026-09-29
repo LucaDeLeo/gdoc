@@ -15,6 +15,7 @@ from gdoc.util import (
     AuthError,
     GdocError,
     PreviewUnavailableError,
+    find_overlapping,
     fold_typography,
 )
 
@@ -2189,11 +2190,7 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     full_text = "".join(text_parts)
 
     def find_all(key: str) -> list[int]:
-        starts, pos = [], full_text.find(key)
-        while pos != -1:
-            starts.append(pos)
-            pos = full_text.find(key, pos + 1)
-        return starts
+        return list(find_overlapping(full_text, key))
 
     anchors: dict[str, dict | None] = {}
     for comment in document.get("comments", []):

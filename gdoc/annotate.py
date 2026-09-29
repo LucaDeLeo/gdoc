@@ -5,6 +5,8 @@ import re
 from array import array
 from bisect import bisect_left, bisect_right
 
+from gdoc.util import find_overlapping
+
 
 def _format_author(author_dict: dict) -> str:
     """Format author for display: prefer email, fallback to name."""
@@ -71,11 +73,7 @@ def _format_annotation_block(
 
 
 def _find_all(text: str, key: str) -> list[int]:
-    starts, pos = [], text.find(key)
-    while pos != -1:
-        starts.append(pos)
-        pos = text.find(key, pos + 1)
-    return starts
+    return list(find_overlapping(text, key))
 
 
 # Chars that never start markup; a run of them is kept in one step.
@@ -84,6 +82,12 @@ _LIST_MARKER = re.compile(r"[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
 _ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);")
 _FOOTNOTE_DEF = re.compile(r"\[\^[^\]\n]+\]:")
 _REFERENCE_DEF = re.compile(r"\[[^\]\n]+\]:")
+
+
+def _inside(ranges: list[tuple[int, int]], k: int) -> bool:
+    """Whether *k* falls in one of the sorted, disjoint (start, end) ranges."""
+    idx = bisect_right(ranges, (k, float("inf"))) - 1
+    return idx >= 0 and ranges[idx][0] <= k < ranges[idx][1]
 
 
 def _is_word(ch: str) -> bool:
@@ -115,41 +119,8 @@ def _visible_text(
     chars: list[str] = []
     where = array("q")  # one compact int per char
 
-    # Tables. A backtick run closes a code span only if it is maximal, and a
-    # backslash before it is literal inside the span, so runs are taken from
-    # the raw text. Escaped brackets and parentheses never open or close.
-    runs: dict[int, list[int]] = {}  # backtick run length -> run starts
-    for m in re.finditer(r"`+", md):
-        runs.setdefault(m.end() - m.start(), []).append(m.start())
-    close_bracket: dict[int, int] = {}
-    close_paren: dict[int, int] = {}
-    brackets: list[int] = []
-    parens: list[int] = []
-    escaped = -1  # position of the char after the latest escaping backslash
-    for m in re.finditer(r"[\\\[\]()]", md):
-        i = m.start()
-        if i == escaped:
-            continue
-        ch = md[i]
-        if ch == "\\":
-            escaped = i + 1
-        elif ch == "[":
-            brackets.append(i)
-        elif ch == "]" and brackets:
-            close_bracket[brackets.pop()] = i
-        elif ch == "(":
-            parens.append(i)
-        elif ch == ")" and parens:
-            close_paren[parens.pop()] = i
     newlines = [k for k, ch in enumerate(md) if ch == "\n"]
     blank_lines = [k for k in newlines if k + 1 < n and md[k + 1] == "\n"]
-    fence_lines = {
-        mark: [
-            k + 1 for k in [-1, *newlines]
-            if md.startswith(mark, k + 1)
-        ]
-        for mark in ("```", "~~~")
-    }
 
     def line_end(k: int) -> int:
         """Index of the newline ending the line holding *k* (or n)."""
@@ -162,6 +133,78 @@ def _visible_text(
     def no_blank_line(a: int, b: int) -> bool:
         idx = bisect_right(blank_lines, a)
         return idx == len(blank_lines) or blank_lines[idx] >= b
+
+    # Tables, in order of precedence: fenced blocks, then code spans, then
+    # brackets and parentheses outside both. Text inside a fence or a code
+    # span is literal, so its brackets never open or close a link.
+    literal: list[tuple[int, int]] = []  # (start, end) of fences and spans
+    fences: dict[int, int] = {}  # opening fence line -> closing fence line
+    fence_lines = sorted(
+        (k + 1, md[k + 1:k + 4]) for k in [-1, *newlines]
+        if md.startswith(("```", "~~~"), k + 1)
+    )
+    next_same: list[int | None] = [None] * len(fence_lines)
+    last: dict[str, int] = {}
+    for idx in range(len(fence_lines) - 1, -1, -1):
+        mark = fence_lines[idx][1]
+        next_same[idx] = last.get(mark)
+        last[mark] = fence_lines[idx][0]
+    after = -1
+    for idx, (line, _mark) in enumerate(fence_lines):
+        closer = next_same[idx]
+        if line <= after or closer is None:
+            continue
+        fences[line] = closer
+        after = line_end(closer)
+        literal.append((line, after))
+
+    # A code span opens on a backtick run and closes on the next maximal
+    # run of the same length on its line; a backslash before the opening
+    # run escapes one backtick, but a backslash inside the span is literal.
+    tick_runs = [
+        (m.start(), m.end()) for m in re.finditer(r"`+", md)
+        if not _inside(literal, m.start())
+    ]
+    runs: dict[int, list[int]] = {}  # backtick run length -> run starts
+    for a, b in tick_runs:
+        runs.setdefault(b - a, []).append(a)
+    spans: dict[int, int] = {}  # code span opening backtick -> closing run
+    after = -1
+    for a, b in tick_runs:
+        if a < after:
+            continue
+        slashes = a
+        while slashes > 0 and md[slashes - 1] == "\\":
+            slashes -= 1
+        opener = a + (a - slashes) % 2
+        same = runs.get(b - opener, [])
+        k = bisect_right(same, a)
+        if b > opener and k < len(same) and one_line(opener, same[k]):
+            spans[opener] = same[k]
+            after = same[k] + (b - opener)
+            literal.append((opener, after))
+    literal.sort()
+
+    close_bracket: dict[int, int] = {}
+    close_paren: dict[int, int] = {}
+    brackets: list[int] = []
+    parens: list[int] = []
+    escaped = -1  # position of the char after the latest escaping backslash
+    for m in re.finditer(r"[\\\[\]()]", md):
+        i = m.start()
+        if i == escaped or _inside(literal, i):
+            continue
+        ch = md[i]
+        if ch == "\\":
+            escaped = i + 1
+        elif ch == "[":
+            brackets.append(i)
+        elif ch == "]" and brackets:
+            close_bracket[brackets.pop()] = i
+        elif ch == "(":
+            parens.append(i)
+        elif ch == ")" and parens:
+            close_paren[parens.pop()] = i
 
     def target_end(k: int) -> int | None:
         """End of a (url) or [ref] target starting at *k*, or None."""
@@ -187,15 +230,10 @@ def _visible_text(
         ch = md[i]
         # Line-level markup counts only outside a link label.
         if not frames and (i == 0 or md[i - 1] == "\n"):
-            mark = md[i:i + 3]
-            if mark in fence_lines:
-                lines = fence_lines[mark]
-                k = bisect_right(lines, i)
-                if k < len(lines):
-                    body = line_end(i) + 1
-                    keep(body, lines[k])
-                    i = line_end(lines[k])
-                    continue
+            if i in fences:
+                keep(line_end(i) + 1, fences[i])
+                i = line_end(fences[i])
+                continue
             m = _LIST_MARKER.match(md, i)
             if m:
                 i = m.end()
@@ -223,10 +261,8 @@ def _visible_text(
             j = i
             while j < n and md[j] == "`":
                 j += 1
-            same = runs.get(j - i, [])
-            k = bisect_right(same, i)
-            closer = same[k] if k < len(same) else None
-            if closer is not None and closer < limit and one_line(i, closer):
+            closer = spans.get(i)
+            if closer is not None and closer < limit:
                 keep(j, closer)
                 i = closer + (j - i)
             else:
@@ -329,11 +365,11 @@ def _place_quote(
     text, where = visible
     found: dict[int, str] = {}  # line index -> the reading found there
     for reading in readings:
-        start = text.find(reading)
-        while start != -1 and len(found) < 2:
+        for start in find_overlapping(text, reading):
             last = where[start + len(reading) - 1]
             found.setdefault(bisect_left(newlines, last), reading)
-            start = text.find(reading, start + 1)
+            if len(found) > 1:
+                break
     if not found:
         return "quoted text not found (edited or detached)", None, raw
     if len(found) > 1:

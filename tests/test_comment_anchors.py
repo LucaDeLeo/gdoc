@@ -584,6 +584,30 @@ class TestProbeScenarios:
             result = annotate_markdown(md, [comment], anchors=anchors)
             assert _annotation_line(result, "c1") == 2
 
+    def test_brackets_inside_code_spans_do_not_break_links(self):
+        md = (
+            "[Use `[` here](https://a)!\n"
+            "[Use `[` too](https://b/here!)\n"
+        )
+        from gdoc.annotate import _visible_text
+
+        assert _visible_text(md)[0] == "Use [ here!\nUse [ too\n"
+        live = {"c1": {"text": "here!", "key": "here!",
+                       "occurrence": 0, "occurrences": 1}}
+        comment = _comment("c1", "here!")
+        comment["quotedFileContent"]["mimeType"] = "text/plain"
+        for anchors in (live, None):
+            result = annotate_markdown(md, [comment], anchors=anchors)
+            assert _annotation_line(result, "c1") == 1
+
+    def test_long_repetitive_quote_is_fast(self):
+        import time
+
+        start = time.perf_counter()
+        result = annotate_markdown("a" * 80000 + "\n", [_comment("c1", "a" * 40000)])
+        assert time.perf_counter() - start < 1.0
+        assert _annotation_line(result, "c1") == 1
+
     def test_visible_text_is_built_once_per_call(self):
         from gdoc import annotate
 

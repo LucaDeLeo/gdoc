@@ -154,3 +154,29 @@ class TestFoldTypography:
         from gdoc.util import fold_typography
 
         assert fold_typography("plain 'text' - ok") == "plain 'text' - ok"
+
+
+class TestFindOverlapping:
+    def test_matches_a_brute_force_search(self):
+        import random
+
+        from gdoc.util import find_overlapping
+
+        def brute(text, key):
+            out, pos = [], text.find(key)
+            while pos != -1:
+                out.append(pos)
+                pos = text.find(key, pos + 1)
+            return out
+
+        rng = random.Random(0)
+        for _ in range(20000):
+            alphabet = rng.choice(["ab", "abc", "a", "aab"])
+            text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+            key = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 8)))
+            assert list(find_overlapping(text, key)) == brute(text, key)
+
+    def test_empty_key_yields_nothing(self):
+        from gdoc.util import find_overlapping
+
+        assert list(find_overlapping("abc", "")) == []
