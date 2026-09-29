@@ -15,9 +15,10 @@ All notable changes to `gdoc` are documented here. This project follows
   marker styles, paragraph spacing, heading IDs, comment anchors and
   bookmarks are kept, and nothing else in the tab is rewritten. The result
   is read back, with the moved items found by their text so edits elsewhere
-  in the tab do not matter; an item not at its planned level, list, marker
-  or paragraph style is reported as a warning with `"verified": false` (the
-  change is saved, exit 0).
+  in the tab do not matter; an item not at its planned level, list, marker,
+  paragraph style or indent, a blank line whose indent changed, or a
+  changed paragraph just before or after the moved items is reported as a
+  warning with `"verified": false` (the change is saved, exit 0).
   Refused before any write (exit 3):
   - ambiguous or missing text, non-list or in-table targets;
   - moves that would rebuild a list's first item, skip a level, or unnest past

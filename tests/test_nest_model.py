@@ -411,3 +411,79 @@ def test_command_end_to_end_verifies_its_own_result(command, text, delta):
     assert out.startswith(f"OK {command}ed ")
     i = _index(paras, text)
     assert doc.state() == expected(paras, i, i, delta)
+
+
+# -- the read-back catches each kind of wrong result -----------------------
+
+
+def _verify_after(paras, text, delta, mutate=None, post=None):
+    doc, plan = run(paras, NUM, text, delta, mutate=mutate)
+    if post:
+        post(doc)
+    return verify(doc.document_tab(), plan)
+
+
+def test_verify_passes_the_correct_result():
+    paras = [para("Intro"), para("Alpha", 0), para(""), para("Bravo", 0),
+             para("Outro")]
+    assert _verify_after(paras, "Bravo", 1) == (True, [])
+
+
+def test_verify_catches_a_wrong_level():
+    paras = [para("Alpha", 0), para("Bravo", 0), para("Charlie", 0)]
+    found, problems = _verify_after(paras, "Bravo", 1, mutate=_one_extra_tab)
+    assert found and "'Bravo' is at level 2, expected 1" in problems
+
+
+def _bullet_one_paragraph_too_far(requests):
+    out = copy.deepcopy(requests)
+    for r in out:
+        if "createParagraphBullets" in r:
+            r["createParagraphBullets"]["range"]["endIndex"] += 1
+    return out
+
+
+def test_verify_catches_a_neighbour_gaining_a_bullet():
+    paras = [para("Alpha", 0), para("Bravo", 0), para("Outro")]
+    found, problems = _verify_after(
+        paras, "Bravo", 1, mutate=_bullet_one_paragraph_too_far,
+    )
+    assert found and any("'Outro', next to the moved items, changed its bullet"
+                         in p for p in problems)
+
+
+def test_verify_catches_a_wrong_item_indent():
+    paras = [para("Alpha", 0), para("Bravo", 0), para("Charlie", 0)]
+
+    def indent_bravo(doc):
+        doc.paras[1]["indent"] = 360.0
+
+    found, problems = _verify_after(paras, "Bravo", 1, post=indent_bravo)
+    assert found and "'Bravo' does not have its level's standard indent" in problems
+
+
+def _keep_blank_indent_zeroed(requests):
+    return [r for r in requests if not (
+        "updateParagraphStyle" in r
+        and r["updateParagraphStyle"]["paragraphStyle"] == {}
+    )]
+
+
+def test_verify_catches_a_blank_line_indent_that_was_not_restored():
+    paras = [para("Alpha", 0), para(""), para("Bravo", 0)]
+    found, problems = _verify_after(
+        paras, "Bravo", 1, mutate=_keep_blank_indent_zeroed,
+    )
+    assert found and "a blank line between items changed its indent" in problems
+
+
+def _keep_temporary_paragraph(requests):
+    return [r for r in requests if "deleteContentRange" not in r]
+
+
+def test_verify_catches_leftover_text():
+    paras = [para("Alpha", 0), para("Bravo", 0), para("Charlie", 0)]
+    found, problems = _verify_after(
+        paras, "Bravo", 1, mutate=_keep_temporary_paragraph,
+    )
+    assert not found and "could not be found by their text" in problems[0]

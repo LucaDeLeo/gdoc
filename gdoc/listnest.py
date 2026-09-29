@@ -113,6 +113,24 @@ def _in_list(el: dict, list_id: str) -> bool:
     return (_bullet(el) or {}).get("listId") == list_id
 
 
+def _indent(el: dict) -> tuple:
+    """A paragraph's own (indentStart, indentFirstLine), None when inherited."""
+    style = (_paragraph(el) or {}).get("paragraphStyle", {})
+    return tuple(
+        (style.get(k) or {}).get("magnitude", 0) if k in style else None
+        for k in ("indentStart", "indentFirstLine")
+    )
+
+
+def _state(el: dict) -> tuple:
+    """Bullet (list and level) and full paragraph style of a paragraph."""
+    bullet = _bullet(el)
+    return (
+        (bullet.get("listId"), bullet.get("nestingLevel", 0)) if bullet else None,
+        (_paragraph(el) or {}).get("paragraphStyle", {}),
+    )
+
+
 def _custom_indent(el: dict, lists: dict) -> bool:
     """Whether a list item's own indent differs from its level's standard.
 
@@ -319,6 +337,11 @@ class NestPlan:
     texts: dict[int, str] = field(default_factory=dict)
     original: dict[int, int] = field(default_factory=dict)
     styles: dict[int, dict] = field(default_factory=dict)
+    # Pre-write indents of rebuilt items and blank lines, and the full
+    # bullet and paragraph style of the paragraphs just before and after
+    # the rebuilt range, which the batch must leave alone.
+    indents: dict[int, tuple] = field(default_factory=dict)
+    neighbours: dict[int, tuple] = field(default_factory=dict)
 
 
 def plan_nesting(
@@ -594,15 +617,21 @@ def plan_nesting(
         }})
     requests.append({"deleteContentRange": {"range": rng(s0, s0 + 1)}})
 
+    after = [end + 1] if end + 1 < len(content) else []
     return NestPlan(
         requests=requests, list_id=list_id, moved=len(moved),
         expected={i: lvl for i, lvl in levels.items()}, blanks=blanks,
         markers={i: _marker_style(content[i]) for i in levels},
         # The item the window joins is fingerprinted too, so positions
         # are checked against their surroundings.
-        texts={i: _text(content[i]) for i in [start - 1, *levels, *blanks]},
+        texts={
+            i: _text(content[i])
+            for i in [start - 1, *levels, *blanks, *after]
+        },
         original={i: _level(content[i]) for i in levels},
         styles={i: _kept_style(content[i]) for i in levels},
+        indents={i: _indent(content[i]) for i in [*levels, *blanks]},
+        neighbours={i: _state(content[i]) for i in [start - 1, *after]},
     )
 
 
@@ -659,6 +688,10 @@ def is_unchanged(document_tab: dict, plan: NestPlan) -> bool:
             or _marker_style(el) != plan.markers.get(i, _marker_style(el))
         ):
             return False
+    if any(_indent(content[i + d]) != want for i, want in plan.indents.items()):
+        return False
+    if any(_state(content[i + d]) != want for i, want in plan.neighbours.items()):
+        return False
     return all(_bullet(content[i + d]) is None for i in plan.blanks)
 
 
@@ -699,9 +732,31 @@ def verify(document_tab: dict, plan: NestPlan) -> tuple[bool, list[str]]:
             problems.append(
                 f"{_label(el)} has a changed paragraph style ({', '.join(fields)})"
             )
+    lists = document_tab.get("lists", {})
+    for i in plan.expected:
+        el = content[i + d]
+        if _bullet(el) and _custom_indent(el, lists):
+            problems.append(
+                f"{_label(el)} does not have its level's standard indent"
+            )
     for i in plan.blanks:
-        if _bullet(content[i + d]) is not None:
+        el = content[i + d]
+        if _bullet(el) is not None:
             problems.append("a blank line between items kept a bullet")
+        elif _indent(el) != plan.indents.get(i, _indent(el)):
+            problems.append("a blank line between items changed its indent")
+    for i, (bullet, style) in plan.neighbours.items():
+        el = content[i + d]
+        now_bullet, now_style = _state(el)
+        if now_bullet != bullet:
+            problems.append(
+                f"{_label(el)}, next to the moved items, changed its bullet"
+            )
+        elif now_style != style:
+            problems.append(
+                f"{_label(el)}, next to the moved items, changed its "
+                "paragraph style"
+            )
     return True, problems
 
 

@@ -652,7 +652,8 @@ class TestCheckResult:
         # match, so neither is trusted, even the one at the old position.
         plan = _plan(_tab(*STD), "Bravo", 1)
         pasted = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 1, "num"),
-                      ("Alpha", 0, "num"), ("Bravo", 0, None), ("Charlie", 0, "num"))
+                      ("Charlie", 0, "num"), ("Alpha", 0, "num"), ("Bravo", 0, None),
+                      ("Charlie", 0, "num"))
         found, _ = verify(pasted, plan)
         assert not found
 
@@ -692,7 +693,8 @@ class TestCheckResult:
         plan = _plan(_tab(*STD), "Bravo", 1)
         stayed = _tab(*STD)
         assert "expected 1" in check_result(stayed, plan)[0]
-        split = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 1, "num2"))
+        split = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 1, "num2"),
+                     ("Charlie", 0, "num"))
         assert "another list" in check_result(split, plan)[0]
 
 
@@ -903,8 +905,24 @@ class TestCommand:
         from gdoc.api.docs import StaleRevisionError
 
         pasted = _tab(("Intro", 0, None), ("Alpha", 0, "num"), ("Bravo", 0, "num"),
-                      ("Alpha", 0, "num"), ("Bravo", 1, "num"), ("Charlie", 0, "num"))
+                      ("Charlie", 0, "num"), ("Alpha", 0, "num"), ("Bravo", 1, "num"),
+                      ("Charlie", 0, "num"))
         api.get.side_effect = [_doc(_tab(*STD)), _doc(pasted)]
+        api.write.side_effect = StaleRevisionError("document changed; re-run it")
+        with pytest.raises(GdocError, match="may already be applied") as exc:
+            cmd_nest(_args())
+        assert not isinstance(exc.value, StaleRevisionError)
+
+    def test_stale_revision_with_a_changed_indent_is_not_unchanged(self, api):
+        # Levels as before but an item's indent changed: not provably
+        # untouched, so no "re-run".
+        from gdoc.api.docs import StaleRevisionError
+
+        indented = _tab(("Intro", 0, None), ("Alpha", 0, "num"),
+                        ("Bravo", 0, "num", {"paragraphStyle": {
+                            "indentStart": {"magnitude": 360, "unit": "PT"}}}),
+                        ("Charlie", 0, "num"), ("Outro", 0, None))
+        api.get.side_effect = [_doc(_tab(*STD)), _doc(indented)]
         api.write.side_effect = StaleRevisionError("document changed; re-run it")
         with pytest.raises(GdocError, match="may already be applied") as exc:
             cmd_nest(_args())

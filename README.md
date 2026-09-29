@@ -636,7 +636,9 @@ rebuilds the moved items (and, when unnesting below a deeper sibling, that
 sibling) in one batch pinned to the revision it read (`requiredRevisionId`),
 so the items rejoin their own list at the new level. It then reads the tab
 back, finds the moved items by their text (so edits elsewhere in the tab do
-not matter), and checks each item's level, list, marker and paragraph style.
+not matter), and checks each item's level, list, marker, paragraph style and
+indent, each blank line's indent, and that the paragraphs just before and
+after the moved items are unchanged.
 The change is saved either way, so the command still exits 0; if the result
 is not as planned, or cannot be verified, it says so on stderr and reports
 `"verified": false` (`--plain`: `verified no`). Check the list then rather
