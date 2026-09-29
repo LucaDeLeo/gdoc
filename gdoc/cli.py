@@ -311,7 +311,7 @@ def _export_with_anchors(
     problem = "the document changed while it was being read"
     comments = read_comments()
     anchors: dict | None = {}
-    warned = False
+    preview_error = None
     for _attempt in range(2):
         if not comments:
             # No comments, nothing to place: skip the anchor read.
@@ -325,15 +325,8 @@ def _export_with_anchors(
         try:
             anchors = get_comment_anchors(doc_id)
         except PreviewUnavailableError as e:
-            if not warned:
-                print(
-                    f"WARN: live comment anchors unavailable ({e}); comments "
-                    "are placed where their quoted text occurs, which does "
-                    "not show whether they are still attached",
-                    file=sys.stderr,
-                )
-                warned = True
-            anchors = None
+            # Warned about once the result is known: a retry may recover.
+            preview_error, anchors = e, None
         markdown = export_doc(doc_id, mime_type="text/markdown")
         after = version() if anchors is not None else None
         latest = read_comments()
@@ -342,6 +335,12 @@ def _export_with_anchors(
             continue
         comments = latest
         if anchors is None:
+            print(
+                f"WARN: live comment anchors unavailable ({preview_error}); "
+                "comments are placed where their quoted text occurs, which "
+                "does not show whether they are still attached",
+                file=sys.stderr,
+            )
             return comments, markdown, None, "quoted_text"
         if before is None or after is None:
             problem = "could not confirm the document's version"
@@ -358,7 +357,8 @@ def _export_with_anchors(
     ]
     if anchors is None:
         print(
-            f"WARN: {problem}; comments are listed without a location",
+            f"WARN: live comment anchors unavailable ({preview_error}), and "
+            f"{problem}; comments are listed without a location",
             file=sys.stderr,
         )
         return unplaced, markdown, None, "quoted_text"

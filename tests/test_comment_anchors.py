@@ -1068,6 +1068,28 @@ class TestCommentSetChanges:
         assert "#quoteonly" not in data["content"]
         assert calls["list"] == 3 and calls["export"] == 2
 
+    def test_preview_that_recovers_on_the_retry_is_not_warned_about(
+        self, edited_doc, monkeypatch, capsys,
+    ):
+        added = EDITS_COMMENTS + [_QUOTE_ONLY]
+        self._lists(monkeypatch, EDITS_COMMENTS, added, added)
+        anchors = _anchors(EDITS_DOC)
+        results = iter([PreviewUnavailableError("flaky"), anchors])
+
+        def get_comment_anchors(doc_id):
+            result = next(results)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        monkeypatch.setattr(
+            "gdoc.api.docs.get_comment_anchors", get_comment_anchors,
+        )
+        assert cmd_cat(_cat_args(json=True)) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert json.loads(captured.out)["anchors"] == "live"
+
     def test_comment_added_to_a_doc_with_none_is_shown(
         self, edited_doc, monkeypatch, capsys,
     ):
@@ -1108,7 +1130,11 @@ class TestCommentSetChanges:
         _no_preview(monkeypatch)
         assert cmd_cat(_cat_args(json=True)) == 0
         captured = capsys.readouterr()
-        assert "WARN: comments changed" in captured.err
+        assert captured.err == (
+            "WARN: live comment anchors unavailable (not enrolled), and "
+            "comments changed while the document was being read; comments "
+            "are listed without a location\n"
+        )
         data = json.loads(captured.out)
         assert data["anchors"] == "quoted_text"
         assert _annotation_line(data["content"], "quoteonly") is None

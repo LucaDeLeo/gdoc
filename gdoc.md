@@ -102,8 +102,9 @@ source as `"anchors"`: `live`, `live_no_locations` (lines dropped; status from
 a read just before the text shown), `quoted_text`, or `none` (no
 comments). When live anchors can't be read (no preview access, no comment
 access, or the request fails), the CLI warns and places every comment by its
-quoted text instead. The labels then say what was matched, not whether the
-comment is attached: `[quoted text found]`, `[quoted text not found (edited or
+quoted text instead; if the comments also keep changing during the read, the
+warning says so and no comment is placed. The labels say what was matched,
+not whether the comment is attached: `[quoted text found]`, `[quoted text not found (edited or
 detached)]`, `[quoted text ambiguous]` or `[quoted text too short]`.
 
 ## Awareness System — "What Changed?"
