@@ -170,6 +170,10 @@ def test_r1_15_a_cell_writes_br_as_a_break(route):
     ("a\\<br>b", "a\\<br>b"),
     ("`<br>`", "`<br>`"),
     ("a<br>- b", "a<br>- b"),
+    ("a<br>___", "a<br>___"),
+    ("a<br>~~~<br>x<br>~~~", "a<br>~~~<br>x<br>~~~"),
+    ("a<br>[x]: https://example.com", "a<br>[x]: https://example.com"),
+    ("a<br>**bold** x", "a<br>**bold** x"),
 ])
 def test_f1_01_cell_breaks_follow_the_table_rules(route, new, cell):
     """Follow-up review F1-01: escaped and code `<br>` stay literal, and text

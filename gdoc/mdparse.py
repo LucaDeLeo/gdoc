@@ -249,11 +249,31 @@ def _code_spans(text: str) -> list[re.Match]:
 
 def cell_breaks(text: str) -> str:
     """Decode a cell's ``<br>`` line breaks as a pipe table cell does: not
-    escaped ones, not inside code spans. Each line after a break stays inline
-    text, so a leading block marker there is escaped."""
+    escaped ones, not inside code spans. A line after a break is inline cell
+    text, so one that would parse as a block construct on its own (a list
+    marker, rule, fence, heading, quote or reference definition) gets its
+    first character escaped."""
     def decode(chunk):
         return re.sub(r"\\.|<br>", lambda m: "\n" if m[0] == "<br>" else m[0],
                       chunk)
+
+    def inline(line):
+        indent = line[:len(line) - len(line.lstrip(" \t"))]
+        return indent + inline_text(line[len(indent):]) if indent else inline_text(line)
+
+    def inline_text(stripped):
+        parsed = parse_markdown(stripped)
+        plain, styles = parse_inline(stripped)
+        if (parsed.plain_text.rstrip("\n") == plain and not parsed.tables
+                and not parsed.code_blocks and all(
+                    s.type in ("text_style", "paragraph_style", "image")
+                    and s.style.get("namedStyleType", "NORMAL_TEXT")
+                    == "NORMAL_TEXT" for s in parsed.styles)):
+            return stripped
+        number = re.match(r"\d+(?=[.)])", stripped)
+        if number:
+            return stripped[:number.end()] + "\\" + stripped[number.end():]
+        return "\\" + stripped
 
     parts, cursor = [], 0
     for code in _code_spans(text):
@@ -262,10 +282,7 @@ def cell_breaks(text: str) -> str:
         cursor = code.end()
     parts.append(decode(text[cursor:]))
     lines = "".join(parts).split("\n")
-    return "\n".join([lines[0]] + [
-        re.sub(r"^(\s*\d+)([.)])", r"\1\\\2",
-               re.sub(r"^(\s*)([-*+>#])", r"\1\\\2", line))
-        for line in lines[1:]])
+    return "\n".join([lines[0]] + [inline(line) for line in lines[1:]])
 
 
 def _table_cells(line: str) -> list[str]:
