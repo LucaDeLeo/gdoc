@@ -78,9 +78,11 @@ def _find_all(text: str, key: str) -> list[int]:
 
 # Chars that never start markup; a run of them is kept in one step.
 _PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
-# A fence may sit inside quotes and list items: their markers and indents
-# come first. Code inside such a fence is literal too.
-_FENCE = re.compile(r"((?:[ \t]*>)*[ \t]{0,3})(`{3,}|~{3,})([^\n]*)")
+# A fence may sit inside quotes and list items: quote markers, then the
+# indent (up to 3 spaces past the enclosing list item's content column).
+# Code inside such a fence is literal too.
+_FENCE = re.compile(r"((?:[ \t]*>)*)([ \t]*)(`{3,}|~{3,})([^\n]*)")
+_QUOTED = re.compile(r"(?:[ \t]*>)*")
 _LIST_MARKER = re.compile(r"[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
 _ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);")
 _FOOTNOTE_DEF = re.compile(r"\[\^[^\]\n]+\]:")
@@ -146,12 +148,28 @@ def _visible_text(
     fences: dict[int, tuple[int | None, int]] = {}  # line -> (closer, indent)
     fenced: list[tuple[int, int]] = []  # (start, end) of each block
     opened: tuple[int, str, int, int] | None = None
+    items: list[int] = []  # content columns of the open list items
     for line in [0, *(k + 1 for k in newlines)]:
         m = _FENCE.match(md, line)
+        if opened is None and not m:
+            # Track list items (after any quote markers) for fence indents.
+            body = md[_QUOTED.match(md, line).end():line_end(line)]
+            if body.strip():
+                col = len(body) - len(body.lstrip(" "))
+                marker = _LIST_MARKER.match(body)
+                while items and items[-1] > col:
+                    items.pop()
+                if marker:
+                    items.append(marker.end())
+            continue
         if not m:
             continue
-        indent, run, rest = m.group(1), m.group(2), m.group(3)
+        spaces, run, rest = m.group(2), m.group(3), m.group(4)
+        indent = m.group(1) + spaces
         if opened is None:
+            base = items[-1] if items and items[-1] <= len(spaces) else 0
+            if len(spaces) - base > 3:
+                continue  # indented code, not a fence
             if not (run[0] == "`" and "`" in rest):
                 opened = (line, run[0], len(run), len(indent))
         elif (
@@ -505,9 +523,10 @@ def annotate_markdown(
         note, line_idx, anchor_text = _place_quote(newlines, visible_all, qfc)
         if other_tabs and note in ("quoted text found",
                                    "quoted text not found (edited or detached)"):
+            # Present elsewhere, once or more (ambiguous there too).
             elsewhere = any(
                 _place_quote(_newlines(other), _visible_text(other, footnotes=True),
-                             qfc)[1] is not None
+                             qfc)[0] in ("quoted text found", "quoted text ambiguous")
                 for other in other_tabs)
             if elsewhere:
                 note, line_idx = ("quoted text ambiguous" if line_idx is not None

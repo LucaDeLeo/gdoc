@@ -479,13 +479,24 @@ def cmd_cat(args) -> int:
         annotated = annotate_markdown(
             markdown, comments, show_resolved=include_resolved, anchors=anchors,
         )
-        annotated = _truncate_bytes(annotated, max_bytes)
+        total_bytes = len(annotated.encode("utf-8"))
+        displayed = _truncate_bytes(annotated, max_bytes)
+        truncated = displayed != annotated
 
         from gdoc.format import format_json, get_output_mode
         if get_output_mode(args) == "json":
-            print(format_json(content=annotated, anchors=source))
+            print(format_json(content=displayed, anchors=source, scope={
+                "complete": False, "truncated": truncated,
+                "total_bytes": total_bytes,
+            }))
         else:
-            print(annotated, end="")
+            print(displayed, end="")
+            if truncated:
+                print(
+                    f"NOTE: partial output ({len(displayed.encode('utf-8'))} of "
+                    f"{total_bytes} bytes). Use --max-bytes 0 for complete content.",
+                    file=sys.stderr,
+                )
 
         # An annotated view is not a complete read: it sets no baseline.
         from gdoc.state import update_state_after_command

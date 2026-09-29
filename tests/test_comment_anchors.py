@@ -872,6 +872,14 @@ class TestCatOutput:
         assert _annotation_line(data["content"], "join") == 5
         assert "[#replaced open] [detached]" in data["content"]
 
+    def test_truncation_is_reported(self, edited_doc, capsys):
+        """Merge of #72 with #77: a partial read says so, as other reads do."""
+        assert cmd_cat(_cat_args(json=True, max_bytes=20)) == 0
+        scope = json.loads(capsys.readouterr().out)["scope"]
+        assert scope["truncated"] is True and scope["total_bytes"] > 20
+        assert cmd_cat(_cat_args(max_bytes=20)) == 0
+        assert "NOTE: partial output" in capsys.readouterr().err
+
     def test_fallback_warns_and_labels(self, edited_doc, monkeypatch, capsys):
         _no_preview(monkeypatch)
         assert cmd_cat(_cat_args()) == 0
@@ -1163,3 +1171,35 @@ class TestMcp:
             "arguments": {"doc": "doc1", "comments": True, "quiet": True},
         })
         assert "live comment anchors unavailable" in result["content"][1]["text"]
+
+
+class TestMergedWithNativeReads:
+    """Merge of #72 with #77: the per-tab path and truncation reporting."""
+
+    def test_quote_ambiguous_in_another_tab_is_not_placed(self):
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "alpha"}}
+        others = ["alpha\n\nalpha\n"]
+        placed = annotate_markdown("alpha\n", [comment], other_tabs=others)
+        assert "[quoted text ambiguous]" in placed
+        absent = annotate_markdown("beta\n", [comment], other_tabs=others)
+        assert "[quoted text in another tab]" in absent
+
+    @pytest.mark.parametrize("markdown", [
+        "- parent\n  - child\n    ```\n    alpha *beta*\n    ```\n",
+        "1. parent\n   1. child\n      ```\n      alpha *beta*\n      ```\n",
+        "- a\n  - b\n    - c\n      ```\n      alpha *beta*\n      ```\n",
+    ])
+    def test_fences_in_nested_list_items_stay_code(self, markdown):
+        literal = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "alpha *beta*"}}
+        assert "[quoted text found]" in annotate_markdown(markdown, [literal])
+        prose = {"id": "c2", "content": "check",
+                 "quotedFileContent": {"value": "alpha beta"}}
+        assert "[quoted text not found" in annotate_markdown(markdown, [prose])
+
+    def test_top_level_four_space_indent_is_not_a_fence(self):
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "a b c"}}
+        assert "[quoted text found]" in annotate_markdown(
+            "    ```\na *b* c\n", [comment])
