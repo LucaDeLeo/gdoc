@@ -1,6 +1,7 @@
 """CLI parser, subcommand dispatch, and exception handler."""
 
 import argparse
+import io
 import os
 import sys
 from dataclasses import dataclass
@@ -1522,6 +1523,217 @@ def cmd_suggest(args) -> int:
             file=sys.stderr,
         )
     return 0
+
+
+def cmd_nest(args) -> int:
+    """Handler for `gdoc nest` and `gdoc unnest`.
+
+    Moves one list item, or a contiguous run of items (`--to`), with their
+    sub-items by `--levels` levels. The items are rebuilt in place in one
+    revision-pinned batch, so they stay in their native list (same list
+    ID, numbering and comment anchors) and nothing else in the tab is
+    rewritten. See gdoc/listnest.py for the method and what is refused.
+    """
+    doc_id = _resolve_doc_id(args.doc)
+    if args.levels < 1:
+        raise GdocError("--levels must be at least 1", exit_code=3)
+    delta = args.levels if args.command == "nest" else -args.levels
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.notify import pre_flight
+
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+    if change_info and change_info.has_conflict:
+        print("WARN: doc changed since last read", file=sys.stderr)
+
+    from gdoc.api.docs import (
+        StaleRevisionError,
+        batch_update_pinned,
+        get_document_with_tabs,
+        resolve_raw_tab,
+    )
+    from gdoc.listnest import (
+        check_result,
+        is_unchanged,
+        locate_item,
+        plan_nesting,
+        verify,
+    )
+
+    def reread_tab() -> dict | None:
+        """This tab in a fresh read, found by ID only (never by title)."""
+        def walk(ts):
+            for t in ts:
+                yield t
+                yield from walk(t.get("childTabs", []))
+        for t in walk(get_document_with_tabs(doc_id).get("tabs", [])):
+            if t.get("tabProperties", {}).get("tabId") == tab_id:
+                return t
+        return None
+
+    doc = get_document_with_tabs(doc_id)
+    revision_id = doc.get("revisionId", "")
+    if not revision_id:
+        # Never write unpinned: the plan's indexes are only valid at the
+        # revision they were read from. Docs returns a revision ID only to
+        # users who can edit.
+        raise GdocError(
+            "the document read returned no revision ID, so it cannot be "
+            "edited safely (nesting needs edit access)",
+            exit_code=3,
+        )
+    tabs = doc.get("tabs", [])
+    tab_name = getattr(args, "tab", None)
+    if tab_name:
+        raw_tab = resolve_raw_tab(tabs, tab_name)
+        if raw_tab is None:
+            raise GdocError(f"tab not found: {tab_name}", exit_code=3)
+    elif tabs:
+        raw_tab = tabs[0]
+    else:
+        raise GdocError(f"document has no tabs: {doc_id}")
+    tab_id = raw_tab.get("tabProperties", {}).get("tabId", "")
+    document_tab = raw_tab.get("documentTab", {})
+    body = document_tab.get("body", {})
+
+    first = locate_item(body, args.text)
+    last = locate_item(body, args.to) if args.to is not None else first
+    plan = plan_nesting(document_tab, tab_id, first, last, delta)
+
+    try:
+        batch_update_pinned(doc_id, plan.requests, revision_id)
+    except StaleRevisionError:
+        # The HTTP client resends a POST once when the connection drops
+        # without a reply; if Google applied the first attempt, the resend
+        # fails the pin. Check before telling the caller to re-run, which
+        # would move the items again.
+        try:
+            again = reread_tab()
+        except Exception as e:  # noqa: BLE001 — the write may have landed
+            raise GdocError(
+                "the write reported a changed document and the document "
+                f"could not be re-read to check ({e}). The change may "
+                "already be applied: inspect the list before retrying."
+            )
+        again_tab = (again or {}).get("documentTab", {})
+        if again is not None and is_unchanged(again_tab, plan):
+            raise  # provably not applied: re-running is safe
+        if again is None or check_result(again_tab, plan):
+            # Neither the planned result nor the original: someone else
+            # edited, and our write may or may not be part of it.
+            raise GdocError(
+                "the write reported a changed document, and the list is "
+                "neither as planned nor as it was. The change may already "
+                "be applied: inspect the list before retrying."
+            )
+        resent = (
+            "the write reported a changed document, but the list is "
+            "already exactly as planned (a retried request); not re-applied"
+        )
+    else:
+        resent = None
+
+    # From here the change is saved. A failed follow-up read must not be
+    # reported as a failed write: a caller that retried would move the
+    # items twice. So read errors become warnings.
+    verb = "nested" if delta > 0 else "unnested"
+    warnings = [resent] if resent else []
+
+    # The rebuild relies on how createParagraphBullets assigns levels and
+    # joins lists, so read the tab back and say so if it did not land. The
+    # change is saved either way, so an unexpected or unverifiable result
+    # is a warning (exit 0), never a failure a caller would retry.
+    verified = False
+    try:
+        after = reread_tab()
+    except Exception as e:  # noqa: BLE001 — post-mutation, see above
+        warnings.append(
+            f"{verb} and saved, but the result could not be read back to "
+            f"verify it: {e}. Check the list before changing it again"
+        )
+    else:
+        if after is None:
+            found, problems = False, ["the tab is gone"]
+        else:
+            found, problems = verify(after.get("documentTab", {}), plan)
+        verified = not problems
+        if problems and not found:
+            warnings.append(
+                f"{verb} and saved, but the result could not be verified: "
+                + "; ".join(problems)
+                + ". Check the list before changing it again"
+            )
+        elif problems:
+            warnings.append(
+                f"{verb} and saved, but the list is not as planned: "
+                + "; ".join(problems)
+                + ". Check the list before changing it again; re-running "
+                "would move the items again"
+            )
+
+    from gdoc.api.drive import get_file_version
+
+    command_version = None
+    try:
+        command_version = get_file_version(doc_id).get("version")
+    except Exception as e:  # noqa: BLE001 — post-mutation, see above
+        warnings.append(
+            f"{verb} but the document version could not be refreshed: {e}; "
+            "awareness state not updated"
+        )
+
+    from gdoc.format import format_json, get_output_mode
+
+    mode = get_output_mode(args)
+    if mode == "json":
+        lines = [format_json(moved=plan.moved, levels=delta, verified=verified)]
+    elif mode == "plain":
+        lines = [
+            f"id\t{doc_id}", "status\tupdated",
+            f"verified\t{'yes' if verified else 'no'}",
+        ]
+    else:
+        items = "item" if plan.moved == 1 else "items"
+        lvls = "level" if args.levels == 1 else "levels"
+        lines = [f"OK {verb} {plan.moved} {items} by {args.levels} {lvls}"]
+    _print_after_write(lines, [f"WARN: {w}" for w in warnings])
+    if command_version is None:
+        return 0
+
+    from gdoc.state import update_state_after_command
+
+    try:
+        update_state_after_command(
+            doc_id, change_info, command=args.command,
+            quiet=quiet, command_version=command_version,
+        )
+    except Exception as e:  # noqa: BLE001 — post-mutation, see above
+        _print_after_write(
+            [], [f"WARN: {verb} but awareness state was not persisted: {e}"],
+        )
+    return 0
+
+
+def _print_after_write(out: list[str], err: list[str]) -> None:
+    """Print after a saved non-idempotent write without risking the exit code.
+
+    A closed pipe (`gdoc nest ... | head -0`) or a full disk behind a
+    redirect would otherwise raise here, or at interpreter exit, turning a
+    saved change into a failure a caller might retry. Output that cannot
+    be delivered is dropped instead.
+    """
+    for stream, lines in ((sys.stdout, out), (sys.stderr, err)):
+        try:
+            for line in lines:
+                print(line, file=stream)
+            stream.flush()
+        except (OSError, ValueError):
+            try:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull, stream.fileno())
+            except (OSError, ValueError, io.UnsupportedOperation):
+                pass
 
 
 def _doc_matches(doc_id: str, body: str) -> bool:
@@ -4392,6 +4604,39 @@ def build_parser() -> GdocArgumentParser:
         "--tab", help="Target a specific tab by title or ID"
     )
     suggest_p.set_defaults(func=cmd_suggest)
+
+    # nest / unnest
+    for name, verb in (("nest", "Nest"), ("unnest", "Unnest")):
+        nest_p = sub.add_parser(
+            name, parents=[output_parent],
+            help=f"{verb} list items by one or more levels",
+            epilog="Targets the list item containing TEXT (unique, "
+                   "case-insensitive, as in `edit`); --to extends the "
+                   "change to a later item of the same list. Sub-items "
+                   "move with their items. The items stay in their "
+                   "native list, so numbering, a restarted start number "
+                   "and comments are kept. Works on default numbered "
+                   "(1. a. i.) and bullet lists; refuses checkbox or "
+                   "custom-glyph lists, items in tables, and moves that "
+                   "would merge or split lists.",
+        )
+        nest_p.add_argument("doc", help="Document ID or URL")
+        nest_p.add_argument("text", help="Text of the (first) list item to move")
+        nest_p.add_argument(
+            "--to", help="Text of the last list item of a range to move",
+        )
+        nest_p.add_argument(
+            "--levels", type=int, default=1,
+            help="How many levels to move (default: 1)",
+        )
+        nest_p.add_argument(
+            "--tab", help="Target a specific tab by title or ID "
+                          "(default: the first tab)",
+        )
+        nest_p.add_argument(
+            "--quiet", action="store_true", help="Skip pre-flight checks",
+        )
+        nest_p.set_defaults(func=cmd_nest)
 
     # diff
     diff_p = sub.add_parser(
