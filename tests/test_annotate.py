@@ -57,7 +57,7 @@ class TestMultipleMatchesAmbiguous:
         comment = _make_comment(anchor="hello world")
         result = annotate_markdown(md, [comment])
         assert "[UNANCHORED]" in result
-        assert "[anchor ambiguous]" in result
+        assert "[quoted text ambiguous]" in result
 
 
 class TestZeroMatchesDeleted:
@@ -66,7 +66,7 @@ class TestZeroMatchesDeleted:
         comment = _make_comment(anchor="nonexistent text that was deleted")
         result = annotate_markdown(md, [comment])
         assert "[UNANCHORED]" in result
-        assert "[anchor deleted]" in result
+        assert "[quoted text not found (edited or detached)]" in result
 
 
 class TestShortAnchorTooShort:
@@ -75,7 +75,7 @@ class TestShortAnchorTooShort:
         comment = _make_comment(anchor="cat")
         result = annotate_markdown(md, [comment])
         assert "[UNANCHORED]" in result
-        assert "[anchor too short]" in result
+        assert "[quoted text too short]" in result
 
     def test_exactly_four_chars_not_short(self):
         md = "The cats sat on the mat.\n"
@@ -109,7 +109,7 @@ class TestMultilineAnchor:
         comment = _make_comment(anchor="hello\nworld")
         result = annotate_markdown(md, [comment])
         assert "[UNANCHORED]" in result
-        assert "[anchor ambiguous]" in result
+        assert "[quoted text ambiguous]" in result
 
 
 class TestUnanchoredComment:
@@ -153,7 +153,7 @@ class TestEmptyDocumentWithComments:
         comment = _make_comment(anchor="some text")
         result = annotate_markdown(md, [comment])
         assert "[UNANCHORED]" in result
-        assert "[anchor deleted]" in result
+        assert "[quoted text not found (edited or detached)]" in result
 
 
 class TestResolvedFilter:

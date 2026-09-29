@@ -244,9 +244,9 @@ access (or with comment-only permission on the doc, which can't `batchUpdate`),
 or when the quoted text isn't found in the document, it falls back
 transparently to the Drive API path: the comment is created unanchored
 (`anchored: false` in `--json`/`--plain`) with the quote stored as
-`quotedFileContent` metadata, which `cat --comments` matches client-side but
-the Docs UI does not highlight. Same command either way — anchoring problems
-never fail the comment (though unrelated API errors, like a missing doc or
+`quotedFileContent` metadata, which `cat --comments` places by matching that
+text but the Docs UI does not highlight. Same command either way — anchoring
+problems never fail the comment (though unrelated API errors, like a missing doc or
 expired auth, still do).
 
 ### Other
@@ -254,7 +254,7 @@ expired auth, still do).
 | Command | Description |
 |---------|-------------|
 | `auth` | Authenticate with Google (`--no-browser` for headless) |
-| `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`; quiet by default — `--notify` sends Google's notification email) |
+| `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`; `--no-notify` skips Google's notification email) |
 | `share DOC --domain D` / `--anyone` | Link-based sharing with a Workspace domain or anyone with the link (`--discoverable` to also surface in search) |
 | `mkdir TITLE` | Create a Drive folder (`--parent FOLDER`) |
 | `mv DOC FOLDER` | Move a file into a folder (alias: `move`) |
@@ -388,6 +388,8 @@ gdoc write DOC draft.md    # OK written
 
 Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight checks entirely (saves 2 API calls).
 
+Files from `gdoc pull` carry their own baseline. `pull` stamps the file with `gdoc-version: N`, the Drive version its content came from, and `push`, `write DOC FILE`, and the sync hook compare that stamp with the doc's current version instead of this machine's last read. If anyone has edited the doc since the pull, the upload is refused (exit 3), even when a later `gdoc cat` on this machine has seen the newer version. Nothing is sent and the file is left untouched. To recover, pull a fresh copy to a new path (`gdoc pull DOC draft.latest.md`), see what changed with `gdoc diff DOC draft.md`, and carry your edits into the new file before pushing it; `--force` discards the newer changes in the doc. The sync hook reports the same refusal with exit 2, which Claude Code shows to the agent, and the pull hook will not overwrite a stale stamped file that differs from the doc. A successful upload advances the stamp to the version the upload created, so you can push, edit, and push again. Any change to the doc makes the file stale, including edits in other tabs. Files without a stamp (hand-written, or pulled by an older gdoc) keep the read-baseline rule above.
+
 ## Spreadsheets
 
 `cat`, `tabs`, and `info` detect Google Sheets automatically — point them at a
@@ -433,7 +435,16 @@ the Sheets API, so no re-authentication is needed.
      5	Authentication uses OAuth2.
 ```
 
-Comments whose anchor text has been deleted, is too short, or is ambiguous are grouped in an `[UNANCHORED]` section at the end.
+Comments are placed from their live anchors: the text each comment covers now, as the Docs UI highlights it. This needs the same [Developer Preview](https://developers.google.com/workspace/preview) enrollment as anchored `comment --quote`. A comment whose anchored text is all gone is listed as `[detached]` (Docs shows "Original content deleted"); a `write --tab` that changes the tab detaches every comment in it, resolved ones included. A comment that is still attached is listed as `[attached, location not found]` when gdoc can't pin its text to one markdown line: for example, a comment on an image, on footnote text, or on heading text that a table of contents may repeat. The same label is used when the document kept changing while gdoc read it; a `WARN` says so. Comments that aren't placed inline are grouped in an `[UNANCHORED]` section at the end.
+
+With `--json`, `"anchors"` says where the labels came from:
+
+- `"live"`: live anchors, with comments placed on their lines.
+- `"live_no_locations"`: live anchors for `[detached]` status, but no lines, because the document or its comments kept changing during the read (or its version couldn't be read). The status comes from a read just before the text shown, so it may miss an edit made in between.
+- `"quoted_text"`: live anchors couldn't be read (see below).
+- `"none"`: there were no comments, so nothing was read.
+
+When live anchors can't be read (no preview access, no comment access on the document, or the request fails), gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment. If comments keep being added or removed during the read, a `WARN` says so and no comment is placed.
 
 ## Revision history & diffs
 

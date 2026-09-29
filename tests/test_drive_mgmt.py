@@ -432,7 +432,7 @@ class TestCmdShareTargets:
         mock_perm.assert_called_once_with(
             "doc1", email=None, role="reader",
             domain="example.org", anyone=False, discoverable=False,
-            notify=False,
+            notify=True,
         )
         assert (
             "OK shared with example.org as reader"
@@ -504,36 +504,40 @@ class TestCmdShareTargets:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.drive.create_permission", return_value={"id": "perm1"})
-    def test_user_share_notify(self, mock_perm, _pf, _update, capsys):
+    def test_user_share_no_notify(self, mock_perm, _pf, _update, capsys):
         args = _make_args(
             "share", doc="doc1", email="a@b.com", domain=None,
-            anyone=False, role="reader", discoverable=False, notify=True,
+            anyone=False, role="reader", discoverable=False, no_notify=True,
         )
         rc = cmd_share(args)
         assert rc == 0
         mock_perm.assert_called_once_with(
             "doc1", email="a@b.com", role="reader",
             domain=None, anyone=False, discoverable=False,
-            notify=True,
+            notify=False,
         )
 
-    def test_notify_with_domain_rejected(self):
+    @patch("gdoc.api.drive.create_permission")
+    def test_no_notify_with_domain_rejected(self, mock_perm):
         args = _make_args(
             "share", doc="doc1", email=None, domain="example.org",
-            anyone=False, role="reader", notify=True,
+            anyone=False, role="reader", no_notify=True,
         )
-        with pytest.raises(GdocError, match="--notify") as exc_info:
+        with pytest.raises(GdocError, match="--no-notify") as exc_info:
             cmd_share(args)
         assert exc_info.value.exit_code == 3
+        mock_perm.assert_not_called()
 
-    def test_notify_with_anyone_rejected(self):
+    @patch("gdoc.api.drive.create_permission")
+    def test_no_notify_with_anyone_rejected(self, mock_perm):
         args = _make_args(
             "share", doc="doc1", email=None, domain=None,
-            anyone=True, role="reader", notify=True,
+            anyone=True, role="reader", no_notify=True,
         )
-        with pytest.raises(GdocError, match="--notify") as exc_info:
+        with pytest.raises(GdocError, match="--no-notify") as exc_info:
             cmd_share(args)
         assert exc_info.value.exit_code == 3
+        mock_perm.assert_not_called()
 
     def test_no_target_rejected(self):
         args = _make_args(
