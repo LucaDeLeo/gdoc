@@ -1194,6 +1194,11 @@ class TestMergedWithNativeReads:
         "- parent\nlazy continuation\n    ```\n    alpha *beta*\n    ```\n",
         "- a\n  - b\n    - c\n    ```\n    alpha *beta*\n    ```\n",
         "1. a\n   1. b\n      1. c\n      ```\n      alpha *beta*\n      ```\n",
+        # a quoted heading or rule inside the item does not end it
+        "- parent\n  - child\n    > # Heading\n    ```\n    alpha *beta*\n    ```\n",
+        "- parent\n  - child\n    > ---\n    ```\n    alpha *beta*\n    ```\n",
+        # a list inside a quote
+        "> - x\n> \n>   ```\n>   alpha *beta*\n>   ```\n",
     ])
     def test_fences_in_nested_list_items_stay_code(self, markdown):
         literal = {"id": "c1", "content": "check",

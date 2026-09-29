@@ -82,7 +82,7 @@ _PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
 # indent (up to 3 spaces past the enclosing list item's content column).
 # Code inside such a fence is literal too.
 _FENCE = re.compile(r"((?:[ \t]*>)*)([ \t]*)(`{3,}|~{3,})([^\n]*)")
-_QUOTED = re.compile(r"(?:[ \t]*>)*")
+_QUOTE_MARKER = re.compile(r"([ \t]*)>")
 # Lines that start a block rather than continue a paragraph: an ATX heading
 # or a thematic break (a list item is matched separately).
 _BLOCK_START = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|([-*_])(?:[ \t]*\1){2,}[ \t]*$)")
@@ -151,15 +151,33 @@ def _visible_text(
     fences: dict[int, tuple[int | None, int]] = {}  # line -> (closer, indent)
     fenced: list[tuple[int, int]] = []  # (start, end) of each block
     opened: tuple[int, str, int, int, int] | None = None
-    items: list[int] = []  # content columns of the open list items
+    # Content columns of the open list items, one stack per quote depth:
+    # a line's indent before each ">" is measured against its own level.
+    stacks: list[list[int]] = [[]]
     paragraph = False  # a paragraph is open, so a dedented line is lazy
+
+    def enter(line: int, end: int) -> tuple[list[int], str]:
+        """Reconcile the stacks for a line; return its innermost stack and
+        the text after its quote markers."""
+        nonlocal stacks
+        pos, depth = line, 0
+        while (q := _QUOTE_MARKER.match(md, pos, end)):
+            if depth < len(stacks):
+                indent = len(q.group(1))
+                # A quote less indented than an item is outside it.
+                while stacks[depth] and stacks[depth][-1] > indent:
+                    stacks[depth].pop()
+            pos, depth = q.end(), depth + 1
+        stacks = stacks[:depth + 1] + [[] for _ in range(depth + 1 - len(stacks))]
+        return stacks[depth], md[pos:end]
+
     for line in [0, *(k + 1 for k in newlines)]:
         end = md.find("\n", line)
         end = n if end < 0 else end
         m = _FENCE.match(md, line, end)
         if opened is None and not m:
-            # Track list items (after any quote markers) for fence indents.
-            body = md[_QUOTED.match(md, line, end).end():end]
+            # Track list items for fence indents.
+            items, body = enter(line, end)
             if not body.strip():
                 paragraph = False
                 continue
@@ -181,6 +199,7 @@ def _visible_text(
         indent = m.group(1) + spaces
         if opened is None:
             # The deepest item still enclosing the fence sets its base.
+            items, _ = enter(line, end)
             while items and items[-1] > len(spaces):
                 items.pop()
             base = items[-1] if items else 0
