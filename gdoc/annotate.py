@@ -78,6 +78,7 @@ def _find_all(text: str, key: str) -> list[int]:
 
 # Chars that never start markup; a run of them is kept in one step.
 _PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})([^\n]*)")
 _LIST_MARKER = re.compile(r"[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
 _ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);")
 _FOOTNOTE_DEF = re.compile(r"\[\^[^\]\n]+\]:")
@@ -134,77 +135,94 @@ def _visible_text(
         idx = bisect_right(blank_lines, a)
         return idx == len(blank_lines) or blank_lines[idx] >= b
 
-    # Tables, in order of precedence: fenced blocks, then code spans, then
-    # brackets and parentheses outside both. Text inside a fence or a code
-    # span is literal, so its brackets never open or close a link.
-    literal: list[tuple[int, int]] = []  # (start, end) of fences and spans
-    fences: dict[int, int] = {}  # opening fence line -> closing fence line
-    fence_lines = sorted(
-        (k + 1, md[k + 1:k + 4]) for k in [-1, *newlines]
-        if md.startswith(("```", "~~~"), k + 1)
-    )
-    next_same: list[int | None] = [None] * len(fence_lines)
-    last: dict[str, int] = {}
-    for idx in range(len(fence_lines) - 1, -1, -1):
-        mark = fence_lines[idx][1]
-        next_same[idx] = last.get(mark)
-        last[mark] = fence_lines[idx][0]
-    after = -1
-    for idx, (line, _mark) in enumerate(fence_lines):
-        closer = next_same[idx]
-        if line <= after or closer is None:
+    # Fenced code blocks, as CommonMark defines them: up to 3 spaces of
+    # indent, then 3+ backticks or tildes (a backtick fence's info string
+    # can't hold a backtick); the block closes on a run of the same char at
+    # least as long with nothing else on the line, or runs to the end.
+    fences: dict[int, int | None] = {}  # opening line -> closing line
+    fenced: list[tuple[int, int]] = []  # (start, end) of each block
+    opened: tuple[int, str, int] | None = None
+    for line in [0, *(k + 1 for k in newlines)]:
+        m = _FENCE.match(md, line)
+        if not m:
             continue
-        fences[line] = closer
-        after = line_end(closer)
-        literal.append((line, after))
+        run, rest = m.group(1), m.group(2)
+        if opened is None:
+            if not (run[0] == "`" and "`" in rest):
+                opened = (line, run[0], len(run))
+        elif run[0] == opened[1] and len(run) >= opened[2] and not rest.strip():
+            fences[opened[0]] = line
+            fenced.append((opened[0], line_end(line)))
+            opened = None
+    if opened is not None:
+        fences[opened[0]] = None
+        fenced.append((opened[0], n))
 
-    # A code span opens on a backtick run and closes on the next maximal
-    # run of the same length on its line; a backslash before the opening
-    # run escapes one backtick, but a backslash inside the span is literal.
-    tick_runs = [
-        (m.start(), m.end()) for m in re.finditer(r"`+", md)
-        if not _inside(literal, m.start())
-    ]
-    runs: dict[int, list[int]] = {}  # backtick run length -> run starts
-    for a, b in tick_runs:
-        runs.setdefault(b - a, []).append(a)
-    spans: dict[int, int] = {}  # code span opening backtick -> closing run
-    after = -1
-    for a, b in tick_runs:
-        if a < after:
-            continue
-        slashes = a
-        while slashes > 0 and md[slashes - 1] == "\\":
-            slashes -= 1
-        opener = a + (a - slashes) % 2
-        same = runs.get(b - opener, [])
-        k = bisect_right(same, a)
-        if b > opener and k < len(same) and one_line(opener, same[k]):
-            spans[opener] = same[k]
-            after = same[k] + (b - opener)
-            literal.append((opener, after))
-    literal.sort()
-
-    close_bracket: dict[int, int] = {}
+    # Parentheses matched once (escapes skipped), for link targets.
     close_paren: dict[int, int] = {}
-    brackets: list[int] = []
     parens: list[int] = []
     escaped = -1  # position of the char after the latest escaping backslash
-    for m in re.finditer(r"[\\\[\]()]", md):
+    for m in re.finditer(r"[\\()]", md):
         i = m.start()
-        if i == escaped or _inside(literal, i):
+        if i == escaped or _inside(fenced, i):
             continue
-        ch = md[i]
-        if ch == "\\":
+        if md[i] == "\\":
             escaped = i + 1
-        elif ch == "[":
-            brackets.append(i)
-        elif ch == "]" and brackets:
-            close_bracket[brackets.pop()] = i
-        elif ch == "(":
+        elif md[i] == "(":
             parens.append(i)
-        elif ch == ")" and parens:
+        elif parens:
             close_paren[parens.pop()] = i
+
+    # Code spans and brackets in one left-to-right pass, as CommonMark reads
+    # them: a backtick run opens a code span that closes on the next maximal
+    # run of the same length on its line (its brackets are then literal),
+    # and a "](" whose target closes on the line makes that target opaque
+    # (its backticks are then literal). A backslash escapes one backtick of
+    # an opening run; inside a span it is literal.
+    runs: dict[int, list[int]] = {}  # backtick run length -> run starts
+    for m in re.finditer(r"`+", md):
+        if not _inside(fenced, m.start()):
+            runs.setdefault(m.end() - m.start(), []).append(m.start())
+    spans: dict[int, int] = {}  # code span opening backtick -> closing run
+    close_bracket: dict[int, int] = {}
+    brackets: list[int] = []
+    escaped = -1
+    skip_to = -1
+    ref_target = -1  # "[" of an image's [ref] target: not a link label
+    for m in re.finditer(r"\\|[\[\]]|`+", md):
+        i = m.start()
+        if i < skip_to or _inside(fenced, i):
+            continue
+        tok = m.group()
+        if tok[0] == "`":
+            opener = i + (i == escaped)
+            same = runs.get(m.end() - opener, [])
+            k = bisect_right(same, i)
+            if m.end() > opener and k < len(same) and one_line(opener, same[k]):
+                spans[opener] = same[k]
+                skip_to = same[k] + (m.end() - opener)
+        elif i == escaped:
+            continue
+        elif tok == "\\":
+            escaped = i + 1
+        elif tok == "[":
+            brackets.append(i)
+        elif brackets:
+            opener = brackets.pop()
+            close_bracket[opener] = i
+            target = i + 1
+            image = opener > 0 and md[opener - 1] == "!" and escaped != opener - 1
+            if image and md[target:target + 1] == "[":
+                ref_target = target
+            # The same test the scan below uses for a link or image target.
+            if (
+                opener != ref_target
+                and md[opener + 1:opener + 2] != "^"
+                and (image or no_blank_line(opener, i))
+                and target in close_paren
+                and one_line(target, close_paren[target])
+            ):
+                skip_to = close_paren[target] + 1
 
     def target_end(k: int) -> int | None:
         """End of a (url) or [ref] target starting at *k*, or None."""
@@ -231,8 +249,9 @@ def _visible_text(
         # Line-level markup counts only outside a link label.
         if not frames and (i == 0 or md[i - 1] == "\n"):
             if i in fences:
-                keep(line_end(i) + 1, fences[i])
-                i = line_end(fences[i])
+                closer = fences[i]
+                keep(min(line_end(i) + 1, n), n if closer is None else closer)
+                i = n if closer is None else line_end(closer)
                 continue
             m = _LIST_MARKER.match(md, i)
             if m:

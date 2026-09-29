@@ -545,8 +545,11 @@ class TestProbeScenarios:
         "[^" * 20000,
         "[" + "\\a" * 25000,
         "```\n" + "x\n" * 50000,
+        "```\n" * 40000,
+        "[l](u`v) `c` " * 20000,
     ], ids=["image-openers", "backticks", "unequal-backtick-runs",
-            "link-openers", "footnote-openers", "escapes", "unclosed-fence"])
+            "link-openers", "footnote-openers", "escapes", "unclosed-fence",
+            "fence-candidates", "backticks-in-targets"])
     def test_visible_text_stays_fast_on_pathological_markdown(self, markdown):
         import time
 
@@ -612,6 +615,59 @@ class TestProbeScenarios:
         from gdoc.annotate import _visible_text
 
         assert _visible_text(markdown)[0] == visible
+
+    @pytest.mark.parametrize("markdown,visible", [
+        # A longer outer fence keeps an inner ``` line as content.
+        ("````\n```\nx *e*\n````\nafter *e*\n", "```\nx *e*\n\nafter e\n"),
+        # Up to 3 spaces of indent.
+        ("  ```py\ncode *x*\n  ```\n", "code *x*\n\n"),
+        # A fence line with text after it doesn't close the block.
+        ("```\ncode\n``` more\n```\n", "code\n``` more\n\n"),
+        # A backtick fence can't close a tilde fence.
+        ("~~~\ncode\n```\n~~~\nout *e*\n", "code\n```\n\nout e\n"),
+        # An unclosed fence runs to the end.
+        ("```\ncode *x*\n", "code *x*\n"),
+        # Four spaces of indent is not a fence.
+        ("    ```\nx *e*\n", "    ```\nx e\n"),
+        # A backtick in a backtick fence's info string: inline code instead.
+        ("```a`b``` *e*\n", "a`b e\n"),
+    ], ids=["longer-outer", "indented", "closer-with-text", "mixed-chars",
+            "unclosed", "four-spaces", "backtick-info"])
+    def test_fences_follow_commonmark(self, markdown, visible):
+        from gdoc.annotate import _visible_text
+
+        assert _visible_text(markdown)[0] == visible
+
+    def test_code_block_quoting_a_fence_keeps_its_comment(self):
+        # Before: the inner ``` closed the block, the image in the code was
+        # hidden and the prose link's target shown, so "alpha" still
+        # counted once and the comment moved to the prose line.
+        md = (
+            "````\n```\n![alpha](x.png)\n````\n\n"
+            "See [docs](https://ex.com/alpha) now.\n\n"
+            "```\ncode\n```\n"
+        )
+        doc = _document(
+            [_tab("t.1", ["```", "![alpha](x.png)", "See docs now.", "code"],
+                  {"kix.a": ["alpha"]})],
+            {"c1": "kix.a"},
+        )
+        result = annotate_markdown(
+            md, [_comment("c1", "alpha")], anchors=_anchors(doc),
+        )
+        assert _annotation_line(result, "c1") == 3
+
+    @pytest.mark.parametrize("markdown", [
+        "Intro line.\n\n[link](https://example.test/ghost`) trailing `code`\n",
+        "Intro line.\n\n```alpha``beta```\n[link](https://example.test/ghost)\n"
+        "```omega``delta```\n",
+    ], ids=["raw-backtick-in-url", "triple-backtick-code-lines"])
+    def test_link_targets_stay_hidden(self, markdown):
+        # "ghost" occurs only in a link target.
+        result = annotate_markdown(markdown, [_comment("c1", "ghost")])
+        assert "[#c1 open] [quoted text not found (edited or detached)]" in (
+            result
+        )
 
     def test_long_repetitive_quote_is_fast(self):
         import time
