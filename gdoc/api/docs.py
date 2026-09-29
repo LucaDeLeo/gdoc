@@ -3552,17 +3552,22 @@ def _list_continuation(parsed, content, above, lists, same_list=False):
     ordered = _list_is_ordered(lists, list_id, level)
     preset = ("NUMBERED_DECIMAL_ALPHA_ROMAN" if ordered
               else "BULLET_DISC_CIRCLE_SQUARE")
-    first_list = [s for s in items if s.list_block == items[0].list_block]
+    from gdoc.mdparse import _native_lists
+
+    # The native list the compiler creates first is the one that joins.
+    first_list = _native_lists(parsed, items)[0]
     if (items[0].style["bulletPreset"] != preset
             or not _default_preset(lists, list_id)
             or any(s.list_depth < level for s in first_list)):
         return None
     number = _list_number(content, above.get("startIndex", 0), lists)
-    requested = dict(parsed.non_default_start_items).get(items[0].start, 1)
-    if (ordered and items[0].list_depth == level and not same_list
-            and requested != number + 1):
+    at_level = [s for s in first_list if s.list_depth == level]
+    requested = dict(parsed.non_default_start_items)
+    if (ordered and at_level and not same_list
+            and requested.get(at_level[0].start, 1) != number + 1):
         return None
-    return preset, level, _continued_numbers(parsed, number, level)
+    return preset, level, {item.start: number + k
+                           for k, item in enumerate(at_level, 1)}
 
 
 def _default_preset(lists: dict, list_id: str) -> bool:

@@ -564,3 +564,23 @@ def test_continuation_across_a_blank_line(route, base, command, arguments, expec
     route.ok("write", text=base)
     route.ok(command, **arguments)
     assert _read(route) == expected
+
+
+@pytest.mark.parametrize("inserted", ["  1. detail\n\n2. Next step\n",
+                                      "  1. c\n  - x\n2. b\n", "  1. c\n1. b\n"])
+def test_nested_first_item_then_top_level_item(route, inserted):
+    """Round 7 (Claude R7-1): the joining list decides continuation and the
+    predicted numbers, so a later top-level item's number either matches a
+    write of the concatenation or warns."""
+    expected_doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="1. Setup\n" + inserted)
+    expected = _read(route)
+    doc = route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text="1. Setup\n")
+    code, output, error = route.call("insert", text=inserted, tab="t.0",
+                                     position="end")
+    assert code == 0
+    assert _read(route) == expected or "start at 1" in output + error
+    del expected_doc, doc
