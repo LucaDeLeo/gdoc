@@ -725,15 +725,16 @@ pull or `--force`, as above. The pull hook blocks an edit to a stale file (exit 
 with the same recovery steps), re-pulls one that matches the doc, and leaves a
 current file with local edits in place. `pull` now records `gdoc-revision` and the
 tab fingerprint rather than `gdoc-version`, and a file with `gdoc-revision` ignores
-any `gdoc-version`. A pulled-file header is an opening `---` block with a
-`gdoc` or `gdoc-*` key (in any case, indented or not), after any leading text
-without letters or digits: blank lines, spaces, invisible characters, symbols or
-HTML comments. It must be read exactly: first in the file, opened and closed by `---`
-lines, every line `key: value`, naming the document with `gdoc: ID`. Otherwise
-`write` (CLI and MCP) and `push` refuse it with exit 3 and nothing sent, and the
-sync hook reports the refusal (exit 2); the message names the cause. Fix the
-header, or remove it to copy the text. Other front matter, and a body that opens
-with a rule, are unaffected.
+any `gdoc-version`. A file is read as pulled when its opening lines (`---`
+blocks, `key: value` lines, comments and lines without letters or digits,
+ignoring invisible characters and HTML comments) hold a `gdoc` or `gdoc-*` key,
+in any case. Its header must then be read exactly: the file's first line is
+exactly `---`, the block closes with a `---` line, every line in it is
+`key: value`, and it names the document with `gdoc: ID`. Otherwise `write` (CLI
+and MCP) and `push` refuse it with exit 3 and nothing sent, and the sync hook
+reports the refusal (exit 2); the message names the cause. Fix the header, or
+remove it to copy the text. Other front matter, a body that opens with a rule,
+and `cat`'s empty `---`/`---` block before such a body are unaffected.
 
 ## Spreadsheets
 

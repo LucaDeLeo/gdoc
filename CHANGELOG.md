@@ -26,9 +26,10 @@ All notable changes to `gdoc` are documented here. This project follows
 - Targeted edits that would move list items a level in or out point to
   `gdoc nest` and `gdoc unnest` when those would accept the items, and to
   `write` otherwise.
-- A pulled-file header (an opening `---` block with a `gdoc` or `gdoc-*` key,
-  even after leading blank lines, spaces, invisible characters or comments)
-  must be read exactly as gdoc frontmatter; otherwise `write`, `push` and MCP
+- A pulled-file header (a `gdoc` or `gdoc-*` key in the file's opening
+  `---` block or metadata-shaped lines, whatever invisible characters,
+  comments or stray symbols surround them) must be read exactly as gdoc
+  frontmatter; otherwise `write`, `push` and MCP
   `write` refuse it, and the sync hook reports the refusal, instead of writing
   it without stale-file checks. Other front matter is unaffected.
 - A file stamped only with `gdoc-version` whose body matches the doc is

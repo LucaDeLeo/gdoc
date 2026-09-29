@@ -78,7 +78,17 @@ def test_r5_06_07_every_marker_spelling_is_refused(route, markdown):
 ])
 def test_r5_02_a_prefixed_pulled_header_is_refused(route, prefix):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "something comes before", text=prefix + HEADER + "Changed.\n")
+    _refused(route, "write", "first line must be exactly", text=prefix + HEADER + "Changed.\n")
+
+
+@pytest.mark.parametrize("opener", [
+    "---\u200b", "---\u034f", "---\u00a0", "---<!-- n -->", "-\n---", "*\n---",
+    "-<!-- n -->---",
+])
+def test_r5_02_an_opener_with_anything_around_it_is_refused(route, opener):
+    _written(route, "Alpha.\n")
+    _refused(route, "write", "first line must be exactly",
+             text=opener + HEADER[3:] + "Changed.\n")
 
 
 @pytest.mark.parametrize("header", [
@@ -131,7 +141,7 @@ def test_r5_03_the_sync_hook_skips_ordinary_front_matter(monkeypatch, tmp_path, 
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
         {"tool_input": {"file_path": str(pulled)}})))
     assert cli.cmd_sync_hook(SimpleNamespace()) == 2
-    assert "something comes before" in capsys.readouterr().err
+    assert "first line must be exactly" in capsys.readouterr().err
     assert cli.run_argv(["push", str(pulled)], check_updates=False) == 3
     assert not route.service.batches
 

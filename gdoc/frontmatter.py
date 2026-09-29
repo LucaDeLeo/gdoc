@@ -88,32 +88,7 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
 
 # Letters that render as blank space.
 _BLANK_LETTERS = "\u115f\u1160\u3164\uffa0"
-
-
-def _invisible_prefix(content: str) -> int:
-    """The length of *content*'s leading text before a possible opening
-    `---`: HTML comments, and every character that is not a letter, a digit
-    or a dash. That covers everything that renders as nothing (whitespace,
-    blank lines, marks, control and format characters), and treats stray
-    symbols the same way."""
-    import unicodedata
-
-    i = 0
-    while i < len(content):
-        char = content[i]
-        if content.startswith("<!--", i) and (end := content.find("-->", i + 4)) >= 0:
-            i = end + 3
-        elif (_DASH_RUN_RE.match(char * 3) is None
-              and (unicodedata.category(char)[0] not in "LN"
-                   or char in _BLANK_LETTERS)):
-            i += 1
-        else:
-            break
-    return i
-
-
-# A dash run, counting Unicode dashes, and a `...` closer.
-_DASH_RUN_RE = re.compile(r"[-\u2010-\u2015\u2212\ufe58\ufe63\uff0d]{3,}[ \t]*")
+# A dash run, counting Unicode dashes, or a `...` closer.
 _BLOCK_CLOSE_RE = re.compile(
     r"(?:[-\u2010-\u2015\u2212\ufe58\ufe63\uff0d]{3,}|\.\.\.)[ \t]*")
 # A gdoc key (`gdoc`, `gdoc-*`) in any case: starting a line, indented,
@@ -123,33 +98,67 @@ _GDOC_KEY_RE = re.compile(
     re.IGNORECASE)
 
 
+def _shown(line: str) -> str:
+    """*line* as it reads: control, format and combining characters and
+    blank letters removed, and surrounding whitespace stripped."""
+    import unicodedata
+
+    return "".join(
+        char for char in line
+        if char.isspace() or (unicodedata.category(char)[0] not in "CM"
+                              and char not in _BLANK_LETTERS)
+    ).strip()
+
+
+def _header_shaped(line: str) -> bool:
+    """Whether *line* could belong to a metadata block: it has no letters or
+    digits, or it is a `key: value` line, a comment or an indented line."""
+    import unicodedata
+
+    shown = _shown(line)
+    return (not any(unicodedata.category(char)[0] in "LN" for char in shown)
+            or shown.startswith("#") or line[:1] in (" ", "\t")
+            or bool(_KEY_LINE_RE.match(shown) or _GDOC_KEY_RE.search(shown)))
+
+
 def provenance_header_problem(content: str) -> str | None:
     """Why *content*'s pulled-file header can't be trusted, or None.
 
-    A pulled-file header is an opening `---` block, after anything that
-    renders as nothing, with a line naming a `gdoc` or `gdoc-*` key. It must
-    be read exactly: it starts the file (after at most one byte-order mark),
-    opens and closes with `---` lines, holds only `key: value` lines, and
-    names the document (`gdoc: ID`). Otherwise its stale-file checks could
-    not run and the header would be written as text. Other front matter,
-    and a body that opens with a rule, are unaffected.
+    A pulled-file header is the file's leading run of header-shaped lines
+    (see `_header_shaped`) and `---` blocks, ignoring invisible characters
+    and HTML comments, when it holds a `gdoc` or `gdoc-*` key. It must be read
+    exactly: it starts the file (after at most one byte-order mark), opens
+    and closes with `---` lines, holds only `key: value` lines, and names
+    the document (`gdoc: ID`). Otherwise its stale-file checks could not run
+    and the header would be written as text. Other front matter, and a body
+    that opens with a rule or after an empty `---`/`---` block, are
+    unaffected.
     """
     content = content.removeprefix("\ufeff")
-    prefix = _invisible_prefix(content)
-    lines = re.split(r"\r\n|\r|\n", content[prefix:])
-    if not _DASH_RUN_RE.fullmatch(lines[0]):
+    if _EMPTY_FRONTMATTER_RE.match(content):
+        return None  # `cat`'s spelling of a body that opens with a rule
+    visible = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+    inside = False  # between a dash line and its closer, any line counts
+    for line in visible.splitlines():
+        if _GDOC_KEY_RE.search(_shown(line)):
+            break
+        if _BLOCK_CLOSE_RE.fullmatch(_shown(line)):
+            inside = not inside
+        elif not (inside or _header_shaped(line)):
+            return None
+    else:
         return None
+    lines = re.split(r"\r\n|\r|\n", content)
+    if lines[0] != "---":
+        return ("its first line must be exactly `---`, with nothing before or "
+                "after the dashes")
     close = next((k for k in range(1, len(lines))
-                  if _BLOCK_CLOSE_RE.fullmatch(lines[k])), None)
-    block = lines[1:close] if close is not None else lines[1:]
-    if not any(_GDOC_KEY_RE.search(line) for line in block):
-        return None
-    if prefix:
-        return "something comes before its opening `---` line"
+                  if _BLOCK_CLOSE_RE.fullmatch(_shown(lines[k]))), None)
     if close is None:
         return "its opening `---` block never closes"
-    if lines[0] != "---" or lines[close] != "---" or "\n" not in content:
+    if lines[close] != "---" or "\n" not in content:
         return "its opening block must open and close with `---` lines"
+    block = lines[1:close]
     first = next((line for line in block if not line.startswith("#")), "")
     if not first.strip():
         return "its opening block starts with a blank line, so it is read as text"
