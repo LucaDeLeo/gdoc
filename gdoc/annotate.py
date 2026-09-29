@@ -79,11 +79,12 @@ def _find_all(text: str, key: str) -> list[int]:
 
 # A link target: backslash escapes (Drive's export writes a ")" in a URL
 # as "\)") and one level of balanced parentheses (gdoc's own renderer
-# writes URLs raw).
-_URL = r"\((?:\\.|\([^()]*\)|[^()\\])*\)"
+# writes URLs raw). Links, images and code spans stay within one line, which
+# bounds how far a failed match can scan.
+_URL = r"\((?:\\.|\([^()\n]*\)|[^()\\\n])*\)"
 # An image, alone or inside a link label (Drive exports a linked image as
 # [![][image1]](https://example.com)).
-_IMAGE = r"!\[[^\]]*\](?:" + _URL + r"|\[[^\]]*\])"
+_IMAGE = r"!\[[^\[\]\n]*\](?:" + _URL + r"|\[[^\[\]\n]*\])"
 
 # Markdown that isn't visible text: a code fence (keeps its contents), a
 # list marker, an escape (keeps the escaped char), an HTML entity (keeps
@@ -96,12 +97,17 @@ _MARKUP = re.compile("".join([
     r"|^[ \t]*(?:\d+[.)]|[-*+])[ \t]+",
     r"|\\(?P<escaped>.)",
     r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)",
-    r"|(?P<ticks>`+)(?P<code>.+?)(?P=ticks)",
+    # A maximal backtick run opens a code span and the next run of the same
+    # length closes it; both runs being maximal keeps a long run of
+    # backticks from being retried at every split.
+    r"|(?<!`)(?P<ticks>`+)(?!`)(?P<code>.+?)(?<!`)(?P=ticks)(?!`)",
     r"|", _IMAGE,
-    r"|\[(?P<label>(?:\\.|", _IMAGE, r"|[^\]\\])*)\]", _URL,
-    r"|^(?P<footnote>\[\^[^\]]+\]:)[^\n]*$",
-    r"|^\[[^\]]+\]:[^\n]*$",
-    r"|\[\^[^\]]+\]",
+    # A "[" inside a label must start an image, so a failed image attempt
+    # ends the label instead of rescanning the rest of the line.
+    r"|\[(?P<label>(?:\\.|", _IMAGE, r"|[^\[\]\\\n])*)\]", _URL,
+    r"|^(?P<footnote>\[\^[^\]\n]+\]:)[^\n]*$",
+    r"|^\[[^\]\n]+\]:[^\n]*$",
+    r"|\[\^[^\]\n]+\]",
     r"|\*+|~~|(?<!\w)_+|_+(?!\w)",
 ]), re.MULTILINE)
 
@@ -167,6 +173,44 @@ def _place_live(
         return None
     last = where[starts[anchor["occurrence"]] + len(key) - 1]
     return markdown.count("\n", 0, last)
+
+
+def _place_quote(
+    markdown: str, visible: tuple[str, array], qfc: dict,
+) -> tuple[str, int | None, str]:
+    """Place a comment by its quoted text: (note, line index or None, quote).
+
+    Searched in the visible text, like live anchors, so a copy inside a
+    link target can't stand in for text split by formatting. Drive returns
+    a quote made in the Docs UI as HTML (an apostrophe is &#39;) and marks
+    it text/html; a quote set through the API is plain text. When the type
+    is missing and decoding changes the quote, both readings are tried,
+    and they must agree on one place.
+    """
+    raw = qfc["value"]
+    mime = qfc.get("mimeType")
+    if mime == "text/html":
+        readings = [html.unescape(raw)]
+    elif mime:
+        readings = [raw]
+    else:
+        readings = list(dict.fromkeys([raw, html.unescape(raw)]))
+    readings = [r for r in readings if len(r.strip()) >= 4]
+    if not readings:
+        return "quoted text too short", None, raw
+
+    text, where = visible
+    found: dict[int, str] = {}  # line index -> the reading found there
+    for reading in readings:
+        for start in _find_all(text, reading):
+            last = where[start + len(reading) - 1]
+            found.setdefault(markdown.count("\n", 0, last), reading)
+    if not found:
+        return "quoted text not found (edited or detached)", None, raw
+    if len(found) > 1:
+        return "quoted text ambiguous", None, raw
+    [(line_idx, reading)] = found.items()
+    return "quoted text found", line_idx, reading
 
 
 def annotate_markdown(
@@ -240,29 +284,13 @@ def annotate_markdown(
             unanchored.append((c, ""))
             continue
 
-        # Drive returns the quote as HTML (an apostrophe is &#39;).
-        anchor_text = html.unescape(qfc["value"])
-
-        if len(anchor_text.strip()) < 4:
-            unanchored.append((c, "quoted text too short"))
-            continue
-
-        # Searched in the visible text, like live anchors, so a copy inside
-        # a link target can't stand in for text split by formatting.
         if visible_all is None:
             visible_all = _visible_text(markdown, footnotes=True)
-        text, where = visible_all
-        starts = _find_all(text, anchor_text)
-        if not starts:
-            unanchored.append((c, "quoted text not found (edited or detached)"))
-            continue
-        if len(starts) > 1:
-            unanchored.append((c, "quoted text ambiguous"))
-            continue
-
-        # Annotate after the line where the match ends.
-        last = where[starts[0] + len(anchor_text) - 1]
-        place(markdown.count("\n", 0, last), c, anchor_text, "quoted text found")
+        note, line_idx, anchor_text = _place_quote(markdown, visible_all, qfc)
+        if line_idx is None:
+            unanchored.append((c, note))
+        else:
+            place(line_idx, c, anchor_text, note)
 
     # Build output
     output_lines: list[str] = []

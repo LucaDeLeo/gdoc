@@ -537,6 +537,26 @@ class TestProbeScenarios:
         )
         assert _annotation_line(result, "c1") == 2
 
+    @pytest.mark.parametrize("markdown", [
+        "![" * 8000,
+        "`" * 20000,
+        "[a](" * 20000,
+        "[" + "\\a" * 25000,
+        "```\n" + "x\n" * 50000,
+    ], ids=["image-openers", "backticks", "link-openers", "escapes",
+            "unclosed-fence"])
+    def test_visible_text_stays_fast_on_pathological_markdown(self, markdown):
+        import time
+
+        from gdoc.annotate import _visible_text
+
+        start = time.perf_counter()
+        _visible_text(markdown)
+        _visible_text(markdown, footnotes=True)
+        # Linear inputs take milliseconds; the old patterns took seconds
+        # to minutes here.
+        assert time.perf_counter() - start < 1.0
+
     def test_visible_text_is_built_once_per_call(self):
         from gdoc import annotate
 
@@ -616,6 +636,32 @@ class TestQuoteFallback:
         assert f'[#c1 open] [quoted text found] alice@example.com on "{text}":' in (
             result
         )
+
+    def test_plain_text_quote_with_a_literal_entity_is_not_decoded(self):
+        # A quote set through the API is plain text; &copy; is literal here.
+        md = (
+            "Literal `&copy; notice` example.\n"
+            "Copyright \u00a9 notice example.\n"
+        )
+        c = _comment("c1", "&copy; notice")
+        c["quotedFileContent"]["mimeType"] = "text/plain"
+        result = annotate_markdown(md, [c])
+        assert _annotation_line(result, "c1") == 1
+
+    def test_html_quote_is_decoded(self):
+        md = "Literal `&copy; notice` example.\nCopyright \u00a9 notice here.\n"
+        c = _comment("c1", "&copy; notice here")
+        c["quotedFileContent"]["mimeType"] = "text/html"
+        result = annotate_markdown(md, [c])
+        assert _annotation_line(result, "c1") == 2
+
+    def test_untyped_quote_whose_readings_disagree_is_ambiguous(self):
+        md = (
+            "Literal `&copy; notice` example.\n"
+            "Copyright \u00a9 notice example.\n"
+        )
+        result = annotate_markdown(md, [_comment("c1", "&copy; notice")])
+        assert "[#c1 open] [quoted text ambiguous]" in result
 
     def test_quote_is_not_found_in_a_linked_image_target(self):
         # Drive exports a linked image as [![][imageN]](url).
