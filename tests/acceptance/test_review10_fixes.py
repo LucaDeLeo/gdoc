@@ -174,11 +174,50 @@ def test_r2_03_cell_content_is_inline_only(route, new, expected):
                for _, style, bullet in styles(doc))
 
 
-def test_r2_02_cell_keeps_an_image_after_br(route):
-    """Round-2 review R2-02: as at 39ab543, `<br>` in a --cell replacement
-    stays literal and an image after it is inserted."""
+def test_r1_15_a_cell_writes_br_as_a_break(route):
+    markdown = "| k | v |\n| --- | --- |\n| Status | a<br>b |\n"
+    want = _oracle(route, markdown.replace("a<br>b", "a<br>c"))[0]
+    _written(route, markdown)
+    route.ok("edit", cell="1,1", tab="Main", new_text="a<br>c")
+    assert _read(route) == want
+
+
+@pytest.mark.parametrize("new,cell", [
+    ("a\\<br>b", "a\\<br>b"),
+    ("`<br>`", "`<br>`"),
+    ("a<br>- b", "a<br>- b"),
+    ("a<br>___", "a<br>___"),
+    ("a<br>~~~<br>x<br>~~~", "a<br>~~~<br>x<br>~~~"),
+    ("a<br>[x]: https://example.com", "a<br>[x]: https://example.com"),
+    ("a<br>**bold** x", "a<br>**bold** x"),
+    ("# h<br>1. x", "# h<br>1. x"),
+])
+def test_f1_01_cell_breaks_follow_the_table_rules(route, new, cell):
+    """Follow-up review F1-01 and round-2 R2-03: escaped and code `<br>` stay
+    literal, and every line of a cell stays inline."""
+    markdown = "| k | v |\n| --- | --- |\n| Status | old |\n"
+    want = _oracle(route, markdown.replace("old", cell))[0]
+    _written(route, markdown)
+    route.ok("edit", cell="1,1", tab="Main", new_text=new)
+    assert _read(route) == want
+
+
+@pytest.mark.parametrize("new", [
+    "a<br>![i](http://x/i.png)", "![i](http://x/i.png)<br>a", "a\n![i](http://x/i.png)",
+])
+def test_r2_02_a_multi_line_cell_with_an_image_is_refused(route, new):
+    """Round-2 review R2-02: an image in a multi-line cell is refused before
+    anything is sent, not dropped."""
     _written(route, "| k | v |\n| --- | --- |\n| S | old |\n")
-    route.ok("edit", cell="1,1", tab="Main", new_text="a<br>![i](http://x/i.png)")
+    before, batches = _read(route), len(route.service.batches)
+    code, output, error = route.call("edit", cell="1,1", tab="Main", new_text=new)
+    assert code != 0 and "cannot include an image" in output + error
+    assert len(route.service.batches) == batches and _read(route) == before
+
+
+def test_r2_02_a_one_line_cell_keeps_its_image(route):
+    _written(route, "| k | v |\n| --- | --- |\n| S | old |\n")
+    route.ok("edit", cell="1,1", tab="Main", new_text="a ![i](http://x/i.png)")
     assert "gdoc-image:" in _read(route)
 
 

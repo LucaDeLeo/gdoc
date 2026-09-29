@@ -1353,9 +1353,19 @@ def cmd_edit(args) -> int:
     # Resolve text from args or files (fail fast before API calls)
     old_text, new_text = _resolve_replacement_text(args, cell)
     if cell is not None:
-        # A cell holds inline text only, as its `cat` spelling reads.
-        from gdoc.mdparse import cell_inline
+        # A cell holds inline text only, as its `cat` spelling reads; its
+        # `<br>` breaks write back as paragraph breaks.
+        from gdoc.mdparse import cell_inline, parse_inline
         new_text = cell_inline(new_text)
+        if "\n" in new_text.strip("\n") and any(
+                s.type == "image" for s in parse_inline(new_text)[1]):
+            # A multi-line cell is written paragraph by paragraph, which
+            # keeps text styles only; refuse rather than drop the image.
+            raise GdocError(
+                "a cell replacement with a line break cannot include an image; "
+                "insert the image separately (insert-image), or write the "
+                "cell without the line break", exit_code=3,
+            )
 
     plan = _prepare_text_replacement(args, doc_id, old_text)
     matches = plan.matches

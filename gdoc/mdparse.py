@@ -248,10 +248,15 @@ def _code_spans(text: str) -> list[re.Match]:
 
 
 def cell_inline(text: str) -> str:
-    """A table cell holds inline text only: escape the first character of
-    any line that would otherwise parse as a block construct on its own (a
-    list marker, rule, fence, heading, quote or reference definition), so it
-    stays the text a pipe-table cell reads."""
+    """A table cell holds inline text only. Decode its ``<br>`` line breaks
+    as a pipe-table cell does (not escaped ones, not inside code spans), then
+    escape the first character of any line that would otherwise parse as a
+    block construct on its own (a list marker, rule, fence, heading, quote or
+    reference definition), so it stays the text a pipe-table cell reads."""
+    def decode(chunk):
+        return re.sub(r"\\.|<br>", lambda m: "\n" if m[0] == "<br>" else m[0],
+                      chunk)
+
     def inline(line):
         indent = line[:len(line) - len(line.lstrip(" \t"))]
         stripped = line[len(indent):]
@@ -269,7 +274,13 @@ def cell_inline(text: str) -> str:
                     + stripped[number.end():])
         return indent + "\\" + stripped
 
-    return "\n".join(inline(line) for line in text.split("\n"))
+    parts, cursor = [], 0
+    for code in _code_spans(text):
+        parts.append(decode(text[cursor:code.start()]))
+        parts.append(code[0])
+        cursor = code.end()
+    parts.append(decode(text[cursor:]))
+    return "\n".join(inline(line) for line in "".join(parts).split("\n"))
 
 
 def _table_cells(line: str) -> list[str]:
