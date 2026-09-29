@@ -540,11 +540,13 @@ class TestProbeScenarios:
     @pytest.mark.parametrize("markdown", [
         "![" * 8000,
         "`" * 20000,
+        " ".join("`" * i for i in range(1, 400)),
         "[a](" * 20000,
+        "[^" * 20000,
         "[" + "\\a" * 25000,
         "```\n" + "x\n" * 50000,
-    ], ids=["image-openers", "backticks", "link-openers", "escapes",
-            "unclosed-fence"])
+    ], ids=["image-openers", "backticks", "unequal-backtick-runs",
+            "link-openers", "footnote-openers", "escapes", "unclosed-fence"])
     def test_visible_text_stays_fast_on_pathological_markdown(self, markdown):
         import time
 
@@ -556,6 +558,31 @@ class TestProbeScenarios:
         # Linear inputs take milliseconds; the old patterns took seconds
         # to minutes here.
         assert time.perf_counter() - start < 1.0
+
+    @pytest.mark.parametrize("markdown", ["word\n" * 40000, "word " * 40000],
+                             ids=["many-lines", "one-line"])
+    def test_repeated_quote_is_fast(self, markdown):
+        import time
+
+        start = time.perf_counter()
+        result = annotate_markdown(markdown, [_comment("c1", "word")])
+        assert time.perf_counter() - start < 1.0
+        assert "[#c1 open]" in result
+
+    def test_multiline_link_label_is_visible_and_its_target_is_not(self):
+        # gdoc's own renderer can wrap a label across lines; the second
+        # link's target holds the only other "world!".
+        md = (
+            "[hello\nworld](https://a)!\n\n"
+            "[another\nlink](https://b/world!)\n"
+        )
+        live = {"c1": {"text": "world!", "key": "world!",
+                       "occurrence": 0, "occurrences": 1}}
+        comment = _comment("c1", "world!")
+        comment["quotedFileContent"]["mimeType"] = "text/plain"
+        for anchors in (live, None):
+            result = annotate_markdown(md, [comment], anchors=anchors)
+            assert _annotation_line(result, "c1") == 2
 
     def test_visible_text_is_built_once_per_call(self):
         from gdoc import annotate

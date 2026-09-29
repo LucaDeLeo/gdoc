@@ -3,6 +3,7 @@
 import html
 import re
 from array import array
+from bisect import bisect_left, bisect_right
 
 
 def _format_author(author_dict: dict) -> str:
@@ -77,39 +78,16 @@ def _find_all(text: str, key: str) -> list[int]:
     return starts
 
 
-# A link target: backslash escapes (Drive's export writes a ")" in a URL
-# as "\)") and one level of balanced parentheses (gdoc's own renderer
-# writes URLs raw). Links, images and code spans stay within one line, which
-# bounds how far a failed match can scan.
-_URL = r"\((?:\\.|\([^()\n]*\)|[^()\\\n])*\)"
-# An image, alone or inside a link label (Drive exports a linked image as
-# [![][image1]](https://example.com)).
-_IMAGE = r"!\[[^\[\]\n]*\](?:" + _URL + r"|\[[^\[\]\n]*\])"
+# Chars that never start markup; a run of them is kept in one step.
+_PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
+_LIST_MARKER = re.compile(r"[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
+_ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);")
+_FOOTNOTE_DEF = re.compile(r"\[\^[^\]\n]+\]:")
+_REFERENCE_DEF = re.compile(r"\[[^\]\n]+\]:")
 
-# Markdown that isn't visible text: a code fence (keeps its contents), a
-# list marker, an escape (keeps the escaped char), an HTML entity (keeps
-# the decoded char), a code span (keeps its contents), an image, a link
-# (keeps its label), a footnote definition (see _visible_text), a
-# reference definition line, a footnote reference, or an emphasis marker.
-# Underscores inside a word are literal, as in CommonMark.
-_MARKUP = re.compile("".join([
-    r"^(?P<fence>```|~~~)[^\n]*\n(?P<block>(?s:.*?))^(?P=fence)[^\n]*$",
-    r"|^[ \t]*(?:\d+[.)]|[-*+])[ \t]+",
-    r"|\\(?P<escaped>.)",
-    r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)",
-    # A maximal backtick run opens a code span and the next run of the same
-    # length closes it; both runs being maximal keeps a long run of
-    # backticks from being retried at every split.
-    r"|(?<!`)(?P<ticks>`+)(?!`)(?P<code>.+?)(?<!`)(?P=ticks)(?!`)",
-    r"|", _IMAGE,
-    # A "[" inside a label must start an image, so a failed image attempt
-    # ends the label instead of rescanning the rest of the line.
-    r"|\[(?P<label>(?:\\.|", _IMAGE, r"|[^\[\]\\\n])*)\]", _URL,
-    r"|^(?P<footnote>\[\^[^\]\n]+\]:)[^\n]*$",
-    r"|^\[[^\]\n]+\]:[^\n]*$",
-    r"|\[\^[^\]\n]+\]",
-    r"|\*+|~~|(?<!\w)_+|_+(?!\w)",
-]), re.MULTILINE)
+
+def _is_word(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
 
 
 def _visible_text(
@@ -117,44 +95,193 @@ def _visible_text(
 ) -> tuple[str, array]:
     """The markdown's visible text, and each char's index in *markdown*.
 
+    Dropped, as not visible: code fence lines (their contents are kept),
+    list markers, escape backslashes, code span backticks, images, link
+    targets (link labels are kept), reference definition lines, footnote
+    references, and emphasis markers (``*``, ``~~``, and ``_`` at a word
+    edge — inside a word it is literal, as in CommonMark). HTML entities
+    are decoded.
+
     Footnote definitions are dropped unless *footnotes* is set: live
     anchors are counted against the document body, which doesn't hold
     footnote text, while a quote search must see every copy of the quote.
+
+    One pass over precomputed tables — matching brackets and parentheses,
+    backtick runs by length, fence lines, line ends — so no construct is
+    rescanned, whatever the input.
     """
+    md = markdown
+    n = len(md)
     chars: list[str] = []
     where = array("q")  # one compact int per char
 
-    def keep(start: int, end: int) -> None:
-        chars.extend(markdown[start:end])
-        where.extend(range(start, end))
+    # Tables. A backtick run closes a code span only if it is maximal, and a
+    # backslash before it is literal inside the span, so runs are taken from
+    # the raw text. Escaped brackets and parentheses never open or close.
+    runs: dict[int, list[int]] = {}  # backtick run length -> run starts
+    for m in re.finditer(r"`+", md):
+        runs.setdefault(m.end() - m.start(), []).append(m.start())
+    close_bracket: dict[int, int] = {}
+    close_paren: dict[int, int] = {}
+    brackets: list[int] = []
+    parens: list[int] = []
+    escaped = -1  # position of the char after the latest escaping backslash
+    for m in re.finditer(r"[\\\[\]()]", md):
+        i = m.start()
+        if i == escaped:
+            continue
+        ch = md[i]
+        if ch == "\\":
+            escaped = i + 1
+        elif ch == "[":
+            brackets.append(i)
+        elif ch == "]" and brackets:
+            close_bracket[brackets.pop()] = i
+        elif ch == "(":
+            parens.append(i)
+        elif ch == ")" and parens:
+            close_paren[parens.pop()] = i
+    newlines = [k for k, ch in enumerate(md) if ch == "\n"]
+    blank_lines = [k for k in newlines if k + 1 < n and md[k + 1] == "\n"]
+    fence_lines = {
+        mark: [
+            k + 1 for k in [-1, *newlines]
+            if md.startswith(mark, k + 1)
+        ]
+        for mark in ("```", "~~~")
+    }
 
-    def scan(start: int, end: int) -> None:
-        pos = start
-        for m in _MARKUP.finditer(markdown, start, end):
-            keep(pos, m.start())
-            if m["block"] is not None:
-                keep(m.start("block"), m.end("block"))
-            elif m["escaped"] is not None:
-                keep(m.start("escaped"), m.end("escaped"))
-            elif m["entity"] is not None:
-                decoded = html.unescape(m["entity"])
-                chars.extend(decoded)
-                where.extend([m.start("entity")] * len(decoded))
-            elif m["code"] is not None:
-                keep(m.start("code"), m.end("code"))
-            elif m["label"] is not None:
-                scan(m.start("label"), m.end("label"))
-            elif m["footnote"] is not None and footnotes:
-                scan(m.end("footnote"), m.end())
-            pos = m.end()
-        keep(pos, end)
+    def line_end(k: int) -> int:
+        """Index of the newline ending the line holding *k* (or n)."""
+        idx = bisect_right(newlines, k)
+        return newlines[idx] if idx < len(newlines) else n
 
-    scan(0, len(markdown))
+    def one_line(a: int, b: int) -> bool:
+        return b < line_end(a)
+
+    def no_blank_line(a: int, b: int) -> bool:
+        idx = bisect_right(blank_lines, a)
+        return idx == len(blank_lines) or blank_lines[idx] >= b
+
+    def target_end(k: int) -> int | None:
+        """End of a (url) or [ref] target starting at *k*, or None."""
+        if k < n and md[k] == "(" and k in close_paren:
+            end = close_paren[k]
+        elif k < n and md[k] == "[" and k in close_bracket:
+            end = close_bracket[k]
+        else:
+            return None
+        return end + 1 if one_line(k, end) else None
+
+    def keep(a: int, b: int) -> None:
+        chars.extend(md[a:b])
+        where.extend(range(a, b))
+
+    frames: list[tuple[int, int]] = []  # (label end, resume after target)
+    i = 0
+    while i < n:
+        if frames and i >= frames[-1][0]:
+            i = frames.pop()[1]
+            continue
+        limit = frames[-1][0] if frames else n
+        ch = md[i]
+        # Line-level markup counts only outside a link label.
+        if not frames and (i == 0 or md[i - 1] == "\n"):
+            mark = md[i:i + 3]
+            if mark in fence_lines:
+                lines = fence_lines[mark]
+                k = bisect_right(lines, i)
+                if k < len(lines):
+                    body = line_end(i) + 1
+                    keep(body, lines[k])
+                    i = line_end(lines[k])
+                    continue
+            m = _LIST_MARKER.match(md, i)
+            if m:
+                i = m.end()
+                continue
+            m = _FOOTNOTE_DEF.match(md, i)
+            if m:
+                i = m.end() if footnotes else line_end(i)
+                continue
+            if _REFERENCE_DEF.match(md, i):
+                i = line_end(i)
+                continue
+        m = _PLAIN.match(md, i, limit)
+        if m:
+            keep(i, m.end())
+            i = m.end()
+        elif ch == "\\" and i + 1 < limit and md[i + 1] != "\n":
+            keep(i + 1, i + 2)
+            i += 2
+        elif ch == "&" and (m := _ENTITY.match(md, i, limit)):
+            decoded = html.unescape(m.group())
+            chars.extend(decoded)
+            where.extend([i] * len(decoded))
+            i = m.end()
+        elif ch == "`":
+            j = i
+            while j < n and md[j] == "`":
+                j += 1
+            same = runs.get(j - i, [])
+            k = bisect_right(same, i)
+            closer = same[k] if k < len(same) else None
+            if closer is not None and closer < limit and one_line(i, closer):
+                keep(j, closer)
+                i = closer + (j - i)
+            else:
+                keep(i, j)
+                i = j
+        elif (
+            ch == "!" and i + 1 < limit and md[i + 1] == "["
+            and i + 1 in close_bracket
+            and (end := target_end(close_bracket[i + 1] + 1)) is not None
+            and end <= limit
+        ):
+            i = end  # an image: nothing visible
+        elif ch == "[" and i in close_bracket:
+            close = close_bracket[i]
+            end = target_end(close + 1)
+            if (
+                md[i + 1:i + 2] != "^" and end is not None
+                and md[close + 1] == "(" and end <= limit
+                and no_blank_line(i, close)
+            ):
+                frames.append((close, end))  # a link: keep its label
+                i += 1
+            elif md[i + 1:i + 2] == "^" and one_line(i, close):
+                i = close + 1  # a footnote reference
+            else:
+                keep(i, i + 1)
+                i += 1
+        elif ch == "*":
+            while i < n and md[i] == "*":
+                i += 1
+        elif ch == "~" and md[i:i + 2] == "~~":
+            i += 2
+        elif ch == "_":
+            j = i
+            while j < n and md[j] == "_":
+                j += 1
+            before = md[i - 1] if i else ""
+            after = md[j] if j < n else ""
+            if before and _is_word(before) and after and _is_word(after):
+                keep(i, j)
+            i = j
+        else:
+            keep(i, i + 1)
+            i += 1
     return "".join(chars), where
 
 
+def _newlines(markdown: str) -> list[int]:
+    """Positions of the newlines in *markdown*; line index of position p is
+    ``bisect_left(newlines, p)``."""
+    return [i for i, ch in enumerate(markdown) if ch == "\n"]
+
+
 def _place_live(
-    markdown: str, visible: tuple[str, array], anchor: dict,
+    newlines: list[int], visible: tuple[str, array], anchor: dict,
 ) -> int | None:
     """Line index for a live anchor, or None when it can't be pinned down.
 
@@ -172,11 +299,11 @@ def _place_live(
     if not starts or len(starts) != anchor.get("occurrences"):
         return None
     last = where[starts[anchor["occurrence"]] + len(key) - 1]
-    return markdown.count("\n", 0, last)
+    return bisect_left(newlines, last)
 
 
 def _place_quote(
-    markdown: str, visible: tuple[str, array], qfc: dict,
+    newlines: list[int], visible: tuple[str, array], qfc: dict,
 ) -> tuple[str, int | None, str]:
     """Place a comment by its quoted text: (note, line index or None, quote).
 
@@ -202,9 +329,11 @@ def _place_quote(
     text, where = visible
     found: dict[int, str] = {}  # line index -> the reading found there
     for reading in readings:
-        for start in _find_all(text, reading):
+        start = text.find(reading)
+        while start != -1 and len(found) < 2:
             last = where[start + len(reading) - 1]
-            found.setdefault(markdown.count("\n", 0, last), reading)
+            found.setdefault(bisect_left(newlines, last), reading)
+            start = text.find(reading, start + 1)
     if not found:
         return "quoted text not found (edited or detached)", None, raw
     if len(found) > 1:
@@ -263,6 +392,7 @@ def annotate_markdown(
 
     visible = None  # built on first use, for live anchors
     visible_all = None  # with footnote text, for quote searches
+    newlines = None  # newline positions, for line lookups
     for c in comments:
         if c.get("id") in anchors:
             live = anchors[c["id"]]
@@ -271,7 +401,9 @@ def annotate_markdown(
                 continue
             if visible is None:
                 visible = _visible_text(markdown)
-            line_idx = _place_live(markdown, visible, live)
+            if newlines is None:
+                newlines = _newlines(markdown)
+            line_idx = _place_live(newlines, visible, live)
             if line_idx is None:
                 unanchored.append((c, "attached, location not found"))
             else:
@@ -286,7 +418,9 @@ def annotate_markdown(
 
         if visible_all is None:
             visible_all = _visible_text(markdown, footnotes=True)
-        note, line_idx, anchor_text = _place_quote(markdown, visible_all, qfc)
+        if newlines is None:
+            newlines = _newlines(markdown)
+        note, line_idx, anchor_text = _place_quote(newlines, visible_all, qfc)
         if line_idx is None:
             unanchored.append((c, note))
         else:
