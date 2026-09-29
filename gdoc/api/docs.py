@@ -3563,7 +3563,10 @@ def _list_continuation(parsed, content, above, lists, same_list=False):
     number = _list_number(content, above.get("startIndex", 0), lists)
     at_level = [s for s in first_list if s.list_depth == level]
     requested = dict(parsed.non_default_start_items)
-    if (ordered and at_level and not same_list
+    # Replacing an item of that list keeps its slot, whatever number it
+    # asks for, only when the first new item is at that item's level.
+    slot = same_list and at_level and at_level[0] is items[0]
+    if (ordered and at_level and not slot
             and requested.get(at_level[0].start, 1) != number + 1):
         return None
     return preset, level, {item.start: number + k
@@ -3606,9 +3609,11 @@ def _refuse_list_split(parsed, content, native, lists) -> None:
                                 bullet.get("nestingLevel", 0)) in kinds}
     # The continued list keeps its later items only when every new item
     # stays in it (one Markdown list, no restart).
-    if parsed.continues_list and len({s.list_group for s in items
-                                      if s.list_depth == parsed.continues_level}) == 1 \
-            and len({s.list_block for s in items}) == 1:
+    from gdoc.mdparse import _native_lists
+
+    # Exempt only when every new item is in the native list that joins.
+    joining = _native_lists(parsed, sorted(items, key=lambda s: s.start))[0]
+    if parsed.continues_list and len(joining) == len(items):
         above = next((e["paragraph"] for e in _flat_paragraphs(content)
                       if e.get("endIndex") == native[0][1]), {})
         ids.discard((above.get("bullet") or {}).get("listId"))

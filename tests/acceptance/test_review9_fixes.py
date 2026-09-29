@@ -529,6 +529,9 @@ def test_cell_paragraphs_become_one_list(route):
     ("1. a\n2. b\n3. c\n4. d\n", "b\nc", "2. B\n1. C"),
     ("1. a\n2. b\n3. c\n", "a\nb", "- A\n1. B"),
     ("1. a\n2. b\n3. c\n", "b", "- x\n1. y"),
+    ("1. a\n2. b\n3. c\n", "b", "  1. x\n  - y\n2. B"),
+    ("1. a\n2. b\n3. c\n", "b", "  1. x\n\n  1. y\n2. B"),
+    ("1. a\n2. b\n3. c\n", "b", "  1. child\n1. restart"),
 ])
 def test_restarts_that_renumber_later_items_are_refused(route, base, old, new):
     """Round 6 (Codex R6-2)."""
