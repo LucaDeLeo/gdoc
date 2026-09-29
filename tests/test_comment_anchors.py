@@ -1212,6 +1212,18 @@ class TestMergedWithNativeReads:
                    "quotedFileContent": {"value": "*beta*"}}
         assert "[quoted text found]" in annotate_markdown(markdown, [comment])
 
+    @pytest.mark.parametrize("markdown", [
+        "- item\n# Heading\n    ```\nalpha *beta*\n",
+        "- item\n***\n    ```\nalpha *beta*\n",
+        "- item\n  ```\n  code\n  ```\nText\n    ```\nalpha *beta*\n",
+    ])
+    def test_a_block_after_a_list_ends_it(self, markdown):
+        """A heading, a rule or a paragraph after closed code is no lazy
+        continuation: the four-space line after it is not a fence."""
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "alpha beta"}}
+        assert "[quoted text found]" in annotate_markdown(markdown, [comment])
+
     def test_top_level_four_space_indent_is_not_a_fence(self):
         comment = {"id": "c1", "content": "check",
                    "quotedFileContent": {"value": "a b c"}}

@@ -83,6 +83,9 @@ _PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
 # Code inside such a fence is literal too.
 _FENCE = re.compile(r"((?:[ \t]*>)*)([ \t]*)(`{3,}|~{3,})([^\n]*)")
 _QUOTED = re.compile(r"(?:[ \t]*>)*")
+# Lines that start a block rather than continue a paragraph: an ATX heading
+# or a thematic break (a list item is matched separately).
+_BLOCK_START = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|([-*_])(?:[ \t]*\1){2,}[ \t]*$)")
 _LIST_MARKER = re.compile(r"[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
 _ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);")
 _FOOTNOTE_DEF = re.compile(r"\[\^[^\]\n]+\]:")
@@ -149,7 +152,7 @@ def _visible_text(
     fenced: list[tuple[int, int]] = []  # (start, end) of each block
     opened: tuple[int, str, int, int, int] | None = None
     items: list[int] = []  # content columns of the open list items
-    after_blank = False
+    paragraph = False  # a paragraph is open, so a dedented line is lazy
     for line in [0, *(k + 1 for k in newlines)]:
         end = md.find("\n", line)
         end = n if end < 0 else end
@@ -158,18 +161,19 @@ def _visible_text(
             # Track list items (after any quote markers) for fence indents.
             body = md[_QUOTED.match(md, line, end).end():end]
             if not body.strip():
-                after_blank = True
+                paragraph = False
                 continue
             col = len(body) - len(body.lstrip(" "))
             marker = _LIST_MARKER.match(body)
-            # A less indented block after a blank line ends the deeper
-            # items; without one it is a lazy paragraph continuation.
-            if marker or after_blank:
+            block = _BLOCK_START.match(body)
+            # A less indented line ends the deeper items, unless it is a
+            # lazy continuation of an open paragraph.
+            if marker or block or not paragraph:
                 while items and items[-1] > col:
                     items.pop()
             if marker:
                 items.append(marker.end())
-            after_blank = False
+            paragraph = not block or bool(marker)
             continue
         if not m:
             continue
@@ -184,6 +188,7 @@ def _visible_text(
                 continue  # indented code, not a fence
             if not (run[0] == "`" and "`" in rest):
                 opened = (line, run[0], len(run), len(indent), base)
+                paragraph = False
         elif (
             run[0] == opened[1] and len(run) >= opened[2]
             and not rest.strip(" \t")
@@ -192,7 +197,7 @@ def _visible_text(
             fences[opened[0]] = (line, opened[3])
             fenced.append((opened[0], line_end(line)))
             opened = None
-            after_blank = False
+            paragraph = False
     if opened is not None:
         fences[opened[0]] = (None, opened[3])
         fenced.append((opened[0], n))
