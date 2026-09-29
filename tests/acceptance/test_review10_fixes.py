@@ -212,6 +212,53 @@ def test_r2_01_one_item_plus_text_in_a_container_is_refused(route, markdown, old
     assert len(route.service.batches) == batches
 
 
+def _pull(monkeypatch, tmp_path, *blocks):
+    from gdoc import cli
+
+    route = NativeRoute("cli", monkeypatch, tmp_path)
+    route.load(NativeDoc(*blocks))
+    pulled = tmp_path / "d.md"
+    assert cli.run_argv(["pull", "synthetic", str(pulled)], check_updates=False) == 0
+    return route, pulled
+
+
+def test_r2_05_mcp_write_of_pulled_text_creates_no_files(monkeypatch, tmp_path):
+    import glob
+    import tempfile
+
+    route, pulled = _pull(monkeypatch, tmp_path, ("p", "Alpha."))
+    route.interface = "mcp"
+    before = set(glob.glob(tempfile.gettempdir() + "/gdoc-mcp-text-*"))
+    route.ok("write", text=pulled.read_text().replace("Alpha.", "Alpha one."))
+    assert set(glob.glob(tempfile.gettempdir() + "/gdoc-mcp-text-*")) == before
+    assert _read(route) == "Alpha one.\n"
+
+
+def test_r2_15_another_tabs_file_says_so(monkeypatch, tmp_path):
+    from gdoc import cli
+
+    route, pulled = _pull(monkeypatch, tmp_path, ("p", "Alpha."))
+    text = pulled.read_text()
+    fingerprint = next(line for line in text.splitlines()
+                       if line.startswith("gdoc-tab-sha256:"))
+    pulled.write_text(text.replace(fingerprint, "gdoc-tab-sha256: " + "0" * 64)
+                      .replace("Alpha.", "Other."))
+    import contextlib
+    import io
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code = cli.run_argv(["write", "synthetic", str(pulled)], check_updates=False)
+    assert code == 3 and "another tab" in err.getvalue()
+
+
+def test_r2_18_a_bom_before_frontmatter_is_ignored():
+    from gdoc.frontmatter import parse_frontmatter
+
+    metadata, body = parse_frontmatter("﻿---\ngdoc: d\n---\nText\n")
+    assert metadata == {"gdoc": "d"} and body == "Text\n"
+
+
 def test_r2_04_a_table_between_quoted_blanks_matches_write(route):
     """Round-2 review R2-04: the quote's own blanks are the separators."""
     quoted = "\n".join("> " + line for line in T.split("\n"))

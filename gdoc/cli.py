@@ -1593,7 +1593,10 @@ def cmd_write(args) -> int:
 
     # `tab`, `gdoc-revision` and `gdoc-tab-sha256` are provenance only in a
     # file `pull` wrote for this document; they are checked as `push` checks
-    # them, so reading a newer copy cannot authorize an older file.
+    # them, so reading a newer copy cannot authorize an older file. MCP text
+    # input has no file to keep, so nothing is written back for it.
+    refresh = pulled_doc and not os.path.basename(file_path).startswith(
+        "gdoc-mcp-text-")
     details = {}
     result = _write_native_markdown(
         args, doc_id, content, command="write", tab_name=tab_name,
@@ -1601,9 +1604,9 @@ def cmd_write(args) -> int:
         file_revision=metadata.get("gdoc-revision", "") if pulled_doc else None,
         file_tab_fingerprint=(metadata.get("gdoc-tab-sha256")
                               if pulled_doc else None),
-        result_details=details if pulled_doc else None,
+        result_details=details if refresh else None,
     )
-    if pulled_doc:
+    if refresh:
         # As push does: the file now matches the acknowledged revision, so
         # its next write or push is not stale because of this one.
         _refresh_file_revision(file_path, raw, details)
@@ -1753,6 +1756,13 @@ def _write_native_markdown(
         # The revision is document-wide. A change elsewhere (another tab)
         # leaves the file current when the selected tab's native content is
         # exactly what it was at the file's revision.
+        if not file_current and file_revision == revision:
+            raise GdocError(
+                "the file's recorded tab fingerprint does not match the "
+                "selected tab, so it holds another tab's content (its tab "
+                "field may have been removed). Pull the tab you mean to write, "
+                "or use --force to intentionally overwrite.", 3,
+            )
         if not file_current:
             raise GdocError(
                 "file gdoc-revision is stale; the selected tab changed since "
@@ -2189,6 +2199,12 @@ def cmd_sync_hook(args) -> int:
                                f"check: {error})")
             return 0
         _refresh_file_revision(file_path, content, write_result)
+        if write_result.get("rebased"):
+            # stderr is hidden from the agent on exit 0; say it in context.
+            _hook_notice(data, f"SYNC: pushed {file_path}, but another edit "
+                               "landed during the write and its later stages "
+                               "were rebased onto it; pull the file again "
+                               "before editing it further")
         print(f"SYNC: pushed to {metadata.get('title', doc_id)!r}", file=sys.stderr)
 
     except Exception as e:

@@ -31,7 +31,8 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
 
     Returns (metadata_dict, body_without_frontmatter).
     If no valid frontmatter, returns ({}, content).
-    Only supports flat key: value pairs.
+    Only supports flat key: value pairs. A leading UTF-8 byte-order mark,
+    which some editors add on save, is ignored.
 
     Markdown input carries at most one leading metadata block: either an
     empty block (`---` on two consecutive lines, which `protect_body` adds
@@ -47,6 +48,7 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     after the empty block, as `cat` prints it, or escapes the colon
     (`Note\\:`).
     """
+    content = content.removeprefix("\ufeff")
     empty = _EMPTY_FRONTMATTER_RE.match(content)
     if empty:
         return {}, content[empty.end():]

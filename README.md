@@ -342,7 +342,9 @@ the server with, it restricts the tool surface too — and must include
 How the tools differ from the CLI:
 
 - `write`, `insert`, and `new` take markdown content as inline `text`
-  instead of a local file path.
+  instead of a local file path. `write` of pulled text checks its
+  `gdoc-revision` as for a file, but no file is updated afterwards; `cat`
+  again before the next write.
 - Parameters that name local files (`edit --old-file/--new-file`,
   `diff FILE`/`--out`, `images --download`, …) are not exposed: a chat
   client cannot see the server's filesystem, and hiding them keeps a
@@ -433,7 +435,9 @@ with `key: value` lines, or an empty block of two `---` lines. `write` of a pull
 file (one whose `gdoc` names this document) replaces the tab it was pulled from
 when `--tab` is absent, and refuses a different `--tab` or another document;
 remove the frontmatter to copy the text elsewhere. It also checks the file's
-`gdoc-revision` as `push` does (below). `write` of a `pull --revision` file needs
+`gdoc-revision` as `push` does (below), and after an acknowledged write it
+updates the file's provenance fields as `push` does, so the next write or push of
+the same file is not stale because of it. `write` of a `pull --revision` file needs
 `--force`, because it replaces the live tab with older text. A `tab` field without
 `gdoc` provenance is ignored. When a tab starts
 with a horizontal rule, `cat` and Markdown `export` print that empty block first, so
@@ -474,8 +478,8 @@ size, so any later revision change makes such a file stale until a fresh pull.
 Because a revision string alone is never a read baseline, such a file also needs a
 fresh read or `--force` when this machine has no local state for the document,
 even at the same revision (for example after moving the file to another machine). Files without revision provenance
-need a fresh pull or an explicit `--force`. An acknowledged push updates only its
-provenance fields, preserving other frontmatter, and reads the document once more
+need a fresh pull or an explicit `--force`. An acknowledged push, or `write` of a
+pulled file, updates only its provenance fields, preserving other frontmatter, and reads the document once more
 to fingerprint the written tab; if another edit already landed, the fingerprint is
 left empty and the next push needs a fresh pull. `gdoc-body-sha256` records the
 last pulled or acknowledged body. The pull hook leaves locally edited files in
@@ -503,8 +507,9 @@ creates use the Google client's ordinary transport, which can resend a request
 after a lost response. Inspect the document before retrying.
 
 To recover from a partial, uncertain or rebased write, including one that
-inserted or replaced images, do not rerun it: read the tab again with `cat` or
-`pull`, and apply the remaining change to that read. The fresh read shows which
+inserted or replaced images, do not rerun it: read the tab again, with `cat` for
+text you write from or `pull` for a pulled file (a `cat` does not refresh a pulled
+file's revision), and apply the remaining change to that read. The fresh read shows which
 content and images landed and gives each image its current
 `gdoc-image:OBJECT_ID`; references from the earlier read may no longer resolve,
 so use the new ones. `--force-collapse-tabs` explicitly
