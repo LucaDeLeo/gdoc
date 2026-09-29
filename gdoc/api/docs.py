@@ -1156,6 +1156,65 @@ def _raise_if_stale_revision(e: HttpError) -> None:
         )
 
 
+class StaleRevisionError(GdocError):
+    """The pinned revision was stale, so the batch was not applied."""
+
+
+def batch_update_pinned(
+    doc_id: str, requests: list[dict], revision_id: str,
+) -> None:
+    """Run one batchUpdate pinned to *revision_id* (all requests or none).
+
+    A stale revision (someone edited since the read) becomes a clear
+    "re-run it" error instead of a raw 400. A 5xx or a failure in transit
+    can arrive after Google applied the batch, so those say the outcome is
+    unknown: for a non-idempotent change a blind retry would apply it
+    twice.
+    """
+    from google.auth.exceptions import GoogleAuthError, TransportError
+
+    unknown = (
+        "The outcome is unknown: the change may or may not have been "
+        "saved. Inspect the document before retrying."
+    )
+    # Built before the try: a credentials failure here happens before
+    # anything is sent, so it must not read as an unknown outcome.
+    service = get_docs_service()
+    try:
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": requests,
+                "writeControl": {"requiredRevisionId": revision_id},
+            },
+        ).execute()
+    except HttpError as e:
+        try:
+            _raise_if_stale_revision(e)
+        except GdocError as stale:
+            raise StaleRevisionError(str(stale)) from e
+        if int(e.resp.status) >= 500:
+            raise GdocError(
+                f"the write returned a server error ({int(e.resp.status)}: "
+                f"{e.reason}). {unknown}"
+            )
+        _translate_http_error(e, doc_id)
+    except TransportError as e:
+        # Raised only while refreshing the access token, before the
+        # request is sent.
+        raise GdocError(
+            f"the write failed before it was sent (network error during "
+            f"token refresh: {e}). No change was made."
+        )
+    except GoogleAuthError as e:
+        raise AuthError(f"Authentication expired ({e}). Run `gdoc auth`.")
+    except Exception as e:  # noqa: BLE001 — .execute() is the network call
+        raise GdocError(
+            f"the write failed in transit ({str(e) or type(e).__name__}). "
+            f"{unknown}"
+        )
+
+
 def find_object_tab(doc: dict, object_id: str) -> str | None:
     """Find which tab holds an inline/positioned object ID.
 
