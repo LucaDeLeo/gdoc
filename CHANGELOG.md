@@ -30,6 +30,42 @@ All notable changes to `gdoc` are documented here. This project follows
   delete: author). `delete-suggestion` uses the standard destructive
   confirmation / `--force`. All five are exposed over MCP.
 
+## [0.22.0] — 2026-09-28
+
+### Added
+- **List nesting: `gdoc nest DOC TEXT` and `gdoc unnest DOC TEXT`.** Move a
+  list item, or a range of items (`--to TEXT`), with their sub-items by
+  `--levels N` (default 1), like Tab and Shift-Tab in Google Docs. The items
+  are rebuilt in place in one `requiredRevisionId`-pinned batch so they rejoin
+  their own native list: the list ID, a UI-restarted start number, text and
+  marker styles, paragraph spacing, heading IDs, comment anchors and
+  bookmarks are kept, and nothing else in the tab is rewritten. The result
+  is read back, with the moved items found by their text so edits elsewhere
+  in the tab do not matter; an item not at its planned level, list, marker,
+  paragraph style or indent, a blank line whose indent changed, or a
+  changed paragraph just before or after the moved items is reported as a
+  warning with `"verified": false` (the change is saved, exit 0).
+  Refused before any write (exit 3):
+  - ambiguous or missing text, non-list or in-table targets;
+  - moves that would rebuild a list's first item, skip a level, or unnest past
+    the top level;
+  - checkbox and custom-glyph lists, and numbered presets other than
+    `1. a. i.` (for example `1) a) i)`);
+  - items that start with a tab, carry a hand-set indent, hold pending
+    suggestions, anchor a floating image or drawing, or overlap a named range;
+  - items whose bullet or number has its own formatting (anything but the
+    bold, font and size of a fully formatted item), or a style covering the
+    whole item but not its marker;
+  - moves that would merge, split or re-home lists (ranges across lists, items
+    right after another list's item, an unnest that would sweep in a deeper
+    item of another list, sub-items that are a separate list).
+
+  A 5xx or dropped connection on the write says the outcome is unknown, a
+  stale-revision error is checked against the document before it says
+  "re-run", and failures after a saved write are warnings, so a caller never
+  retries a change that was applied. Honors `--tab` and `--account`; exposed
+  over MCP as `gdoc_nest` and `gdoc_unnest` (write tools).
+
 ## [0.21.1] — 2026-09-28
 
 ### Fixed
