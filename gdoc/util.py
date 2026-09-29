@@ -55,6 +55,11 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 _active_account: ContextVar[str | None] = ContextVar(
     "gdoc_active_account", default=None
 )
+# The temp file holding the current MCP call's inline `text`, if any; it is
+# the caller's text, not a file to keep, so a write never refreshes it.
+mcp_text_path: ContextVar[str | None] = ContextVar(
+    "gdoc_mcp_text_path", default=None
+)
 _VALID_ACCOUNT = re.compile(r'^[\w.\-@]+$')
 
 

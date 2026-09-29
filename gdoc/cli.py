@@ -1595,8 +1595,9 @@ def cmd_write(args) -> int:
     # file `pull` wrote for this document; they are checked as `push` checks
     # them, so reading a newer copy cannot authorize an older file. MCP text
     # input has no file to keep, so nothing is written back for it.
-    refresh = pulled_doc and not os.path.basename(file_path).startswith(
-        "gdoc-mcp-text-")
+    from gdoc.util import mcp_text_path
+
+    refresh = pulled_doc and file_path != mcp_text_path.get()
     details = {}
     result = _write_native_markdown(
         args, doc_id, content, command="write", tab_name=tab_name,

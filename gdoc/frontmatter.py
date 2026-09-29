@@ -111,7 +111,12 @@ def add_frontmatter(body: str, metadata: dict) -> str:
 
 
 def update_frontmatter_value(content: str, key: str, value: str) -> str:
-    """Update one flat field without reserializing unrelated frontmatter."""
+    """Update one flat field without reserializing unrelated frontmatter.
+
+    A leading UTF-8 byte-order mark is kept, as parse_frontmatter ignores it.
+    """
+    if content.startswith("\ufeff"):
+        return "\ufeff" + update_frontmatter_value(content[1:], key, value)
     match = _FRONTMATTER_RE.match(content)
     if not match:
         return content

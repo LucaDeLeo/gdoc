@@ -223,14 +223,15 @@ def _pull(monkeypatch, tmp_path, *blocks):
 
 
 def test_r2_05_mcp_write_of_pulled_text_creates_no_files(monkeypatch, tmp_path):
-    import glob
     import tempfile
 
     route, pulled = _pull(monkeypatch, tmp_path, ("p", "Alpha."))
     route.interface = "mcp"
-    before = set(glob.glob(tempfile.gettempdir() + "/gdoc-mcp-text-*"))
+    server = tmp_path / "server-tmp"
+    server.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(server))
     route.ok("write", text=pulled.read_text().replace("Alpha.", "Alpha one."))
-    assert set(glob.glob(tempfile.gettempdir() + "/gdoc-mcp-text-*")) == before
+    assert list(server.iterdir()) == []
     assert _read(route) == "Alpha one.\n"
 
 
@@ -252,11 +253,19 @@ def test_r2_15_another_tabs_file_says_so(monkeypatch, tmp_path):
     assert code == 3 and "another tab" in err.getvalue()
 
 
-def test_r2_18_a_bom_before_frontmatter_is_ignored():
-    from gdoc.frontmatter import parse_frontmatter
+def test_r2_18_a_pulled_file_saved_with_a_bom_writes_twice(monkeypatch, tmp_path):
+    """Round-2 review R2-18: a byte-order mark hides neither the provenance
+    nor its refresh, and the mark is kept."""
+    from gdoc import cli
 
-    metadata, body = parse_frontmatter("﻿---\ngdoc: d\n---\nText\n")
-    assert metadata == {"gdoc": "d"} and body == "Text\n"
+    route, pulled = _pull(monkeypatch, tmp_path, ("p", "Alpha."))
+    for old, new in (("Alpha.", "Beta."), ("Beta.", "Gamma.")):
+        text = pulled.read_text(encoding="utf-8").removeprefix("\ufeff")
+        pulled.write_text("\ufeff" + text.replace(old, new), encoding="utf-8")
+        assert cli.run_argv(["write", "synthetic", str(pulled)],
+                            check_updates=False) == 0
+        assert pulled.read_text(encoding="utf-8").startswith("\ufeff---\n")
+    assert _read(route) == "Gamma.\n"
 
 
 def test_r2_04_a_table_between_quoted_blanks_matches_write(route):

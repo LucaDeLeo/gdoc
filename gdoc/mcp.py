@@ -563,11 +563,6 @@ def _reject_stdin_sentinels(command: str, arguments: dict[str, Any]) -> None:
             )
 
 
-# Temp files holding MCP `text` input; a write never refreshes them, since
-# the caller has no file to keep (see cmd_write).
-MCP_TEXT_PREFIX = "gdoc-mcp-text-"
-
-
 @contextlib.contextmanager
 def _materialised_text(command: str, arguments: dict[str, Any]):
     """Swap an inline `text` argument for a temp file the CLI can read."""
@@ -583,14 +578,18 @@ def _materialised_text(command: str, arguments: dict[str, Any]):
     # delete=False so the CLI can reopen the path by name — Windows locks
     # a NamedTemporaryFile that is still open.
     handle = tempfile.NamedTemporaryFile(
-        "w", prefix=MCP_TEXT_PREFIX, suffix=".md", encoding="utf-8", delete=False
+        "w", suffix=".md", encoding="utf-8", delete=False
     )
+    from gdoc.util import mcp_text_path
+
+    token = mcp_text_path.set(handle.name)
     try:
         with handle:
             handle.write(arguments["text"])
         prepared[file_arg] = handle.name
         yield prepared
     finally:
+        mcp_text_path.reset(token)
         with contextlib.suppress(OSError):
             os.unlink(handle.name)
 
