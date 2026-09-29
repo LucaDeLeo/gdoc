@@ -78,7 +78,7 @@ def _find_all(text: str, key: str) -> list[int]:
 
 # Chars that never start markup; a run of them is kept in one step.
 _PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
-_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})([^\n]*)")
+_FENCE = re.compile(r"( {0,3})(`{3,}|~{3,})([^\n]*)")
 _LIST_MARKER = re.compile(r"[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
 _ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);")
 _FOOTNOTE_DEF = re.compile(r"\[\^[^\]\n]+\]:")
@@ -139,23 +139,28 @@ def _visible_text(
     # indent, then 3+ backticks or tildes (a backtick fence's info string
     # can't hold a backtick); the block closes on a run of the same char at
     # least as long with nothing else on the line, or runs to the end.
-    fences: dict[int, int | None] = {}  # opening line -> closing line
+    # (Content lines lose up to the opener's indent; only spaces and tabs may
+    # follow a closing run.)
+    fences: dict[int, tuple[int | None, int]] = {}  # line -> (closer, indent)
     fenced: list[tuple[int, int]] = []  # (start, end) of each block
-    opened: tuple[int, str, int] | None = None
+    opened: tuple[int, str, int, int] | None = None
     for line in [0, *(k + 1 for k in newlines)]:
         m = _FENCE.match(md, line)
         if not m:
             continue
-        run, rest = m.group(1), m.group(2)
+        indent, run, rest = m.group(1), m.group(2), m.group(3)
         if opened is None:
             if not (run[0] == "`" and "`" in rest):
-                opened = (line, run[0], len(run))
-        elif run[0] == opened[1] and len(run) >= opened[2] and not rest.strip():
-            fences[opened[0]] = line
+                opened = (line, run[0], len(run), len(indent))
+        elif (
+            run[0] == opened[1] and len(run) >= opened[2]
+            and not rest.strip(" \t")
+        ):
+            fences[opened[0]] = (line, opened[3])
             fenced.append((opened[0], line_end(line)))
             opened = None
     if opened is not None:
-        fences[opened[0]] = None
+        fences[opened[0]] = (None, opened[3])
         fenced.append((opened[0], n))
 
     # Parentheses matched once (escapes skipped), for link targets.
@@ -249,9 +254,17 @@ def _visible_text(
         # Line-level markup counts only outside a link label.
         if not frames and (i == 0 or md[i - 1] == "\n"):
             if i in fences:
-                closer = fences[i]
-                keep(min(line_end(i) + 1, n), n if closer is None else closer)
-                i = n if closer is None else line_end(closer)
+                closer, indent = fences[i]
+                stop = n if closer is None else closer
+                k = min(line_end(i) + 1, n)
+                while k < stop:
+                    e = min(line_end(k) + 1, stop)
+                    s = k
+                    while s < e and s - k < indent and md[s] == " ":
+                        s += 1
+                    keep(s, e)
+                    k = e
+                i = stop if closer is None else line_end(closer)
                 continue
             m = _LIST_MARKER.match(md, i)
             if m:

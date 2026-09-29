@@ -629,10 +629,15 @@ class TestProbeScenarios:
         ("```\ncode *x*\n", "code *x*\n"),
         # Four spaces of indent is not a fence.
         ("    ```\nx *e*\n", "    ```\nx e\n"),
+        # Content loses up to the opener's indent.
+        ("  ```\n  alpha\n    beta\n  ```\n", "alpha\n  beta\n\n"),
+        # Only spaces and tabs may follow a closer; a no-break space doesn't.
+        ("```\n```\u00a0\nx *e*\n```\n", "```\u00a0\nx *e*\n\n"),
         # A backtick in a backtick fence's info string: inline code instead.
         ("```a`b``` *e*\n", "a`b e\n"),
     ], ids=["longer-outer", "indented", "closer-with-text", "mixed-chars",
-            "unclosed", "four-spaces", "backtick-info"])
+            "unclosed", "four-spaces", "dedent", "no-break-space",
+            "backtick-info"])
     def test_fences_follow_commonmark(self, markdown, visible):
         from gdoc.annotate import _visible_text
 
@@ -656,6 +661,11 @@ class TestProbeScenarios:
             md, [_comment("c1", "alpha")], anchors=_anchors(doc),
         )
         assert _annotation_line(result, "c1") == 3
+
+    def test_quote_in_an_indented_fence_and_prose_is_ambiguous(self):
+        md = "  ```\n  alpha\n  beta\n  ```\n\nalpha\nbeta\n"
+        result = annotate_markdown(md, [_comment("c1", "alpha\nbeta")])
+        assert "[#c1 open] [quoted text ambiguous]" in result
 
     @pytest.mark.parametrize("markdown", [
         "Intro line.\n\n[link](https://example.test/ghost`) trailing `code`\n",
