@@ -176,8 +176,6 @@ def test_removing_a_middle_paragraph_keeps_its_successor(route, markdown, old,
     ("Hello\n## world\ntail\n", "lo\nwor", "Helld\ntail\n"),
     ("## Hello\nworld\ntail\n", "lo\nwor", "## Helld\ntail\n"),
     ("Hello\nmid\n## world\n", "lo\nmid\nwor", "Helld\n"),
-    ("Hello\n- world\n", "Hello\nwor", "ld\n"),
-    ("- a b\n- c d\n", "b\nc", "- a  d\n"),
 ])
 def test_empty_replacement_across_paragraphs_joins_them(route, markdown, old,
                                                         expected):

@@ -56,8 +56,20 @@ def _written(route, markdown):
      "1. a\n2. b\n3. c\n4. d\n"),
     (BASE, "insert", {"text": "  - d\n", "tab": "t.0", "position": "end"},
      "1. a\n2. b\n3. c\n  - d\n"),
-    (BASE, "insert", {"text": "1. z\n", "tab": "t.0", "position": "start"},
-     "1. z\n2. a\n3. b\n4. c\n"),
+    ("- a\n- b\n", "insert", {"text": "- z\n", "tab": "t.0", "position": "start"},
+     "- z\n- a\n- b\n"),
+    # a blank line does not end a Markdown list
+    ("- a\n- b\n", "insert", {"text": "- z\n\n", "tab": "t.0", "position": "start"},
+     "- z\n\n- a\n- b\n"),
+    # an empty replacement joining a later item into the paragraph before it
+    ("Prose\n1. beta\n2. gamma\n", "edit", {"old_text": "se\nbe", "new_text": ""},
+     "Prota\n1. gamma\n"),
+    ("- a b\n- c d\n", "edit", {"old_text": "b\nc", "new_text": ""}, "- a  d\n"),
+    # an encoded line break splitting an item
+    (BASE, "edit", {"old_text": "b", "new_text": "B&#10;C"},
+     "1. a\n2. B\n3. C\n4. c\n"),
+    (BASE, "edit", {"old_text": "b", "new_text": "2. B&#10;C"},
+     "1. a\n2. B\n3. C\n4. c\n"),
 ])
 def test_list_restructures_are_refused_and_write_works(
         route, base, command, arguments, intended):
@@ -70,6 +82,33 @@ def test_list_restructures_are_refused_and_write_works(
     # write of the intended Markdown is the working route.
     route.ok("write", text=intended)
     assert _read(route) != before
+
+
+def test_a_quoted_item_reworded_with_its_marker_is_told_how(route):
+    _written(route, "> 1. a\n> 2. b\n")
+    code, output, error = route.call("edit", old_text="b", new_text="> 2. B")
+    assert code != 0 and "without the container's markers" in output + error
+    route.ok("edit", old_text="b", new_text="2. B")
+    assert _read(route) == "> 1. a\n> 2. B\n"
+
+
+@pytest.mark.parametrize("base,old,new,expected", [
+    # items of two lists, each keeping its own
+    ("- a\n  1. b\n", "a\nb", "- A\n  1. B", "- A\n  1. B\n"),
+    ("1. a\n1. b\n", "a\nb", "1. A\n1. B", "1. A\n1. B\n"),
+])
+def test_items_of_two_lists_reworded_in_place(route, base, old, new, expected):
+    _written(route, base)
+    route.ok("edit", old_text=old, new_text=new)
+    assert _read(route) == expected
+    route.ok("write", text=expected)
+    assert _read(route) == expected
+
+
+def test_prose_joined_into_an_item_keeps_the_item(route):
+    _written(route, "- a b\nc d\n")
+    route.ok("edit", old_text="b\nc", new_text="")
+    assert _read(route) == "- a  d\n"
 
 
 @pytest.mark.parametrize("old,new,expected", [
@@ -96,6 +135,10 @@ def test_a_whole_item_is_deleted(route):
     (BASE, "- d\n", "end", "1. a\n2. b\n3. c\n- d\n"),
     ("> 1. q\n", "1. d\n", "end", "> 1. q\n1. d\n"),
     (BASE, "Prose\n\n", "start", "Prose\n\n1. a\n2. b\n3. c\n"),
+    # a number that does not continue the list is a restart, its own list
+    (BASE, "1. z\n", "start", "1. z\n1. a\n2. b\n3. c\n"),
+    (BASE, "1. z\n\n", "start", "1. z\n\n1. a\n2. b\n3. c\n"),
+    ("1. a\n2. b\n", "1. c\n", "end", "1. a\n2. b\n1. c\n"),
 ])
 def test_inserts_beside_a_list_that_do_not_join_it(route, base, text, position,
                                                    expected):

@@ -883,16 +883,23 @@ underline; a custom colour on the linked text stays.
 ### Editing list items
 
 `edit` and `insert` change list items only in place. They can reword items,
-each keeping its list, kind (numbered or bullet) and level, and they can delete
+each keeping its list, kind (numbered or bullet), level and number, and they can delete
 whole items. So `edit DOC "b" "2. B"` or `edit DOC "b" "B"` in `1. a / 2. b / 3. c`
 gives `1. a / 2. B / 3. c`, and one line per replaced item rewords several items.
+Write an item inside a quote or list item without the container's markers
+(`2. B`, not `> 2. B`); it keeps its container.
 Any other list change is refused with nothing sent, and `write --tab` makes it:
-- an item of another kind or level;
-- an added or removed item, or a paragraph turned into an item or back;
+
+- an item of another kind, level or number (a number the item doesn't show
+  starts a new list in Markdown);
+- an added or removed item (including one split by an encoded line break,
+  `&#10;`), or a paragraph turned into an item or back;
 - an item moved into or out of a quote or list item;
 - inserted items that would join the list beside them.
 
-A later `edit --block` will make these as targeted edits. A table cell (`edit --cell`) holds inline text only: an item or
+A later `edit --block` will make these as targeted edits.
+
+A table cell (`edit --cell`) holds inline text only: an item or
 heading marker there stays literal, as the cell's `cat` spelling reads, and
 `<br>` writes a line break. A cell replacement with a line break cannot include an
 image; insert the image separately.
@@ -904,9 +911,11 @@ other paragraph keeps its style, list and container. A match that starts or ends
 inside a paragraph and spans a paragraph break joins the remaining text into one
 paragraph, which keeps the first paragraph's style and list. Matches are on the
 document's text, so `edit DOC "lo\nwor" ""` on the paragraph `Hello` followed by
-the heading `world` leaves the paragraph `Helld`. A join that starts at a list
-item's first character is refused when the paragraph it joins has another list
-state, because Docs would give the result that paragraph's list.
+the heading `world` leaves the paragraph `Helld`. A join that takes a later list
+item into the paragraph before it is refused, because it would remove that item
+or its bullet; delete whole items instead. A join that starts at a list item's
+first character is refused when the paragraph it joins has another list state,
+because Docs would give the result that paragraph's list.
 
 Docs cannot delete a tab's last paragraph break or the one before a table, so
 removing the paragraphs there deletes the break of the paragraph above instead;
