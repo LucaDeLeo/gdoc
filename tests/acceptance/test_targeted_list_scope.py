@@ -61,6 +61,14 @@ def _written(route, markdown):
     # a blank line does not end a Markdown list
     ("- a\n- b\n", "insert", {"text": "- z\n\n", "tab": "t.0", "position": "start"},
      "- z\n\n- a\n- b\n"),
+    # a blank line does not end a Markdown list, in the text or the tab
+    ("1. a\n2. b\n", "insert", {"text": "\n3. c\n", "tab": "t.0", "position": "end"},
+     "1. a\n2. b\n\n3. c\n"),
+    ("1. a\n2. b\n\n", "insert", {"text": "3. c\n", "tab": "t.0", "position": "end"},
+     "1. a\n2. b\n\n3. c\n"),
+    ("> 1. a\n> 2. b\n", "insert",
+     {"text": ">\n> 3. c\n", "tab": "t.0", "position": "end"},
+     "> 1. a\n> 2. b\n>\n> 3. c\n"),
     # an empty replacement joining a later item into the paragraph before it
     ("Prose\n1. beta\n2. gamma\n", "edit", {"old_text": "se\nbe", "new_text": ""},
      "Prota\n1. gamma\n"),
@@ -139,9 +147,15 @@ def test_a_whole_item_is_deleted(route):
     (BASE, "1. z\n", "start", "1. z\n1. a\n2. b\n3. c\n"),
     (BASE, "1. z\n\n", "start", "1. z\n\n1. a\n2. b\n3. c\n"),
     ("1. a\n2. b\n", "1. c\n", "end", "1. a\n2. b\n1. c\n"),
+    ("1. a\n2. b\n", "\n1. c\n", "end", "1. a\n2. b\n\n1. c\n"),
+    # a rule ends the list
+    ("- a\n", "\n---\n\n- c\n", "end", "- a\n\n---\n\n- c\n"),
 ])
 def test_inserts_beside_a_list_that_do_not_join_it(route, base, text, position,
                                                    expected):
     _written(route, base)
     route.ok("insert", text=text, tab="t.0", position=position)
-    assert _read(route) == expected
+    got = _read(route)
+    assert got == expected
+    _written(route, base + text if position == "end" else text + base)
+    assert _read(route) == got

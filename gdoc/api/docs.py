@@ -3607,20 +3607,48 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
     items = sorted((s for s in parsed.styles if s.type == "bullets"),
                    key=lambda s: s.start)
     content = tab.get("body", {}).get("content", [])
-    paragraphs = [e for e in content if "paragraph" in e]
-    if not items or not paragraphs:
+    if not items:
         return
+    owned = list(_owned_named_ranges(tab, tab_id))
+
+    def blank(element):
+        # A plain blank paragraph does not end a Markdown list; a rule, an
+        # empty heading or an empty code line does.
+        paragraph = element.get("paragraph")
+        style = (paragraph or {}).get("paragraphStyle", {})
+        start = element.get("startIndex", 0)
+        return (paragraph is not None and _is_empty_paragraph(element)
+                and not paragraph.get("bullet")
+                and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
+                and not (style.get("borderBottom") or {}).get("width", {}).get(
+                    "magnitude")
+                and not any(not _parse_prefix_range_name(name)
+                            and any(a <= start < b for a, b in spans)
+                            for _, name, spans in owned))
+
+    blocks = [e for e in content if "paragraph" in e or "table" in e]
     if position == "end":
-        beside, item = paragraphs[-1], items[0]
-        touching = item.start == 0
+        beside = next((e for e in reversed(blocks) if not blank(e)), None)
+        item = items[0]
+        between = range(0, item.start)
     else:
-        beside, item = paragraphs[0], items[-1]
-        touching = item.end >= len(parsed.plain_text.rstrip("\n"))
-    bullet = beside["paragraph"].get("bullet")
+        beside = next((e for e in blocks if not blank(e)), None)
+        item = items[-1]
+        between = range(item.end, len(parsed.plain_text))
+    # Only blank lines may separate the new item from the tab's list.
+    touching = (not parsed.plain_text[between.start:between.stop].strip("\n")
+                and not any(t.plain_text_offset in between for t in parsed.tables)
+                and not any(c.start < between.stop and c.end > between.start
+                            for c in parsed.code_blocks)
+                and not any(s.type == "paragraph_style" and s.start in between
+                            and (s.style.get("namedStyleType", "NORMAL_TEXT")
+                                 != "NORMAL_TEXT" or "borderBottom" in s.style)
+                            for s in parsed.styles))
+    bullet = (beside or {}).get("paragraph", {}).get("bullet")
     if not touching or not bullet:
         return
     start = beside.get("startIndex", 0)
-    beside_paths = {path for _, name, spans in _owned_named_ranges(tab, tab_id)
+    beside_paths = {path for _, name, spans in owned
                     if (path := _parse_prefix_range_name(name))
                     and any(a <= start < b for a, b in spans)}
     item_path = next((tuple(s.path) for s in parsed.styles
