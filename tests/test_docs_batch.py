@@ -303,7 +303,6 @@ def _new_list(item, preset):
 
 @pytest.mark.parametrize("replacement,inserted,structural", [
     ("New label", "New label", False),
-    ("1. Archive the sample", "Archive the sample", True),
 ])
 def test_complete_heading_exact_batch(mocker, replacement, inserted, structural):
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
@@ -517,36 +516,6 @@ def test_inline_restores_direct_fields_with_utf16_range(mocker, in_cell):
             "writeControl": {"requiredRevisionId": "rev-a"},
         },
     )
-
-
-def test_all_can_mix_inline_and_complete_paragraphs(mocker):
-    service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
-    chain = service.documents.return_value
-    chain.get.return_value.execute.return_value = {"body": {"content": []}}
-    body = _styled_body(prefix="Status: ", text="old")
-    body["content"].append({"paragraph": {"elements": [{
-        "startIndex": 13, "endIndex": 17,
-        "textRun": {"content": "old\n", "textStyle": {}},
-    }]}})
-    matches = [{"startIndex": 9, "endIndex": 12},
-               {"startIndex": 13, "endIndex": 16}]
-    replace_formatted("sample-doc", matches, "1. item", "rev-a", body=body)
-    chain.batchUpdate.assert_called_once_with(documentId="sample-doc", body={
-        "requests": [
-            {"deleteContentRange": {"range": matches[1]}},
-            {"insertText": {"location": {"index": 13}, "text": "item"}},
-            {"updateParagraphStyle": {
-                "range": {"startIndex": 13, "endIndex": 17},
-                "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
-                "fields": "namedStyleType",
-            }},
-            *_new_list({"startIndex": 13, "endIndex": 17},
-                       "NUMBERED_DECIMAL_ALPHA_ROMAN"),
-            {"deleteContentRange": {"range": matches[0]}},
-            {"insertText": {"location": {"index": 9}, "text": "1. item"}},
-        ],
-        "writeControl": {"requiredRevisionId": "rev-a"},
-    })
 
 
 def test_paragraph_start_restores_style_from_deleted_run(mocker):

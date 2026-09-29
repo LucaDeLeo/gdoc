@@ -38,16 +38,6 @@ def _oracle(route, markdown):
     return _read(route), _native(doc)
 
 
-def test_r1_01_quoted_items_reworded_stay_in_the_quote(route):
-    doc = _written(route, "> 1. a\n> 2. b\n> 3. c\n")
-    route.ok("edit", old_text="b", new_text="2. B\n3. X")
-    first = _read(route)
-    assert first == "> 1. a\n> 2. B\n> 3. X\n> 4. c\n"
-    route.ok("write", text=first.replace("B", "B2"))
-    assert _read(route) == "> 1. a\n> 2. B2\n> 3. X\n> 4. c\n"
-    assert len({bullet[0] for _, _, bullet in styles(doc) if bullet}) == 1
-
-
 def test_r1_02_a_pulled_file_writes_again_after_its_own_write(
         monkeypatch, tmp_path):
     """A write of a pulled file advances its provenance as push does; a
@@ -77,15 +67,15 @@ def test_r1_02_a_pulled_file_writes_again_after_its_own_write(
 
 
 @pytest.mark.parametrize("new,expected", [
-    ("2. b2\n  - sub", "1. a\n2. b2\n  - sub\n3. c\n"),
-    # A same-kind item after the sub-item stays refused, as at 39ab543.
+    # Adding a sub-item is a list restructure, left to write.
+    ("2. b2\n  - sub", None),
     ("2. b2\n  - sub\n3. b3", None),
 ])
 def test_r1_03_mid_list_item_gains_a_sub_item_of_the_other_kind(route, new, expected):
     _written(route, "1. a\n2. b\n3. c\n")
     code, output, error = route.call("edit", old_text="b", new_text=new)
     if expected is None:
-        assert code != 0 and "new list" in output + error
+        assert code != 0 and "list's structure" in output + error
     else:
         assert code == 0 and _read(route) == expected
 
@@ -129,7 +119,7 @@ def test_r1_06_a_table_replacing_container_paragraphs_stays_inside(
 
 
 @pytest.mark.parametrize("markdown,old,new,expected", [
-    ("1. p\n  1. c\n2. q\n", "q", "  1. x", "1. p\n  1. c\n  1. x\n"),
+    ("1. p\n  1. c\n2. q\n", "q", "  1. x", None),
     ("1. p\n  1. c\n2. q\n", "c", "1. x", None),
 ])
 def test_r1_07_a_level_change_does_not_take_the_slot_silently(
@@ -139,7 +129,7 @@ def test_r1_07_a_level_change_does_not_take_the_slot_silently(
     _written(route, markdown)
     code, output, error = route.call("edit", old_text=old, new_text=new)
     if expected is None:
-        assert code != 0 and "splitting that list" in output + error
+        assert code != 0 and "list's structure" in output + error
     else:
         assert code == 0
         got = _read(route)
@@ -246,12 +236,12 @@ def test_f1_02_a_current_pulled_file_collapses_tabs(monkeypatch, tmp_path):
     ("1. a\n\n   para\n   more\n2. b\n", "para", "- X\ntext"),
 ])
 def test_r2_01_one_item_plus_text_in_a_container_is_refused(route, markdown, old, new):
-    """Round-2 review R2-01: as at 39ab543, a one-item multi-line replacement
-    of a container paragraph is refused (paragraph count), not restructured."""
+    """Round-2 review R2-01: a one-item multi-line replacement of a container
+    paragraph is refused as a list restructure, not restructured."""
     _written(route, markdown)
     batches = len(route.service.batches)
     code, output, error = route.call("edit", old_text=old, new_text=new)
-    assert code != 0 and "paragraph count" in output + error
+    assert code != 0 and "list's structure" in output + error
     assert len(route.service.batches) == batches
 
 

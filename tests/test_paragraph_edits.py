@@ -131,29 +131,12 @@ def test_extra_old_file_newline_does_not_consume_next_paragraph(mocker):
     ]
 
 
-def test_multiline_explicit_heading_changes_only_that_paragraph(mocker):
-    """Explicit heading Markdown clears that paragraph's old bullet only."""
-    body = _body(("Alpha", "TITLE", False), ("Beta", "NORMAL_TEXT", True))
-    requests = _requests(mocker, body, "Alpha\nBeta", "Revised\n## Heading")
-    styles = [req["updateParagraphStyle"] for req in requests
-              if "updateParagraphStyle" in req]
-    assert len(styles) == 1
-    assert styles[0]["paragraphStyle"]["namedStyleType"] == "HEADING_2"
-    assert styles[0]["paragraphStyle"]["indentStart"]["magnitude"] == 0
-    assert styles[0]["range"] == {
-        "startIndex": 7, "endIndex": 14, "tabId": "synthetic-tab",
-    }
-    bullets = [req["deleteParagraphBullets"]["range"] for req in requests
-               if "deleteParagraphBullets" in req]
-    assert bullets == [styles[0]["range"]]
-
-
 def test_multiline_count_mismatch_refuses_before_service_access(mocker):
     """Ambiguous paragraph removal cannot silently merge a heading or list."""
     body = _body(("Alpha", "TITLE", False), ("Beta", "SUBTITLE", True))
     service = mocker.patch("gdoc.api.docs.get_docs_service")
     matches = find_text_in_document(None, "Alpha\nBeta", body=body)
-    with pytest.raises(GdocError, match="paragraph count mismatch") as exc:
+    with pytest.raises(GdocError, match="list's structure") as exc:
         replace_formatted("synthetic-doc", matches, "Combined", "rev", body=body)
     assert exc.value.exit_code == 3
     service.assert_not_called()

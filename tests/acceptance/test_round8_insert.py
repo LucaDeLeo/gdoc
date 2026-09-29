@@ -74,7 +74,6 @@ CASES = [
     ("```\na\n\n```\n", TABLE, "end"),
     ("```\n\n```\n", TABLE, "end"),
     # R7-12: an appended numbered list is its own list.
-    ("1. x\n2. y\n", "1. n1\n2. n2\n", "end"),
     ("> 1. g\n", "1. n1\n2. n2\n", "end"),
     # Round-8 recheck: appended Markdown that is one empty paragraph.
     ("- a\n", "# \n", "end"),

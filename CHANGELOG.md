@@ -73,11 +73,10 @@ All notable changes to `gdoc` are documented here. This project follows
   type no longer reads back flat. A later nested numbered list no longer
   continues an earlier sublist's numbering.
 - Editing list items keeps their native list: items reworded as items of the
-  same kind and level keep their bullets, and new items continue the list
-  above them where writing the whole Markdown would, for `edit` and for
-  `insert` at the end (lists in gdoc's default styles). An edit that would
-  split a list and renumber its untouched items is refused. A numbered start
-  that cannot be kept warns, naming the number the item shows.
+  same kind and level keep their bullets and numbering. `edit` and `insert`
+  refuse, with nothing sent, any other list change (another kind or level, an
+  added or removed item, a container change, or items that would join the
+  list beside them); `write --tab` makes it.
 - `edit OLD ""` removes exactly the matched paragraphs. Removing the last
   paragraph, or one before a table, no longer also deletes an empty paragraph,
   rule or code line above it, and it no longer refuses after a list item. It is
