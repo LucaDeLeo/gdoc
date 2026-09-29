@@ -185,3 +185,10 @@ def test_f6c_02_a_missing_target_tab_matches_nothing(monkeypatch):
                   "documentTab": NativeDoc(("p", "Alpha.")).document_tab("t.0")}]})
     monkeypatch.setattr("gdoc.api.drive.export_doc", lambda *a, **k: "Alpha.\n")
     assert not cli._old_style_matches("doc", "Alpha.\n", "Missing")
+
+
+@pytest.mark.parametrize("separator", ["---", "##", "```\n```"])
+def test_f6d_01_an_empty_block_ends_the_list_above(route, separator):
+    outer = "".join(f"{k}. outer {k}\n" for k in range(1, 11))
+    _written(route, outer + f"\n{separator}\n\n  - child\n\n    detail\n  - next\n")
+    _refused(route, "edit", "list's structure", old_text="child\n", new_text="")

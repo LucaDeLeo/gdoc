@@ -3747,7 +3747,19 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
         if "table" in element:
             break
         if _is_empty_paragraph(element):
-            continue
+            style = element["paragraph"].get("paragraphStyle", {})
+            start = element.get("startIndex", 0)
+            plain = (not element["paragraph"].get("bullet")
+                     and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
+                     and not (style.get("borderBottom") or {}).get(
+                         "width", {}).get("magnitude")
+                     and not any(not _parse_prefix_range_name(name)
+                                 and any(a <= start < b for a, b in spans)
+                                 for _, name, spans in _owned_named_ranges(
+                                     tab, tab_id)))
+            if plain:
+                continue  # a blank line does not end a list
+            break  # a rule, an empty heading or an empty code line does
         found = (element["paragraph"].get("bullet") or {})
         where = containers(element)
         if not found:
