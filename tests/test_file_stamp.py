@@ -85,6 +85,13 @@ def _machine_read(version):
 
 
 class TestStaleFileRefused:
+    @pytest.fixture(autouse=True)
+    def _no_native_tabs(self):
+        # The in-sync check also reads the doc's first tab natively.
+        with patch("gdoc.api.docs.get_document_with_tabs",
+                   return_value={"tabs": []}):
+            yield
+
     @patch("gdoc.api.drive.update_doc_content", return_value=3)
     @patch("gdoc.notify.pre_flight", return_value=_machine_read(2))
     def test_push(self, _pf, mock_upload, tmp_path):

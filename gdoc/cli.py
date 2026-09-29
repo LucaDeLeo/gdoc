@@ -2006,10 +2006,14 @@ def _stale_recovery(doc_id: str, file_path: str) -> str:
 
 
 def _old_style_matches(doc_id: str, body: str) -> bool:
-    """Whether the doc's Drive Markdown export, which an older gdoc pulled
-    from, already equals *body*."""
+    """Whether *body* already equals the doc: its first tab's Markdown as
+    `cat` reads it, or the Drive Markdown export an older gdoc pulled from."""
+    from gdoc.api.docs import flatten_tabs, get_document_with_tabs, get_tab_text
     from gdoc.api.drive import export_doc
 
+    tabs = flatten_tabs(get_document_with_tabs(doc_id).get("tabs", []))
+    if tabs and get_tab_text(tabs[0], markdown=True).strip() == body.strip():
+        return True
     try:
         current = export_doc(doc_id, mime_type="text/markdown")
     except GdocError:
