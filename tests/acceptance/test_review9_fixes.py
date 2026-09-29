@@ -514,3 +514,27 @@ def test_expansion_ending_with_an_empty_item_keeps_the_list(route):
     route.ok("edit", old_text="a", new_text="1. A\n2. ")
     assert _read(route) == "1. A\n2. \n3. b\n4. c\n"
     assert {bullet for _, _, bullet in styles(doc)} == {(1, 0)}
+
+
+def test_cell_paragraphs_become_one_list(route):
+    """Round 6 (Codex R6-1): equal-count cell replacements make one list."""
+    doc = route.load(NativeDoc(("t", [["a\nb"]])))
+    route.ok("cat")
+    route.ok("edit", cell="0,0", tab="Main", new_text="1. A\n2. B")
+    lists = {bullet[0] for _, _, bullet in styles(doc) if bullet}
+    assert len(lists) == 1
+
+
+@pytest.mark.parametrize("base,old,new", [
+    ("1. a\n2. b\n3. c\n4. d\n", "b\nc", "2. B\n1. C"),
+    ("1. a\n2. b\n3. c\n", "a\nb", "- A\n1. B"),
+])
+def test_restarts_that_renumber_later_items_are_refused(route, base, old, new):
+    """Round 6 (Codex R6-2)."""
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=base)
+    batches = len(route.service.batches)
+    code, output, error = route.call("edit", old_text=old, new_text=new)
+    assert code != 0 and "renumbering" in output + error
+    assert len(route.service.batches) == batches

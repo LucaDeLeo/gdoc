@@ -3593,12 +3593,16 @@ def _refuse_list_split(parsed, content, native, lists) -> None:
     items = [s for s in parsed.styles if s.type == "bullets"]
     if not items or not native:
         return
-    numbered = items[0].style["bulletPreset"].startswith("NUMBERED")
+    kinds = {s.style["bulletPreset"].startswith("NUMBERED") for s in items}
     ids = {bullet.get("listId") for p, _, _ in native
            for bullet in [p.get("bullet")] if bullet
            and _list_is_ordered(lists, bullet.get("listId", ""),
-                                bullet.get("nestingLevel", 0)) == numbered}
-    if parsed.continues_list:
+                                bullet.get("nestingLevel", 0)) in kinds}
+    # The continued list keeps its later items only when every new item
+    # stays in it (one Markdown list, no restart).
+    if parsed.continues_list and len({s.list_group for s in items
+                                      if s.list_depth == parsed.continues_level}) == 1 \
+            and len({s.list_block for s in items}) == 1:
         above = next((e["paragraph"] for e in _flat_paragraphs(content)
                       if e.get("endIndex") == native[0][1]), {})
         ids.discard((above.get("bullet") or {}).get("listId"))
@@ -4553,9 +4557,10 @@ def replace_formatted(
         whole = _covers_whole_paragraphs(body.get("content", []), match) \
             if body is not None else False
         if replace_paragraphs:
+            # Several list items compile together, as one list.
             contextual = body is not None and not parsed.tables and (
                 len(native) == len(new_markdown.split("\n"))
-            )
+            ) and sum(s.type == "bullets" for s in parsed.styles) < 2
         else:
             # Tables, and list items that must share one native list, are
             # compiled from the whole replacement, not paragraph by paragraph.
