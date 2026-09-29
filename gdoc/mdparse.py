@@ -1663,8 +1663,11 @@ def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,
         return insert_index + offsets[point] - removed
 
     def end_of(item):
-        # A stripped final empty item still owns the retained paragraph mark.
-        return coordinate(item.end) + (item.start == item.end)
+        # A final item whose newline was stripped (an empty one too) still
+        # owns the retained paragraph mark.
+        final = (item.end == len(parsed.plain_text)
+                 and not parsed.plain_text[item.start:item.end].endswith("\n"))
+        return coordinate(item.end) + final
 
     zero = {"magnitude": 0, "unit": "PT"}
     for members in sorted(lists, key=lambda members: members[0].start):

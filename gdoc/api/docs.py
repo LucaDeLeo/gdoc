@@ -3036,7 +3036,8 @@ def insert_markdown_into_tab(
     last = next((e for e in reversed(body.get("content", [])) if "paragraph" in e),
                 None)
     joined = appending and _list_continuation(
-        parsed, body.get("content", []), last, tab_match.get("lists", {}))
+        parsed, body.get("content", []), last, tab_match.get("lists", {}),
+        tab=tab_match, tab_id=tab_id)
     if joined:
         parsed.continues_list, parsed.continues_level, parsed.shown_numbers = joined
     _warn_list_starts(parsed)
@@ -3512,7 +3513,7 @@ def _list_number(content: list[dict], start: int, lists: dict | None = None) -> 
     return 1
 
 
-def _continuing(parsed, content, replaced, lists):
+def _continuing(parsed, content, replaced, lists, tab=None, tab_id=None):
     """Continue the list above replaced paragraphs, as a write would.
 
     ``replaced`` is the first replaced paragraph ``(paragraph, start, end)``.
@@ -3523,10 +3524,17 @@ def _continuing(parsed, content, replaced, lists):
 
     above = next((e for e in _flat_paragraphs(content)
                   if e.get("endIndex") == replaced[1]), None)
-    same_list = bool(above) and (
-        (replaced[0].get("bullet") or {}).get("listId")
-        == (above["paragraph"].get("bullet") or {}).get("listId"))
-    joined = _list_continuation(parsed, content, above, lists, same_list)
+    # Replacing an item keeps its slot only at its own level: a nest or
+    # unnest is judged like any other continuation.
+    replaced_bullet = replaced[0].get("bullet") or {}
+    first = min((s for s in parsed.styles if s.type == "bullets"),
+                key=lambda s: s.start, default=None)
+    same_list = bool(above) and first is not None and (
+        replaced_bullet.get("listId")
+        == (above["paragraph"].get("bullet") or {}).get("listId")
+        and replaced_bullet.get("nestingLevel", 0) == first.list_depth)
+    joined = _list_continuation(parsed, content, above, lists, same_list,
+                                tab=tab, tab_id=tab_id)
     if joined is None:
         return parsed
     preset, level, shown = joined
@@ -3534,7 +3542,8 @@ def _continuing(parsed, content, replaced, lists):
                                continues_level=level, shown_numbers=shown)
 
 
-def _list_continuation(parsed, content, above, lists, same_list=False):
+def _list_continuation(parsed, content, above, lists, same_list=False,
+                       tab=None, tab_id=None):
     """``(preset, level, shown numbers)`` when the fragment's first list
     continues the list of the item ``above``, as a write of the whole
     Markdown would: an item deeper than it nests under it, an item at its
@@ -3556,6 +3565,18 @@ def _list_continuation(parsed, content, above, lists, same_list=False):
 
     # The native list the compiler creates first is the one that joins.
     first_list = _native_lists(parsed, items)[0]
+    if tab is not None:
+        # A list continues only within one container (quote or item): the
+        # new items' Markdown container must be the item above's.
+        above_start = above.get("startIndex", 0)
+        above_paths = {path for _, name, spans in _owned_named_ranges(tab, tab_id)
+                       if (path := _parse_prefix_range_name(name))
+                       and any(a <= above_start < b for a, b in spans)}
+        fragment_path = next((tuple(s.path) for s in parsed.styles
+                              if s.type == "markdown_prefix"
+                              and s.start <= items[0].start < s.end), ())
+        if above_paths != ({fragment_path} if fragment_path else set()):
+            return None
     if (items[0].style["bulletPreset"] != preset
             or not _default_preset(lists, list_id)
             or any(s.list_depth < level for s in first_list)):
@@ -3611,9 +3632,13 @@ def _refuse_list_split(parsed, content, native, lists) -> None:
     # stays in it (one Markdown list, no restart).
     from gdoc.mdparse import _native_lists
 
-    # Exempt only when every new item is in the native list that joins.
+    # Exempt only when every new item of the continued list's kind is in
+    # the native list that joins; items of the other kind are their own
+    # lists, as in a write (a nested sublist of another kind).
     joining = _native_lists(parsed, sorted(items, key=lambda s: s.start))[0]
-    if parsed.continues_list and len(joining) == len(items):
+    same_kind = [s for s in items
+                 if s.style["bulletPreset"] == parsed.continues_list]
+    if parsed.continues_list and all(s in joining for s in same_kind):
         above = next((e["paragraph"] for e in _flat_paragraphs(content)
                       if e.get("endIndex") == native[0][1]), {})
         ids.discard((above.get("bullet") or {}).get("listId"))
@@ -3623,7 +3648,8 @@ def _refuse_list_split(parsed, content, native, lists) -> None:
         raise GdocError(
             "these list items would start a new list before the rest of the "
             "list they replace items of, renumbering the items after them; "
-            "reword each item separately, keeping its level, or rewrite the "
+            "reword each item separately, keeping its level, include the "
+            "items above it that the new items nest under, or rewrite the "
             "tab with write --tab", exit_code=3,
         )
 
@@ -3707,7 +3733,7 @@ def _same_list_item(parsed, paragraph: dict, lists: dict):
         non_default_list_starts=[], non_default_start_items=[])
 
 
-def _table_between_blanks(content, match, parsed):
+def _table_between_blanks(content, match, parsed, tab=None, tab_id=None):
     """Plan a table-only replacement so the table reuses blank separators (I5).
 
     ``write`` of ``A / blank / table / blank / B`` keeps one empty paragraph
@@ -3717,7 +3743,10 @@ def _table_between_blanks(content, match, parsed):
     the paragraphs and the blank after them with their own marks, and
     inserts the table at the blank before them (tableBack). That blank splits
     into the mandatory paragraph and the separator, both keeping its style.
-    Any other shape returns None and keeps the general plan.
+    With a plain blank on one side only, the paragraphs go with their own
+    marks and the table uses that blank. A blank that is a rule, an empty
+    heading, an empty code line or in a container is content, not a
+    separator. Any other shape returns None and keeps the general plan.
     """
     if (len(parsed.tables) != 1 or parsed.plain_text.strip("\n")
             or any(s.type != "paragraph_style" for s in parsed.styles)):
@@ -3734,12 +3763,37 @@ def _table_between_blanks(content, match, parsed):
         return None
     before, after = paragraphs[first - 1], paragraphs[last + 1]
     following = paragraphs[last + 2]
+    owned = [span for _, name, spans in _owned_named_ranges(tab, tab_id)
+             for span in spans] if tab else []
+
+    def plain_blank(element):
+        # Only an unstyled blank outside every gdoc container is a
+        # separator; a rule, an empty heading, an empty code line or a
+        # quoted blank is content (I5).
+        style = element.get("paragraph", {}).get("paragraphStyle", {})
+        start = element.get("startIndex", 0)
+        return (_is_empty_paragraph(element)
+                and not element["paragraph"].get("bullet")
+                and style.get("namedStyleType", "NORMAL_TEXT") == "NORMAL_TEXT"
+                and not (style.get("borderBottom") or {}).get("width", {}).get(
+                    "magnitude")
+                and not any(a <= start < b for a, b in owned))
+
     if (paragraphs[first].get("startIndex", 0) != match["startIndex"]
-            or not all(_is_empty_paragraph(e) for e in (before, after))
-            or any(e["paragraph"].get("bullet") for e in (before, after))
-            or "table" in following):
+            or "table" in after):
         return None
-    return {**match, "endIndex": after["endIndex"], "tableBack": 1}
+    last_end = paragraphs[last]["endIndex"]
+    if plain_blank(before) and plain_blank(after) and "table" not in following:
+        return {**match, "endIndex": after["endIndex"], "tableBack": 1}
+    if plain_blank(before):
+        # The blank before splits around the table; the paragraphs go with
+        # their own marks.
+        return {**match, "endIndex": last_end, "tableBack": 1}
+    if plain_blank(after):
+        # Inserted at the start of the blank after, the table gets the
+        # mandatory paragraph before it and keeps that blank after it.
+        return {**match, "endIndex": last_end}
+    return None
 
 
 def _contained_parse(parsed, tab, tab_id, match):
@@ -3758,20 +3812,39 @@ def _contained_parse(parsed, tab, tab_id, match):
     if (any(s.type in ("markdown_prefix", "bullets") for s in parsed.styles)
             or parsed.code_blocks or any(t.path for t in parsed.tables)):
         return parsed
-    paths = {path for _, name, spans in _owned_named_ranges(tab, tab_id)
-             if (path := _parse_prefix_range_name(name))
-             and any(a <= match["startIndex"] and match["endIndex"] < b
-                     for a, b in spans)}
+    # Every replaced paragraph must sit in the same one container; gdoc
+    # stores one range span per paragraph.
+    ranges = [(path, spans) for _, name, spans in _owned_named_ranges(tab, tab_id)
+              if (path := _parse_prefix_range_name(name))]
+    # Blank lines between an item's content paragraphs sit outside it.
+    starts = [start for _, start, end in _replacement_paragraphs(
+        (tab or {}).get("body", {}).get("content", []), match)
+        if end > start] or [match["startIndex"]]
+    per_paragraph = [frozenset(path for path, spans in ranges
+                               if any(a <= start < b for a, b in spans))
+                     for start in starts]
+    paths = set(per_paragraph[0]) if len(set(per_paragraph)) == 1 else set()
     if len(paths) != 1:
         return parsed
     (path,), contained = paths, copy.deepcopy(parsed)
     legacy = legacy_prefix(path)
     marker = ({"quote": legacy[0], "indent": legacy[1]} if legacy else {})
     zero = {"magnitude": 0, "unit": "PT"}
+    # A blank line in a quote is quoted, as in a write; in an item's content
+    # it is a plain separator.
+    quoted = all(step == "q" for step in path)
+    placeholders = {table.plain_text_offset for table in contained.tables}
+    if not contained.plain_text.strip("\n"):
+        # A table alone: its placeholder paragraphs are scaffolding.
+        for table in contained.tables:
+            table.path = path
+        return contained
     for style in list(contained.styles):
         if style.type != "paragraph_style" or style.path:
             continue
-        if contained.plain_text[style.start:style.end].strip("\n"):
+        blank = not contained.plain_text[style.start:style.end].strip("\n")
+        table = any(style.start <= o < style.end for o in placeholders)
+        if not blank or (quoted and not table):
             contained.styles.append(StyleRange(
                 style.start, style.end, dict(marker), "markdown_prefix",
                 path=path))
@@ -4578,7 +4651,9 @@ def replace_formatted(
             # compiled from the whole replacement, not paragraph by paragraph.
             # Items replacing as many existing items stay per paragraph,
             # where each keeps its native bullet.
-            listed = sum(s.type == "bullets" for s in parsed.styles) > 1 and not (
+            items = sum(s.type == "bullets" for s in parsed.styles)
+            several = "\n" in new_markdown.strip("\n")
+            listed = (items > 1 or (items and several)) and not (
                 _each_item_kept(native, new_markdown, body, source,
                                 match.get("tabId", tab_id)))
             contextual = body is not None and not ((parsed.tables or listed) and whole)
@@ -4622,8 +4697,10 @@ def replace_formatted(
         else:
             placed = match
             if whole and body is not None:
-                placed = _table_between_blanks(body.get("content", []), match,
-                                               parsed) or match
+                placed = _table_between_blanks(
+                    body.get("content", []), match, parsed,
+                    _snapshot_tab(source, match.get("tabId", tab_id)),
+                    match.get("tabId", tab_id)) or match
             parts = [(placed, (_contained_parse(
                 parsed, _snapshot_tab(source, match.get("tabId", tab_id)),
                 match.get("tabId", tab_id), match) if whole else parsed, None))]
@@ -4648,7 +4725,10 @@ def replace_formatted(
                     context[0],
                     _list_number(body.get("content", []), replaced[1], lists) - 1,
                     (replaced[0].get("bullet") or {}).get("nestingLevel", 0)))
-                planned.append((part, (kept, context[1])))
+                # The items' text stays inside the replaced paragraph's
+                # containers, like inline wording.
+                planned.append((part, (kept, context[1] if context[1] is not None
+                                       else [])))
                 continue
             explicit = any(s.type in ("paragraph_style", "bullets")
                            for s in context[0].styles)
@@ -4679,8 +4759,10 @@ def replace_formatted(
             first = found or (native[0] if native else None)
             if (first and not replace_paragraphs
                     and any(s.type == "bullets" for s in context[0].styles)):
-                context = (_continuing(context[0], body.get("content", []),
-                                       first, lists), context[1])
+                context = (_continuing(
+                    context[0], body.get("content", []), first, lists,
+                    tab=_snapshot_tab(source, part.get("tabId", tab_id)),
+                    tab_id=part.get("tabId", tab_id)), context[1])
                 _refuse_list_split(context[0], body.get("content", []),
                                    [found] if found else native, lists)
             planned.append((part, context))
@@ -4688,6 +4770,21 @@ def replace_formatted(
         from gdoc.mdparse import ParsedMarkdown
         planned += [(plan, (ParsedMarkdown(""), []))
                     for plan in _plan_paragraph_removals(source, removals)]
+    # Every planned deletion, not only the matched text, must leave pending
+    # suggestions alone: Docs applies a direct deletion over them silently.
+    for part, _ in planned:
+        owner = _replacement_body(source, part)
+        if owner is None or part["endIndex"] <= part["startIndex"]:
+            continue
+        overlapping = find_suggestions_in_range(
+            owner, part["startIndex"], part["endIndex"])
+        if overlapping:
+            raise GdocError(
+                "this edit would also delete text or a paragraph break that "
+                "carries suggestion(s) " + ", ".join(sorted(overlapping))
+                + "; accept or reject them in Docs first. Nothing was changed.",
+                exit_code=3,
+            )
     matches = [part for part, _ in planned]
     contexts = {_match_key(part): context for part, context in planned}
     # Only list items the edit writes as lists reset their start, not

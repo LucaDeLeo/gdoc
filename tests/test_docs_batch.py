@@ -277,7 +277,9 @@ def test_inline_exact_batch(mocker, replacement, inserted, baseline, extra):
 def _new_list(item, preset):
     """One level-0 item's list: a temporary separator and anchor fix its
     identity and level, and are removed right after the bullet request."""
-    start, end = item["startIndex"], item["endIndex"]
+    start = item["startIndex"]
+    # The item ends on the retained paragraph mark, which the ranges include.
+    end = item["endIndex"] + 1
     zero = {"magnitude": 0, "unit": "PT"}
     return [
         {"insertText": {"location": {"index": start}, "text": "\n\n"}},

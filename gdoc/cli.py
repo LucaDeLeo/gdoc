@@ -1352,6 +1352,10 @@ def cmd_edit(args) -> int:
 
     # Resolve text from args or files (fail fast before API calls)
     old_text, new_text = _resolve_replacement_text(args, cell)
+    if cell is not None:
+        # A cell reads its paragraph breaks as `<br>`; the same spelling
+        # writes them back.
+        new_text = new_text.replace("<br>", "\n")
 
     plan = _prepare_text_replacement(args, doc_id, old_text)
     matches = plan.matches
@@ -1568,6 +1572,7 @@ def cmd_write(args) -> int:
     # dumps visible YAML into the doc body. A pulled file names its source
     # document and tab; writing it elsewhere must be explicit.
     from gdoc.frontmatter import parse_frontmatter
+    raw = content
     metadata, content = parse_frontmatter(content)
     pulled_doc = metadata.get("gdoc")
     if pulled_doc and _resolve_doc_id(pulled_doc) != doc_id:
@@ -1589,13 +1594,20 @@ def cmd_write(args) -> int:
     # `tab`, `gdoc-revision` and `gdoc-tab-sha256` are provenance only in a
     # file `pull` wrote for this document; they are checked as `push` checks
     # them, so reading a newer copy cannot authorize an older file.
-    return _write_native_markdown(
+    details = {}
+    result = _write_native_markdown(
         args, doc_id, content, command="write", tab_name=tab_name,
         file_tab=(metadata.get("tab") or None) if pulled_doc else None,
         file_revision=metadata.get("gdoc-revision", "") if pulled_doc else None,
         file_tab_fingerprint=(metadata.get("gdoc-tab-sha256")
                               if pulled_doc else None),
+        result_details=details if pulled_doc else None,
     )
+    if pulled_doc:
+        # As push does: the file now matches the acknowledged revision, so
+        # its next write or push is not stale because of this one.
+        _refresh_file_revision(file_path, raw, details)
+    return result
 
 
 def _write_native_markdown(
@@ -1701,8 +1713,10 @@ def _write_native_markdown(
         and bool(file_tab_fingerprint)
         and native_tab_fingerprint(selected) == file_tab_fingerprint
     )
-    file_current = bool(file_revision) and (
-        file_revision == revision or tab_unchanged)
+    # At the file's own revision, a recorded fingerprint that does not match
+    # shows the file holds another tab's content (its tab field was lost).
+    file_current = bool(file_revision) and (tab_unchanged or (
+        file_revision == revision and not file_tab_fingerprint))
     if unchanged:
         if result_details is not None and file_current:
             # The file's provenance advances only when it already covers the
@@ -3408,8 +3422,10 @@ def _record_acknowledged_write(doc_id, **provenance):
               file=sys.stderr)
     if provenance.get("rebased"):
         print("WARN: another edit landed during this write, and its later "
-              "stages were rebased onto it. Read the tab again (`cat` or "
-              "`pull`) before the next write.", file=sys.stderr)
+              "stages were rebased onto it. Read the tab again before the next "
+              "write: `cat` for text you write from, `pull` again for a pulled "
+              "file (a `cat` does not refresh the file's own revision).",
+              file=sys.stderr)
 
 
 def cmd_insert_image(args) -> int:

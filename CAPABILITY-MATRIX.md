@@ -12,7 +12,7 @@ The product contract applies equally to CLI and MCP: reliable requested Markdown
 | T06 | Native list requests, nesting tabs and explicit parsed starts; native list semantics retained. | Mixed nesting, empty items, starts/restarts and displayed order. API-limited numbering must be reported separately. |
 | T07 | Rectangular TableData plus column alignments; native table stages and inline cell formatting. | Row/column changes and semantic headers; no incidental header bolding during unrelated edits. |
 | T09 | One exact-ID-first, ambiguity-checking resolver shared by all routes. | Same selection through CLI and MCP, including ID/title collisions. |
-| T10, T12 | Per-tab content exposure pinned to Docs revisions; mutation responses carry acknowledged revisions. | Own successive writes, foreign edit, lost response, metadata/partial/full-read counterexamples. |
+| T10, T12 | Per-tab content exposure pinned to Docs revisions; gdoc's own state records each acknowledged revision. | Own successive writes, foreign edit, lost response, metadata/partial/full-read counterexamples. |
 | T11 | Complete raw structure plus existing scoped selectors; complete export and explicit truncation metadata. | Actual locating and inspection task burden, without arbitrary default caps. |
 | T14 | Parsed image references and native image operations; refresh existing references against current snapshot. | Insert/replace/move/remove and unrelated rewrite preservation; source limitations explicit. |
 | T15 | Existing single-send comment routes and deterministic normalized matching. | Unicode-space annotation, early invalid-occurrence rejection, ambiguity/conflict outcomes. |
@@ -21,7 +21,7 @@ The product contract applies equally to CLI and MCP: reliable requested Markdown
 
 - Parser offsets are Python code points; native request generation converts them to UTF-16 and accounts for nesting tabs, tables and image placeholders.
 - Code blocks use `gdoc:code:v1` named ranges. Tables carry column alignments. Existing image references resolve against the checked native snapshot; acknowledged insertion replies carry old-to-new image aliases for successive writes.
-- Mutation results carry input and acknowledged revisions and whether rebasing occurred. State advances only content actually exposed or sent at those revisions. A sampled Drive version never substitutes for that acknowledgment.
+- Writes record the acknowledged revision in gdoc's state, and a pulled file's frontmatter, rather than in every command's output; a rebased write warns and reports `rebased: true` in JSON. State advances only content actually exposed or sent at those revisions. A sampled Drive version never substitutes for that acknowledgment.
 - Complete native reads record per-tab revision coverage. Partial output, metadata and summaries do not. Both interfaces invoke the same handlers; MCP accepts URL/image-reference inputs without requiring shell-local paths.
 
 ## Verified boundary
