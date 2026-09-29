@@ -3625,7 +3625,9 @@ def _level_change_advice(parsed, lines, native, source, tab_id) -> str:
         return _LIST_RESTRUCTURE
     # `nest` moves an item's sub-items with it, which this edit doesn't ask.
     following = next((e for e in content[last + 1:]
-                      if "paragraph" in e and not _is_empty_paragraph(e)), None)
+                      if "paragraph" in e and not (
+                          _is_empty_paragraph(e) and not e["paragraph"].get("bullet"))),
+                     None)
     if following is not None and (following["paragraph"].get("bullet") or {}).get(
             "nestingLevel", -1) > (native[-1][0].get("bullet") or {}).get(
                 "nestingLevel", 0):
@@ -3857,17 +3859,22 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
                             for s in parsed.styles))
     # A numbered item asking for a number other than 1 continues an earlier
     # numbered list of its level in a write, even across other blocks.
-    first_number = re.match(r"[\s>]*(\d+)[.)]", markdown.lstrip("\n"))
-    if (position == "end" and item.style["bulletPreset"].startswith("NUMBERED")
-            and first_number and int(first_number[1]) != 1
-            and any(_list_is_ordered(tab.get("lists", {}), b.get("listId", ""),
-                                     b.get("nestingLevel", 0))
-                    and b.get("nestingLevel", 0) == item.list_depth
-                    for e in blocks if "paragraph" in e
-                    for b in [e["paragraph"].get("bullet")] if b)):
-        numbered_join = True
-    else:
-        numbered_join = False
+    # Any line of the inserted text that starts a numbered list with another
+    # number than 1 (not continuing a numbered line just above it) may join
+    # a numbered list of the tab.
+    starts, previous = [], None
+    for line in markdown.split("\n"):
+        if not line.strip(" \t>"):
+            continue
+        number = re.match(r"[\s>]*(\d+)[.)][ \t]", line)
+        if number and int(number[1]) != 1 and previous is None:
+            starts.append(line)
+        previous = number
+    numbered_join = position == "end" and bool(starts) and any(
+        _list_is_ordered(tab.get("lists", {}), b.get("listId", ""),
+                         b.get("nestingLevel", 0))
+        for e in blocks if "paragraph" in e
+        for b in [e["paragraph"].get("bullet")] if b)
     if (touching and orphan_above) or numbered_join:
         raise GdocError("these list items may join the list above them; "
                         + _LIST_RESTRUCTURE, exit_code=3)

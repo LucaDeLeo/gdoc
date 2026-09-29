@@ -103,7 +103,7 @@ def test_r4_08_push_and_the_sync_hook_refuse_it_too(monkeypatch, tmp_path, capsy
 
 def test_r4_06_a_sublist_then_an_item_of_the_list_is_refused(route):
     _written(route, "1. a\n2. b\n")
-    _refused(route, "insert", "join the list beside them",
+    _refused(route, "insert", "list's structure",
              text="  - X\n3. Z\n", tab="t.0", position="end")
 
 
@@ -164,3 +164,30 @@ def test_r4_06_inserts_that_may_join_a_list_are_refused(route, base, inserted,
     _refused(route, "insert", "list's structure", text=inserted, tab="t.0",
              position="end")
     route.ok("write", text=intended)
+
+
+# Codex review of the round-4 fixes (F7-01 to F7-03).
+
+@pytest.mark.parametrize("value", ["1. ```bash", "1. ~~~", "- ```"])
+def test_f7_01_a_marker_fence_in_a_cell_stays_its_text(route, value):
+    _written(route, "| h |\n| --- |\n| old |\n")
+    route.ok("edit", cell="1,0", tab="Main", new_text=value)
+    got = _read(route)
+    route.load(NativeDoc())
+    route.ok("cat")
+    route.ok("write", text=f"| h |\n| --- |\n| {value} |\n")
+    assert got == _read(route)
+
+
+@pytest.mark.parametrize("inserted", ["Paragraph\n\n3. c\n", "- x\n3. c\n"])
+def test_f7_02_a_later_numbered_item_is_checked_too(route, inserted):
+    _written(route, "1. a\n2. b\n")
+    _refused(route, "insert", "list's structure", text=inserted, tab="t.0",
+             position="end")
+    route.ok("write", text="1. a\n2. b\n" + inserted)
+
+
+def test_f7_03_an_empty_sub_item_counts(route):
+    _written(route, "1. a\n2. b\n  1. \n3. d\n")
+    code, output, error = route.call("edit", old_text="b", new_text="  1. b")
+    assert code != 0 and "gdoc nest" not in output + error

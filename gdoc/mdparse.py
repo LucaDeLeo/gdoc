@@ -273,12 +273,15 @@ def cell_inline(text: str) -> str:
     def inline(line):
         indent = line[:len(line) - len(line.lstrip(" \t"))]
         stripped = line[len(indent):]
+        from gdoc.util import GdocError
+
         try:
             parsed = parse_markdown(stripped)
-        except Exception:  # a spelling gdoc refuses as a block stays literal
-            return indent + "\\" + stripped
+        except GdocError:  # a spelling gdoc refuses as a block: escape it
+            parsed = None
         plain, _ = parse_inline(stripped)
-        if (parsed.plain_text.rstrip("\n") == plain and not parsed.tables
+        if (parsed is not None
+                and parsed.plain_text.rstrip("\n") == plain and not parsed.tables
                 and not parsed.code_blocks and all(
                     s.type in ("text_style", "paragraph_style", "image")
                     and s.style.get("namedStyleType", "NORMAL_TEXT")
