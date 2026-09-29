@@ -27,6 +27,8 @@ gdoc edit DOC_ID --cell "Label" "new value"  # Replace the table cell right of a
 gdoc edit DOC_ID --cell 7,1 "new value"      # Replace cell by ROW,COL (--table N, default 0)
 printf 'multi\nline' | gdoc edit DOC_ID --cell "Notes" -  # '-' reads an arg from stdin
 gdoc suggest DOC_ID "old text" "new text"    # Same as edit, but as a suggested edit to review
+gdoc nest DOC_ID "item text"                 # Nest a list item (and sub-items) one level
+gdoc unnest DOC_ID "item text" --levels 2    # Unnest; --to "last item" for a range
 gdoc write DOC_ID FILE.md                    # Overwrite doc body from local markdown
 
 gdoc comments DOC_ID                         # List open comments
