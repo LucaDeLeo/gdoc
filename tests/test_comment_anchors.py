@@ -547,6 +547,22 @@ class TestProbeScenarios:
             annotate_markdown(EDITS_MD, EDITS_COMMENTS, anchors=anchors)
         assert spy.call_count == 1
 
+    @pytest.mark.parametrize("markdown", [
+        # As Drive's export writes it (live-checked): parens escaped.
+        "[Foo](https://en.wikipedia.org/wiki/Foo_\\(bar\\)) is great.",
+        # As gdoc's own renderer would: raw, balanced.
+        "[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) is great.",
+    ], ids=["escaped", "raw"])
+    def test_link_url_with_parentheses_is_not_visible(self, markdown):
+        doc = _document(
+            [_tab("t.1", ["Foo is great."], {"kix.a": ["Foo is great"]})],
+            {"c1": "kix.a"},
+        )
+        result = annotate_markdown(
+            markdown + "\n", [_comment("c1", "x")], anchors=_anchors(doc),
+        )
+        assert _annotation_line(result, "c1") == 1
+
     def test_comment_without_live_anchor_uses_its_quote(self):
         result = annotate_markdown(
             EDITS_MD, [_comment("api", "Lima has")], anchors={},
@@ -587,6 +603,28 @@ class TestQuoteFallback:
         md = "Body text.[^1]\n\n[^1]: Only the footnote says this.\n"
         result = annotate_markdown(md, [_comment("c1", "footnote says")])
         assert _annotation_line(result, "c1") == 3
+
+    @pytest.mark.parametrize("quote,text", [
+        ("la raz&#243;n", "la razón"),
+        ("the author&#39;s note", "the author's note"),
+    ], ids=["accent", "apostrophe"])
+    def test_html_encoded_quote_is_decoded(self, quote, text):
+        # Drive returns quotedFileContent as HTML.
+        md = f"Intro line.\n\nUsa {text} aqui.\n"
+        result = annotate_markdown(md, [_comment("c1", quote)])
+        assert _annotation_line(result, "c1") == 3
+        assert f'[#c1 open] [quoted text found] alice@example.com on "{text}":' in (
+            result
+        )
+
+    def test_quote_is_not_found_in_a_linked_image_target(self):
+        # Drive exports a linked image as [![][imageN]](url).
+        md = (
+            "The target is here.\n\n"
+            "[![][image1]](https://example.com/target)After the image.\n"
+        )
+        result = annotate_markdown(md, [_comment("c1", "target")])
+        assert _annotation_line(result, "c1") == 1
 
     def test_quote_not_found_is_not_called_deleted(self):
         result = annotate_markdown(EDITS_MD, EDITS_COMMENTS)

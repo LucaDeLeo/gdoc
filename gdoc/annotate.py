@@ -77,26 +77,33 @@ def _find_all(text: str, key: str) -> list[int]:
     return starts
 
 
+# A link target: backslash escapes (Drive's export writes a ")" in a URL
+# as "\)") and one level of balanced parentheses (gdoc's own renderer
+# writes URLs raw).
+_URL = r"\((?:\\.|\([^()]*\)|[^()\\])*\)"
+# An image, alone or inside a link label (Drive exports a linked image as
+# [![][image1]](https://example.com)).
+_IMAGE = r"!\[[^\]]*\](?:" + _URL + r"|\[[^\]]*\])"
+
 # Markdown that isn't visible text: a code fence (keeps its contents), a
 # list marker, an escape (keeps the escaped char), an HTML entity (keeps
 # the decoded char), a code span (keeps its contents), an image, a link
 # (keeps its label), a footnote definition (see _visible_text), a
 # reference definition line, a footnote reference, or an emphasis marker.
 # Underscores inside a word are literal, as in CommonMark.
-_MARKUP = re.compile(
-    r"^(?P<fence>```|~~~)[^\n]*\n(?P<block>(?s:.*?))^(?P=fence)[^\n]*$"
-    r"|^[ \t]*(?:\d+[.)]|[-*+])[ \t]+"
-    r"|\\(?P<escaped>.)"
-    r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)"
-    r"|(?P<ticks>`+)(?P<code>.+?)(?P=ticks)"
-    r"|!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])"
-    r"|\[(?P<label>(?:\\.|[^\]\\])*)\]\([^)]*\)"
-    r"|^(?P<footnote>\[\^[^\]]+\]:)[^\n]*$"
-    r"|^\[[^\]]+\]:[^\n]*$"
-    r"|\[\^[^\]]+\]"
+_MARKUP = re.compile("".join([
+    r"^(?P<fence>```|~~~)[^\n]*\n(?P<block>(?s:.*?))^(?P=fence)[^\n]*$",
+    r"|^[ \t]*(?:\d+[.)]|[-*+])[ \t]+",
+    r"|\\(?P<escaped>.)",
+    r"|(?P<entity>&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);)",
+    r"|(?P<ticks>`+)(?P<code>.+?)(?P=ticks)",
+    r"|", _IMAGE,
+    r"|\[(?P<label>(?:\\.|", _IMAGE, r"|[^\]\\])*)\]", _URL,
+    r"|^(?P<footnote>\[\^[^\]]+\]:)[^\n]*$",
+    r"|^\[[^\]]+\]:[^\n]*$",
+    r"|\[\^[^\]]+\]",
     r"|\*+|~~|(?<!\w)_+|_+(?!\w)",
-    re.MULTILINE,
-)
+]), re.MULTILINE)
 
 
 def _visible_text(
@@ -233,7 +240,8 @@ def annotate_markdown(
             unanchored.append((c, ""))
             continue
 
-        anchor_text = qfc["value"]
+        # Drive returns the quote as HTML (an apostrophe is &#39;).
+        anchor_text = html.unescape(qfc["value"])
 
         if len(anchor_text.strip()) < 4:
             unanchored.append((c, "quoted text too short"))
