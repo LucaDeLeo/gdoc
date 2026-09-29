@@ -257,6 +257,123 @@ def cmd_revisions(args) -> int:
     return 0
 
 
+def _export_with_anchors(
+    doc_id: str, read_comments,
+) -> tuple[list[dict], str, dict | None, str]:
+    """The comments, markdown export and live comment anchors from one version.
+
+    Live anchors show whether each comment is still attached; Drive's
+    quoted text alone can't (it never changes after an edit). Anchors are
+    placed by counting occurrences of their text, so they must come from
+    the version that was exported: the Drive file version (visible to any
+    reader) is checked before and after. The comments are listed again
+    after the export, so one added, removed or resolved during the read
+    is caught too (Drive's file version doesn't reliably track comments).
+    If either changed, the whole read is repeated once. If it keeps
+    changing, or can't be confirmed, comments keep their attached/detached
+    status but lose their line.
+
+    *read_comments* lists the comments; it is called at least twice.
+
+    Returns (comments, markdown, anchors, source). *source* says where
+    comment labels come from, and is reported as ``anchors`` in ``--json``:
+
+    - ``live``: live anchors, with line placement.
+    - ``live_no_locations``: live anchors for attached/detached status,
+      but no line placement (the version or the comments kept changing,
+      or the version couldn't be read). That status is from the last
+      anchor read, just before the export, so it may miss an edit made
+      between the two. Comments without a live anchor are unplaced too.
+    - ``quoted_text``: anchors couldn't be read (anchors None); the caller
+      places comments by quoted text. If the comments kept changing,
+      their quotes are dropped so none is placed.
+    - ``none``: there are no comments, nothing else was read.
+    """
+    from google.auth.exceptions import TransportError
+    from httplib2 import HttpLib2Error
+
+    from gdoc.api.docs import get_comment_anchors
+    from gdoc.api.drive import export_doc, get_file_version
+    from gdoc.util import AuthError, PreviewUnavailableError
+
+    def version():
+        try:
+            return get_file_version(doc_id).get("version")
+        except AuthError:
+            raise
+        except (GdocError, HttpLib2Error, TransportError, OSError):
+            return None
+
+    def ids(comments):
+        return sorted(str(c.get("id")) for c in comments)
+
+    comments_changed = "comments changed while the document was being read"
+    problem = "the document changed while it was being read"
+    comments = read_comments()
+    anchors: dict | None = {}
+    preview_error = None
+    for _attempt in range(2):
+        if not comments:
+            # No comments, nothing to place: skip the anchor read.
+            markdown = export_doc(doc_id, mime_type="text/markdown")
+            latest = read_comments()
+            if not latest:
+                return latest, markdown, {}, "none"
+            comments, problem = latest, comments_changed
+            continue
+        before = version()
+        try:
+            anchors = get_comment_anchors(doc_id)
+        except PreviewUnavailableError as e:
+            # Warned about once the result is known: a retry may recover.
+            preview_error, anchors = e, None
+        markdown = export_doc(doc_id, mime_type="text/markdown")
+        after = version() if anchors is not None else None
+        latest = read_comments()
+        if ids(latest) != ids(comments):
+            comments, problem = latest, comments_changed
+            continue
+        comments = latest
+        if anchors is None:
+            print(
+                f"WARN: live comment anchors unavailable ({preview_error}); "
+                "comments are placed where their quoted text occurs, which "
+                "does not show whether they are still attached",
+                file=sys.stderr,
+            )
+            return comments, markdown, None, "quoted_text"
+        if before is None or after is None:
+            problem = "could not confirm the document's version"
+            break
+        if before == after:
+            return comments, markdown, anchors, "live"
+        problem = "the document changed while it was being read"
+    # Unsettled: list every comment without a location. A comment with no
+    # live anchor would otherwise be placed by a quote from another read.
+    unplaced = [
+        c if anchors is not None and c.get("id") in anchors
+        else {k: v for k, v in c.items() if k != "quotedFileContent"}
+        for c in comments
+    ]
+    if anchors is None:
+        print(
+            f"WARN: live comment anchors unavailable ({preview_error}), and "
+            f"{problem}; comments are listed without a location",
+            file=sys.stderr,
+        )
+        return unplaced, markdown, None, "quoted_text"
+    print(
+        f"WARN: {problem}; comments are listed without a location, and "
+        "their attached/detached status comes from a read just before the "
+        "text shown, so an edit in between may not be reflected",
+        file=sys.stderr,
+    )
+    return unplaced, markdown, {
+        cid: None if live is None else {**live, "occurrences": 0}
+        for cid, live in anchors.items()
+    }, "live_no_locations"
+
+
 def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
     doc_id = _resolve_doc_id(args.doc)
@@ -386,29 +503,34 @@ def cmd_cat(args) -> int:
 
     if getattr(args, "comments", False):
         # Annotated view: line-numbered content + inline comment annotations
-        from gdoc.api.drive import export_doc
-        markdown = export_doc(doc_id, mime_type="text/markdown")
+        from gdoc.api.comments import list_comments
+        include_resolved = getattr(args, "all", False)
+        comments, markdown, anchors, source = _export_with_anchors(
+            doc_id,
+            lambda: list_comments(
+                doc_id,
+                include_resolved=include_resolved,
+                include_anchor=True,
+            ),
+        )
 
         if no_images:
             from gdoc.mdimport import strip_images
             markdown = strip_images(markdown)
 
-        from gdoc.api.comments import list_comments
-        include_resolved = getattr(args, "all", False)
-        comments = list_comments(
-            doc_id,
-            include_resolved=include_resolved,
-            include_anchor=True,
-        )
-
         from gdoc.annotate import annotate_markdown
-        annotated = annotate_markdown(markdown, comments, show_resolved=include_resolved)
+        annotated = annotate_markdown(
+            markdown, comments, show_resolved=include_resolved, anchors=anchors,
+        )
         annotated = _truncate_bytes(annotated, max_bytes)
 
         from gdoc.format import get_output_mode, format_json
         mode = get_output_mode(args)
         if mode == "json":
-            print(format_json(content=annotated))
+            print(format_json(
+                content=annotated,
+                anchors=source,
+            ))
         else:
             print(annotated, end="")
 

@@ -76,16 +76,36 @@ The agent sees exactly what it can `edit` (numbered lines) and what's discussion
 context (un-numbered lines). This matches the Read/Edit pattern from Claude Code —
 line numbers are a display prefix, not part of the content.
 
-The anchoring uses `quotedFileContent.value` from the comments API — the text
-the comment was attached to. The CLI finds that substring in the markdown and
-places the annotation after the line containing it.
+Placement uses each comment's live anchor from the Docs API Developer Preview
+(`documents.get` with `commentsViewMode`): the text the comment covers now. The
+CLI finds that text in the markdown and places the annotation after the line
+where the anchor ends. Drive's `quotedFileContent` can't show whether a comment
+is still attached, because Drive never updates it after an edit. It is used
+only for comments with no live anchor, such as ones created through the Drive
+API (including gdoc's own `comment --quote` fallback).
 
-Unanchored comments go at the bottom:
+Comments not placed inline go at the bottom, with a note when there is one:
 
 ```
       	[UNANCHORED]
       	  [#5 open] dave@co.com: "General feedback: great doc"
+      	  [#6 open] [detached] erin@co.com: "Cite this?"
+      	  [#7 open] [attached, location not found] frank@co.com: "Crop this image"
 ```
+
+`[detached]` means the anchored text is all gone (Docs shows "Original content
+deleted"). `[attached, location not found]` means the comment is attached but
+its text can't be pinned to one line: it is on an image, on footnote text, or on
+heading text that a table of contents may repeat, or the document or its
+comments changed while it was being read. `--json` reports the
+source as `"anchors"`: `live`, `live_no_locations` (lines dropped; status from
+a read just before the text shown), `quoted_text`, or `none` (no
+comments). When live anchors can't be read (no preview access, no comment
+access, or the request fails), the CLI warns and places every comment by its
+quoted text instead; if the comments also keep changing during the read, the
+warning says so and no comment is placed. The labels say what was matched,
+not whether the comment is attached: `[quoted text found]`, `[quoted text not found (edited or
+detached)]`, `[quoted text ambiguous]` or `[quoted text too short]`.
 
 ## Awareness System — "What Changed?"
 
