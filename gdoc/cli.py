@@ -3576,6 +3576,309 @@ def cmd_replace_image(args) -> int:
     return 0
 
 
+# --- Suggestion threads (Docs API developer preview) ----------------------
+
+
+def _suggestion_range(loc: dict) -> str:
+    if loc.get("startIndex") is None:
+        return "(no range)"
+    return f"{loc['startIndex']}-{loc['endIndex']}"
+
+
+def _format_suggestion_location(loc: dict) -> str:
+    tab = loc.get("tab") or loc.get("tabId") or "?"
+    seg = f" {loc['segmentId']}" if loc.get("segmentId") else ""
+    return f"@{tab}{seg} {_suggestion_range(loc)} {loc['kind']}"
+
+
+def _plain_suggestion_location(loc: dict) -> str:
+    """Machine-readable location: tabId[/segmentId]:start-end:kind."""
+    where = loc.get("tabId", "")
+    if loc.get("segmentId"):
+        where += f"/{loc['segmentId']}"
+    return f"{where}:{_suggestion_range(loc)}:{loc['kind']}"
+
+
+def _print_suggestion_thread(summary: dict, locations: list[dict], mode: str,
+                             replies_label: bool = True) -> None:
+    """Terse/verbose block for one suggestion thread."""
+    created = summary["created"]
+    date_str = created if mode == "verbose" else created[:10]
+    author = summary["author"] + (" (me)" if summary["author_is_me"] else "")
+    print(f"#{summary['id']} [{summary['status']}] {author} {date_str}")
+    if summary["summary"]:
+        print(f"  {summary['summary']}")
+    for loc in locations:
+        line = f"  {_format_suggestion_location(loc)}"
+        if mode == "verbose" and loc.get("text"):
+            snippet = loc["text"].replace("\n", "\\n")
+            line += f' "{snippet}"'
+        print(line)
+    if not locations:
+        print("  (no inline location found)")
+    if mode == "verbose":
+        print(f"  Modified: {summary['updated']}")
+    if replies_label and summary["replies"]:
+        label = "reply" if summary["replies"] == 1 else "replies"
+        print(f"  {summary['replies']} {label}")
+
+
+def cmd_suggestions(args) -> int:
+    """Handler for `gdoc suggestions`: list native suggestion threads."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    include_all = getattr(args, "all", False)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import (
+        collect_suggestion_locations,
+        get_document_threads,
+        sorted_suggestion_threads,
+        summarize_suggestion_thread,
+    )
+    doc = get_document_threads(doc_id)
+    threads = sorted_suggestion_threads(doc)
+    if not include_all:
+        threads = [t for t in threads if t.get("status") == "OPEN"]
+    locations = collect_suggestion_locations(doc)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            suggestions=threads,
+            locations={
+                t.get("suggestionId", ""): locations.get(
+                    t.get("suggestionId", ""), [],
+                )
+                for t in threads
+            },
+            revisionId=doc.get("revisionId", ""),
+        ))
+    elif mode == "plain":
+        for t in threads:
+            s = summarize_suggestion_thread(t)
+            locs = ";".join(
+                _plain_suggestion_location(loc)
+                for loc in locations.get(s["id"], [])
+            )
+            summary = s["summary"].replace("\t", " ").replace("\n", " ")
+            print(f"{s['id']}\t{s['status']}\t{s['author']}\t{summary}\t{locs}")
+    elif not threads:
+        print("No suggestions." if include_all else "No open suggestions.")
+    else:
+        for t in threads:
+            s = summarize_suggestion_thread(t)
+            _print_suggestion_thread(s, locations.get(s["id"], []), mode)
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="suggestions", quiet=quiet,
+    )
+    return 0
+
+
+def cmd_suggestion_info(args) -> int:
+    """Handler for `gdoc suggestion-info`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    suggestion_id = args.suggestion_id
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import (
+        collect_suggestion_locations,
+        find_suggestion_thread,
+        get_document_threads,
+        summarize_suggestion_thread,
+    )
+    doc = get_document_threads(doc_id)
+    thread = find_suggestion_thread(doc, suggestion_id)
+    if thread is None:
+        raise GdocError(
+            f"suggestion not found: {suggestion_id} "
+            "(`gdoc suggestions DOC --all` lists thread IDs)",
+            exit_code=3,
+        )
+    locations = collect_suggestion_locations(doc).get(suggestion_id, [])
+    summary = summarize_suggestion_thread(thread)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            suggestion=thread, locations=locations,
+            revisionId=doc.get("revisionId", ""),
+        ))
+    elif mode == "plain":
+        print(f"id\t{summary['id']}")
+        print(f"status\t{summary['status']}")
+        print(f"author\t{summary['author']}")
+        print(f"created\t{summary['created']}")
+        summary_text = summary["summary"].replace("\t", " ").replace("\n", " ")
+        print(f"summary\t{summary_text}")
+        for loc in locations:
+            print(f"location\t{_plain_suggestion_location(loc)}")
+        print(f"replies\t{summary['replies']}")
+    else:
+        _print_suggestion_thread(summary, locations, mode)
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="suggestion-info", quiet=quiet,
+    )
+    return 0
+
+
+def _decide_suggestion(args, decision: str) -> int:
+    """Shared body of accept-/reject-/delete-suggestion.
+
+    Reads the thread (SUGGESTIONS_INLINE, so the revision is the one the
+    write is pinned to), refuses IDs that are unknown or already decided,
+    sends exactly one decision request, then reads back and requires the
+    thread to have left the OPEN state before reporting success.
+    """
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    suggestion_id = args.suggestion_id
+    command = f"{decision}-suggestion"
+    from gdoc.api.docs import SUGGESTION_DECISION_STATUS
+    final_status = SUGGESTION_DECISION_STATUS[decision]
+
+    if decision == "delete":
+        from gdoc.util import confirm_destructive
+        confirm_destructive(
+            f"delete suggestion #{suggestion_id}",
+            force=getattr(args, "force", False),
+        )
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import (
+        decide_suggestion,
+        find_suggestion_thread,
+        get_document_threads,
+        summarize_suggestion_thread,
+    )
+    doc = get_document_threads(doc_id)
+    thread = find_suggestion_thread(doc, suggestion_id)
+    if thread is None:
+        raise GdocError(
+            f"suggestion not found: {suggestion_id} "
+            "(`gdoc suggestions DOC --all` lists thread IDs)",
+            exit_code=3,
+        )
+    before = summarize_suggestion_thread(thread)
+    if before["status"] != "open":
+        raise GdocError(
+            f"suggestion {suggestion_id} is already {before['status']}",
+            exit_code=3,
+        )
+
+    result = decide_suggestion(
+        doc_id, suggestion_id, decision, doc.get("revisionId", ""),
+    )
+
+    # A 200 is not proof: read back and require the thread to be in the
+    # requested state. Observed live: accepted/rejected threads stay
+    # listed with that status; a deleted thread disappears.
+    try:
+        after_doc = get_document_threads(doc_id)
+    except Exception as e:  # noqa: BLE001 — the decision is already saved
+        raise GdocError(
+            f"suggestion {suggestion_id} was reported saved after "
+            f"{decision}, but verification failed "
+            f"({str(e) or type(e).__name__}). The decision may already "
+            "have been applied — inspect `gdoc suggestions --all` before "
+            "retrying."
+        )
+    after = find_suggestion_thread(after_doc, suggestion_id)
+    after_status = (
+        summarize_suggestion_thread(after)["status"] if after else "gone"
+    )
+    expected = "gone" if decision == "delete" else final_status
+    if after_status != expected:
+        raise GdocError(
+            f"{decision} request returned OK but suggestion "
+            f"{suggestion_id} reads back as {after_status} (expected "
+            f"{expected}); the decision may still have been applied — "
+            "check `gdoc suggestions --all`"
+        )
+
+    # The decision is saved and verified at this point. Awareness
+    # bookkeeping must not turn that success into an ordinary failure that
+    # encourages an unsafe retry.
+    from gdoc.api.drive import get_file_version
+
+    version_error = None
+    command_version = None
+    try:
+        command_version = get_file_version(doc_id).get("version")
+    except Exception as e:  # noqa: BLE001 — post-mutation bookkeeping
+        version_error = e
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        extra = {}
+        if "suggestionResponses" in result:
+            extra["suggestionResponses"] = result["suggestionResponses"]
+        print(format_json(
+            id=suggestion_id, status=final_status, threadStatus=after_status,
+            **extra,
+        ))
+    elif mode == "plain":
+        print(f"id\t{suggestion_id}")
+        print(f"status\t{final_status}")
+    else:
+        print(f"OK {final_status} suggestion #{suggestion_id}")
+
+    if version_error is not None:
+        print(
+            f"WARN: suggestion #{suggestion_id} is {final_status}, but the "
+            f"document version could not be refreshed: {version_error}; "
+            "awareness state not updated",
+            file=sys.stderr,
+        )
+        return 0
+
+    from gdoc.state import update_state_after_command
+    try:
+        update_state_after_command(
+            doc_id, change_info, command=command, quiet=quiet,
+            command_version=command_version,
+        )
+    except Exception as e:  # noqa: BLE001 — post-mutation local state
+        print(
+            f"WARN: suggestion #{suggestion_id} is {final_status}, but "
+            f"awareness state was not persisted: {e}",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def cmd_accept_suggestion(args) -> int:
+    """Handler for `gdoc accept-suggestion`."""
+    return _decide_suggestion(args, "accept")
+
+
+def cmd_reject_suggestion(args) -> int:
+    """Handler for `gdoc reject-suggestion`."""
+    return _decide_suggestion(args, "reject")
+
+
+def cmd_delete_suggestion(args) -> int:
+    """Handler for `gdoc delete-suggestion`."""
+    return _decide_suggestion(args, "delete")
+
+
 def cmd_structure(args) -> int:
     """Handler for `gdoc structure`: raw document JSON for native edits."""
     import json
@@ -4887,6 +5190,79 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     ci_p.set_defaults(func=cmd_comment_info)
+
+    # suggestions (Docs API developer preview)
+    sugg_p = sub.add_parser(
+        "suggestions", parents=[output_parent],
+        help="List suggested edits (native suggestion threads)",
+        description=(
+            "List the document's native suggestion threads (Docs API "
+            "Workspace Developer Preview; requires an enrolled OAuth "
+            "client project). Each thread shows its ID, status, author, "
+            "summary, and the tab/UTF-16 range(s) it touches, derived "
+            "from the SUGGESTIONS_INLINE structure. Read-only."
+        ),
+    )
+    sugg_p.add_argument("doc", help="Document ID or URL")
+    sugg_p.add_argument(
+        "--all", action="store_true",
+        help="Include accepted/rejected threads (default: open only)",
+    )
+    sugg_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    sugg_p.set_defaults(func=cmd_suggestions)
+
+    # suggestion-info
+    si_p = sub.add_parser(
+        "suggestion-info", parents=[output_parent],
+        help="Get a single suggestion thread by ID",
+    )
+    si_p.add_argument("doc", help="Document ID or URL")
+    si_p.add_argument("suggestion_id", help="Suggestion ID (suggest.xxx)")
+    si_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    si_p.set_defaults(func=cmd_suggestion_info)
+
+    # accept-suggestion
+    acc_p = sub.add_parser(
+        "accept-suggestion", parents=[output_parent],
+        help="Accept a suggested edit (requires edit access)",
+    )
+    acc_p.add_argument("doc", help="Document ID or URL")
+    acc_p.add_argument("suggestion_id", help="Suggestion ID to accept")
+    acc_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    acc_p.set_defaults(func=cmd_accept_suggestion)
+
+    # reject-suggestion
+    rej_p = sub.add_parser(
+        "reject-suggestion", parents=[output_parent],
+        help="Reject a suggested edit (edit access or its author)",
+    )
+    rej_p.add_argument("doc", help="Document ID or URL")
+    rej_p.add_argument("suggestion_id", help="Suggestion ID to reject")
+    rej_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    rej_p.set_defaults(func=cmd_reject_suggestion)
+
+    # delete-suggestion
+    dels_p = sub.add_parser(
+        "delete-suggestion", parents=[output_parent],
+        help="Delete a suggestion thread you authored",
+    )
+    dels_p.add_argument("doc", help="Document ID or URL")
+    dels_p.add_argument("suggestion_id", help="Suggestion ID to delete")
+    dels_p.add_argument(
+        "--force", action="store_true", help="Skip confirmation prompt",
+    )
+    dels_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks",
+    )
+    dels_p.set_defaults(func=cmd_delete_suggestion)
 
     # images
     images_p = sub.add_parser(

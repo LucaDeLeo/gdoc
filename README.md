@@ -234,6 +234,35 @@ gdoc cat 1aBcDeFg...
 | `reopen DOC COMMENT_ID` | Reopen a resolved comment |
 | `delete-comment DOC ID` | Delete a comment (`--force` to skip confirmation) |
 
+### Suggestions (Docs API developer preview)
+
+| Command | Description |
+|---------|-------------|
+| `suggestions DOC` | List open suggestion threads with author, summary, and the tab/UTF-16 range(s) each touches (`--all` to include accepted/rejected) |
+| `suggestion-info DOC ID` | One suggestion thread in full (`--json` returns the raw thread plus derived `locations`) |
+| `accept-suggestion DOC ID` | Accept a suggested edit (requires edit access) |
+| `reject-suggestion DOC ID` | Reject a suggested edit (edit access, or the suggestion's author) |
+| `delete-suggestion DOC ID` | Delete a suggestion thread you authored (`--force` to skip confirmation) |
+
+These read Google's native suggestion threads (`documents.get` with
+`commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED`) and send one
+`acceptSuggestion`/`rejectSuggestion`/`deleteSuggestion` request per command.
+`accept-suggestion` is always pinned to the revision that was just read (it
+needs edit access, which is also what Google requires for a `revisionId`);
+`reject-suggestion`/`delete-suggestion` are pinned whenever the read returned a
+revision and are sent unpinned only when it did not (a suggestion's author may
+be a commenter). Unlike comments there is **no Drive fallback**: the OAuth client's Cloud project must be enrolled in the
+[Workspace Developer Preview Program](https://developers.google.com/workspace/preview),
+otherwise the commands fail with an explicit "not enrolled" error (exit 1) and
+nothing is changed. A decision is only reported as `OK` after a read-back shows
+the thread in the requested state; accepted and rejected threads stay listed
+under `--all` with that status, deleted ones disappear. Suggestion threads carry
+no range of their own, so the `@Tab start-end kind` lines (and `locations` in
+`--json`) are derived from the `SUGGESTIONS_INLINE` document structure keyed by
+suggestion ID — they are kept separate from the raw thread. Header, footer,
+and footnote ranges are labelled with their segment ID (their indexes restart
+at 0); marks with no range at all (document/named styles) print `(no range)`.
+
 `comment --quote "some doc text"` anchors the comment to the first occurrence
 of that text (all tabs are searched). When the OAuth client's Cloud project is
 enrolled in the

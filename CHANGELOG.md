@@ -13,6 +13,29 @@ All notable changes to `gdoc` are documented here. This project follows
   `--no-notify` with `--domain` or `--anyone` (link shares, which never
   send email) is rejected with exit 3 before any API call.
 
+- **Suggestion threads: `suggestions`, `suggestion-info`,
+  `accept-suggestion`, `reject-suggestion`, `delete-suggestion`.** Reads
+  Google's native suggestion threads through the Docs API developer
+  preview (`documents.get?commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED`,
+  sent over the authorized transport because the public Discovery document
+  doesn't list the parameter) and decides one suggestion per command with
+  `acceptSuggestion`/`rejectSuggestion`/`deleteSuggestion`. Accept is
+  always pinned to `requiredRevisionId`; reject/delete are pinned when the
+  read returned a revision and go unpinned only when it did not (a
+  suggestion's commenter-author may not receive one). Each decision
+  requires `commentUpdateState: ALL_SAVED` and its ID in
+  `suggestionResponses`, then reads the document back and only reports
+  `OK` when the thread is in the requested state. Threads carry no
+  range, so each command derives the tab and UTF-16 range(s) a
+  suggestion touches from the `SUGGESTIONS_INLINE` structure
+  (`suggestedInsertionIds`, `suggestedDeletionIds`, `suggested*Changes`,
+  header/footer/footnote segment IDs) and reports them separately from
+  the raw thread. No Drive fallback: a project without preview access
+  gets an explicit error and no mutation. Permission failures name the
+  rule Google applies (accept: edit access; reject: edit access or author;
+  delete: author). `delete-suggestion` uses the standard destructive
+  confirmation / `--force`. All five are exposed over MCP.
+
 ## [0.22.0] — 2026-09-28
 
 ### Added

@@ -57,6 +57,8 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "revisions": True,
     "comments": True,
     "comment-info": True,
+    "suggestions": True,
+    "suggestion-info": True,
     "diff": True,
     "images": True,
     "structure": True,
@@ -75,6 +77,9 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "resolve": False,
     "reopen": False,
     "delete-comment": False,
+    "accept-suggestion": False,
+    "reject-suggestion": False,
+    "delete-suggestion": False,
     "new": False,
     "cp": False,
     "mkdir": False,
@@ -142,6 +147,7 @@ _EXTRA_REQUIRED: dict[str, tuple[str, ...]] = {
     # --old-file/--new-file are hidden over MCP and suggest has no cell
     # mode, so the text pair is the only way to supply the replacement
     "suggest": ("old_text", "new_text"),
+    "delete-suggestion": ("force",),
 }
 
 # Cross-parameter requirements JSON Schema could only express with a
@@ -458,7 +464,9 @@ def call_command(
 
     # Schema `required` cannot force a boolean to be true, so guard here:
     # with stdin detached, confirm_destructive() can never prompt.
-    if command == "delete-comment" and not arguments.get("force"):
+    if command in ("delete-comment", "delete-suggestion") and not arguments.get(
+        "force"
+    ):
         raise ValueError(
             "`force: true` is required: deletion cannot prompt for "
             "confirmation over MCP"

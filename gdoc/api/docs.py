@@ -2523,3 +2523,420 @@ def suggest_replacement(
                 "it as a pending suggestion; inspect the document."
             )
         return outcome
+# --- Suggestion threads (Workspace Developer Preview) ---------------------
+#
+# documents.get?commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED returns native
+# `suggestions[]` (and `comments[]`) threads. The parameter, the thread
+# schema, and the accept/reject/deleteSuggestion requests are preview-only:
+# the public Discovery document doesn't list them, so the discovery-built
+# client rejects the query parameter client-side ("unexpected keyword
+# argument"). The read therefore goes over the service's authorized HTTP
+# transport directly; the write requests travel in the opaque batchUpdate
+# body like insertComment does. Every preview shape is confined to the
+# helpers below.
+
+SUGGESTIONS_VIEW_MODE_INLINE = "SUGGESTIONS_INLINE"
+COMMENTS_VIEW_MODE_INCLUDED = "COMMENTS_VIEW_MODE_INCLUDED"
+_DOCS_BASE_URL = "https://docs.googleapis.com/v1/documents/"
+
+# batchUpdate request union member per decision, and the permission rule
+# Google documents for each (accept: edit access; reject: edit access or
+# suggestion author; delete: suggestion author).
+SUGGESTION_DECISION_STATUS = {
+    "accept": "accepted",
+    "reject": "rejected",
+    "delete": "deleted",
+}
+SUGGESTION_DECISIONS: dict[str, tuple[str, str]] = {
+    "accept": ("acceptSuggestion", "edit access"),
+    "reject": ("rejectSuggestion", "edit access or suggestion authorship"),
+    "delete": ("deleteSuggestion", "suggestion authorship"),
+}
+
+
+def _preview_parse_error(e: HttpError) -> bool:
+    """True when a 400 says the server didn't understand a preview field.
+
+    A project not enrolled in the Developer Preview sees preview fields as
+    unknown — rejected by name ("Unknown name", "Cannot find field") or
+    silently dropped so the request union is empty ("No request set").
+    """
+    if int(e.resp.status) != 400:
+        return False
+    detail = str(e)
+    return (
+        "Unknown name" in detail
+        or "Cannot find field" in detail
+        or "No request set" in detail
+    )
+
+
+def _documents_get_raw(service, doc_id: str, params: dict) -> dict:
+    """documents.get through the service's authorized transport.
+
+    Bypasses the discovery-generated method so preview query parameters
+    the public Discovery document doesn't list can be sent. Raises
+    HttpError on non-2xx exactly like a discovery-built call.
+    """
+    from urllib.parse import quote, urlencode
+
+    from googleapiclient.http import HttpRequest
+    from googleapiclient.model import JsonModel
+
+    uri = f"{_DOCS_BASE_URL}{quote(doc_id, safe='')}?{urlencode(params)}"
+    request = HttpRequest(
+        service._http, JsonModel().response, uri, method="GET",
+    )
+    return request.execute()
+
+
+def get_document_threads(doc_id: str) -> dict:
+    """Fetch the document with native comment and suggestion threads.
+
+    Reads with includeTabsContent=True, suggestionsViewMode=
+    SUGGESTIONS_INLINE (the only view whose indexes are valid for a later
+    write) and commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED, so the
+    response carries ``suggestions[]``/``comments[]`` plus ``revisionId``
+    and every tab's inline suggestion IDs.
+
+    Raises PreviewUnavailableError when the project lacks preview access
+    (Google rejects ``commentsViewMode`` as an unknown field). Other
+    HttpErrors are translated as usual.
+    """
+    params = {
+        "includeTabsContent": "true",
+        "suggestionsViewMode": SUGGESTIONS_VIEW_MODE_INLINE,
+        "commentsViewMode": COMMENTS_VIEW_MODE_INCLUDED,
+    }
+    try:
+        service = get_docs_service()
+        doc = _documents_get_raw(service, doc_id, params)
+    except HttpError as e:
+        if _preview_parse_error(e):
+            raise PreviewUnavailableError(
+                "suggestion threads are not available: the OAuth client's "
+                "Cloud project is not enrolled in the Workspace Developer "
+                "Preview (commentsViewMode rejected)"
+            )
+        _translate_http_error(e, doc_id)
+    # An enrolled project echoes the view mode; a 200 without it means the
+    # preview view was not applied, so a missing ``suggestions`` key would
+    # not mean "no suggestions" (same rule as check_suggest_preview_access).
+    if doc.get("commentsViewMode") != COMMENTS_VIEW_MODE_INCLUDED:
+        raise PreviewUnavailableError(
+            "suggestion threads are not available: the server did not "
+            "apply the Developer Preview comments view"
+        )
+    if "suggestions" not in doc:
+        doc = {**doc, "suggestions": []}
+    return doc
+
+
+def _thread_author(thread: dict) -> str:
+    author = thread.get("headPost", {}).get("author", {})
+    return (
+        author.get("emailAddress")
+        or author.get("displayName")
+        or author.get("user")
+        or "unknown"
+    )
+
+
+def summarize_suggestion_thread(thread: dict) -> dict:
+    """Flatten a SuggestionThread into the fields the CLI prints.
+
+    Only fields observed live are read (suggestionId, status, headPost
+    author/createTime/updateTime, summaryText); everything else stays in
+    the raw thread, which callers pass through in --json.
+    """
+    head = thread.get("headPost", {})
+    replies = thread.get("replies") or thread.get("posts") or []
+    return {
+        "id": thread.get("suggestionId", ""),
+        "status": (thread.get("status") or "UNKNOWN").lower(),
+        "author": _thread_author(thread),
+        "author_is_me": bool(head.get("author", {}).get("me")),
+        "created": head.get("createTime", ""),
+        "updated": head.get("updateTime", ""),
+        "summary": thread.get("summaryText", ""),
+        "replies": len(replies),
+    }
+
+
+_SUGGESTION_STYLE_KEYS = {
+    "suggestedTextStyleChanges": "style",
+    "suggestedParagraphStyleChanges": "paragraph-style",
+    "suggestedBulletChanges": "bullet",
+    "suggestedTableRowStyleChanges": "table-row-style",
+    "suggestedTableCellStyleChanges": "table-cell-style",
+    "suggestedInlineObjectPropertiesChanges": "object-properties",
+    "suggestedPositionedObjectPropertiesChanges": "object-properties",
+    "suggestedDocumentStyleChanges": "document-style",
+    "suggestedNamedStylesChanges": "named-styles",
+    "suggestedListPropertiesChanges": "list-properties",
+    "suggestedDateElementPropertiesChanges": "date-properties",
+}
+
+# Non-body segments of a tab whose indexes restart at 0 (Docs API
+# "segmentId" for range requests). Body content has no segment ID.
+_SEGMENT_MAPS = {"headers": "header", "footers": "footer", "footnotes": "footnote"}
+
+
+def collect_suggestion_locations(doc: dict) -> dict[str, list[dict]]:
+    """Derive where each suggestion touches the document.
+
+    SuggestionThread carries no range. In a SUGGESTIONS_INLINE read the
+    structure marks suggested content instead: ``suggestedInsertionIds`` /
+    ``suggestedDeletionIds`` (or the singular ``suggestedInsertionId`` on
+    inline/positioned objects and lists) on structural elements, and
+    ``suggested*Changes`` maps keyed by suggestion ID. This walks every
+    tab (including child tabs) and returns, per suggestion ID, a list of
+    ``{tab, tabId, segmentId, kind, startIndex, endIndex, text}`` entries
+    using the nearest enclosing element's UTF-16 indexes.
+
+    ``segmentId`` is "" for body content and the header/footer/footnote ID
+    otherwise — those segments' indexes restart at 0, so a range is only
+    meaningful together with it. Marks on objects that have no indexes at
+    all (document style, named styles, the inlineObjects/lists maps) are
+    reported with ``startIndex``/``endIndex`` of None rather than a fake
+    0-0 range — unless the same insertion/deletion also appears on a
+    ranged element, in which case only the ranged entry is kept. A
+    textRun's insertion carries the same ID in its
+    ``suggestedTextStyleChanges``; that mirror entry is dropped so plain
+    insertions are not reported twice.
+    """
+    locations: dict[str, list[dict]] = {}
+
+    def add(sid: str, ctx: dict, kind: str, node: dict, text: str) -> None:
+        has_range = "startIndex" in node or "endIndex" in node
+        locations.setdefault(sid, []).append({
+            "tab": ctx["tab"],
+            "tabId": ctx["tabId"],
+            "segmentId": ctx["segmentId"],
+            "kind": kind,
+            "startIndex": node.get("startIndex", 0) if has_range else None,
+            "endIndex": node.get("endIndex", 0) if has_range else None,
+            "text": text,
+        })
+
+    def marked_ids(node: dict, key: str) -> list[str]:
+        """Suggestion IDs under *key* in any of the three API shapes:
+        a list (suggestedInsertionIds/suggestedDeletionIds), a single
+        string (suggestedInsertionId on objects/lists), or a map keyed by
+        suggestion ID (Paragraph.suggestedPositionedObjectIds →
+        ObjectReferences)."""
+        value = node.get(key)
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, dict):
+            return list(value)
+        return list(value) if isinstance(value, list) else []
+
+    def walk(node, ctx: dict, enclosing: dict) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item, ctx, enclosing)
+            return
+        if not isinstance(node, dict):
+            return
+        # An element with its own indexes becomes the range for anything
+        # marked inside it that lacks indexes (e.g. paragraphStyle).
+        if "startIndex" in node or "endIndex" in node:
+            enclosing = node
+        text = node.get("content", "") if "textRun" in enclosing else ""
+        if isinstance(node.get("textRun"), dict):
+            text = node["textRun"].get("content", "")
+        inserted = (
+            marked_ids(node, "suggestedInsertionIds")
+            + marked_ids(node, "suggestedInsertionId")
+        )
+        for sid in inserted:
+            add(sid, ctx, "insert", enclosing, text)
+        for sid in marked_ids(node, "suggestedDeletionIds"):
+            add(sid, ctx, "delete", enclosing, text)
+        # Paragraph.suggestedPositionedObjectIds (map suggestion ID →
+        # ObjectReferences): objects suggested to be anchored to this
+        # paragraph; the paragraph's range is the location.
+        for sid in marked_ids(node, "suggestedPositionedObjectIds"):
+            add(sid, ctx, "positioned-object", enclosing, text)
+        for key, kind in _SUGGESTION_STYLE_KEYS.items():
+            changes = node.get(key)
+            if isinstance(changes, dict):
+                for sid in changes:
+                    if key == "suggestedTextStyleChanges" and sid in inserted:
+                        continue  # style of the inserted text itself
+                    add(sid, ctx, kind, enclosing, text)
+        for key, value in node.items():
+            if key in _SUGGESTION_STYLE_KEYS or key in (
+                "suggestedInsertionIds", "suggestedInsertionId",
+                "suggestedDeletionIds", "suggestedPositionedObjectIds",
+            ):
+                continue
+            if key in _SEGMENT_MAPS and isinstance(value, dict):
+                for segment_id, segment in value.items():
+                    walk(segment, {**ctx, "segmentId": segment_id}, {})
+                continue
+            if isinstance(value, (dict, list)):
+                walk(value, ctx, enclosing)
+
+    def walk_tabs(tabs: list[dict]) -> None:
+        for tab in tabs:
+            props = tab.get("tabProperties", {})
+            ctx = {
+                "tab": props.get("title", ""),
+                "tabId": props.get("tabId", ""),
+                "segmentId": "",
+            }
+            doc_tab = tab.get("documentTab")
+            if isinstance(doc_tab, dict):
+                walk(doc_tab, ctx, {})
+            walk_tabs(tab.get("childTabs", []))
+
+    walk_tabs(doc.get("tabs", []))
+    # An inserted/deleted object is marked twice: on its ranged element in
+    # the paragraph and, without a range, in the inlineObjects/
+    # positionedObjects map. Keep the ranged one; unrelated no-range
+    # entries (e.g. an object-properties change) are preserved.
+    for sid, entries in locations.items():
+        if any(e["startIndex"] is not None for e in entries):
+            locations[sid] = [
+                e for e in entries
+                if e["startIndex"] is not None
+                or e["kind"] not in ("insert", "delete")
+            ]
+    return locations
+
+
+def sorted_suggestion_threads(doc: dict) -> list[dict]:
+    """Threads ordered by head-post createTime (the API order is arbitrary)."""
+    return sorted(
+        doc.get("suggestions", []),
+        key=lambda t: t.get("headPost", {}).get("createTime", ""),
+    )
+
+
+def find_suggestion_thread(doc: dict, suggestion_id: str) -> dict | None:
+    """Return the SuggestionThread with *suggestion_id*, or None."""
+    for thread in doc.get("suggestions", []):
+        if thread.get("suggestionId") == suggestion_id:
+            return thread
+    return None
+
+
+def decide_suggestion(
+    doc_id: str,
+    suggestion_id: str,
+    decision: str,
+    revision_id: str,
+) -> dict:
+    """Send one acceptSuggestion/rejectSuggestion/deleteSuggestion request.
+
+    One ID per call keeps a failure atomic and auditable. The write is
+    pinned to *revision_id* when the read returned one (editors always
+    get it; live, a commenter did too). Accept refuses to run unpinned;
+    reject/delete — which a commenter-author may perform — go unpinned
+    only when no revisionId was available. The raw batchUpdate response
+    is returned so the caller can inspect ``suggestionResponses`` /
+    ``commentUpdateState``; a
+    ``commentUpdateState`` other than ALL_SAVED is raised here because it
+    means the thread update was not durably saved.
+
+    Raises:
+        GdocError: revision mismatch (exit 1, "re-run"), permission denied
+            with the rule for this decision, missing revision ID, or other
+            API errors.
+        PreviewUnavailableError: the project lacks preview access.
+    """
+    if decision not in SUGGESTION_DECISIONS:
+        raise ValueError(f"unknown suggestion decision: {decision}")
+    request_key, rule = SUGGESTION_DECISIONS[decision]
+    body: dict = {
+        "requests": [{request_key: {"suggestionId": suggestion_id}}],
+    }
+    if revision_id:
+        body["writeControl"] = {"requiredRevisionId": revision_id}
+    elif decision == "accept":
+        # Google documents revisionId as available to users with edit
+        # access, which accept requires anyway; without it we cannot pin
+        # the content change to what was just read, so refuse.
+        raise GdocError(
+            "cannot accept suggestion: the document read returned no "
+            "revisionId (accepting needs edit access)"
+        )
+    # reject/delete are also open to the suggestion's author, who may be a
+    # commenter and may not receive a revisionId. Neither request depends
+    # on document coordinates, so they are sent unpinned in that case —
+    # never with an empty requiredRevisionId.
+    service = get_docs_service()
+    try:
+        result = (
+            service.documents()
+            .batchUpdate(documentId=doc_id, body=body)
+            .execute()
+        )
+    except HttpError as e:
+        status = int(e.resp.status)
+        if _preview_parse_error(e):
+            raise PreviewUnavailableError(
+                f"{request_key} is not available: the OAuth client's Cloud "
+                "project is not enrolled in the Workspace Developer Preview"
+            )
+        _raise_if_stale_revision(e)
+        if status == 403:
+            raise GdocError(
+                f"Permission denied: cannot {decision} suggestion "
+                f"{suggestion_id} ({decision} requires {rule})"
+            )
+        message = _error_message(e)
+        if status == 404 and "uggestion" in message:
+            # Observed live: "Suggestion with ID suggest.x does not exist."
+            raise GdocError(
+                f"suggestion not found: {suggestion_id}", exit_code=3,
+            )
+        if status == 400:
+            raise GdocError(
+                f"cannot {decision} suggestion {suggestion_id}: "
+                f"{message or e.reason}"
+            )
+        _translate_http_error(e, doc_id)
+    except Exception as e:  # noqa: BLE001 — .execute() is the network call
+        # A timeout/reset can arrive after Google applied the decision. Do
+        # not let an automated caller mistake this for a safe-to-retry
+        # pre-write failure, especially for destructive delete requests.
+        raise GdocError(
+            f"the {decision} request for suggestion {suggestion_id} failed "
+            f"in transit ({str(e) or type(e).__name__}). The outcome is "
+            "unknown — the decision may or may not have been applied. "
+            "Inspect `gdoc suggestions --all` before retrying."
+        )
+
+    # A batch that must save a suggestion thread requires ALL_SAVED, and
+    # the 1:1 suggestionResponses entry must name this ID (observed live:
+    # {"acceptedSuggestionIds": [...]} etc.). Anything else is a failure,
+    # never a silent success — the caller's read-back then reports the
+    # thread's real state.
+    state = result.get("commentUpdateState", "")
+    if state != "ALL_SAVED":
+        raise GdocError(
+            f"suggestion {decision} not saved "
+            f"(commentUpdateState={state or 'missing'}); re-read the "
+            "document before retrying"
+        )
+    responses = result.get("suggestionResponses") or [{}]
+    key = f"{SUGGESTION_DECISION_STATUS[decision]}SuggestionIds"
+    if suggestion_id not in (responses[0] or {}).get(key, []):
+        raise GdocError(
+            f"suggestion {decision} response did not report {suggestion_id} "
+            f"under {key}; re-run `gdoc suggestions --all` to see its state"
+        )
+    return result
+
+
+def _error_message(e: HttpError) -> str:
+    """Google's error message from the response body, or ""."""
+    try:
+        import json
+
+        return str(json.loads(e.content.decode("utf-8"))["error"]["message"])
+    except Exception:  # noqa: BLE001 - best effort decoration only
+        return ""
