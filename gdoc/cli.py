@@ -2811,7 +2811,25 @@ def cmd_comments(args) -> int:
     return 0
 
 
-def _try_anchored_comment(doc_id: str, text: str, quote: str) -> str:
+_POST_MAX_UTF8 = 2048
+
+
+def _validate_post_text(text: str, what: str = "comment text") -> None:
+    """Native comment posts are plain text, non-empty, <= 2048 UTF-8 bytes."""
+    if not text or not text.strip():
+        raise GdocError(f"{what} must not be empty", exit_code=3)
+    size = len(text.encode("utf-8"))
+    if size > _POST_MAX_UTF8:
+        raise GdocError(
+            f"{what} is {size} UTF-8 bytes; the Docs API limit is "
+            f"{_POST_MAX_UTF8}",
+            exit_code=3,
+        )
+
+
+def _try_anchored_comment(
+    doc_id: str, text: str, quote: str, assignee_email: str | None = None,
+) -> str:
     """Create a truly anchored comment via the Docs API preview, if possible.
 
     Searches every tab for the first occurrence of *quote* (exact match
@@ -2821,6 +2839,11 @@ def _try_anchored_comment(doc_id: str, text: str, quote: str) -> str:
     should fall back to the Drive quotedFileContent path: quote text not
     found, or the preview request unavailable (project not enrolled,
     comment-only access, or the doc changed since the read).
+
+    With *assignee_email* there is no fallback — the Drive API cannot
+    assign a comment — so a missing quote is a usage error (exit 3) and an
+    unavailable preview is an error naming the reason, never a silent
+    unassigned comment.
     """
     from gdoc.api.docs import (
         find_text_in_document,
@@ -2842,14 +2865,28 @@ def _try_anchored_comment(doc_id: str, text: str, quote: str) -> str:
             )
             if not matches:
                 continue
+            kwargs = {"tab_id": tab["id"], "revision_id": revision_id}
+            if assignee_email:
+                kwargs["assignee_email"] = assignee_email
             try:
                 return insert_comment(
                     doc_id, text,
                     matches[0]["startIndex"], matches[0]["endIndex"],
-                    tab_id=tab["id"], revision_id=revision_id,
+                    **kwargs,
                 )
-            except PreviewUnavailableError:
+            except PreviewUnavailableError as e:
+                if assignee_email:
+                    raise GdocError(
+                        f"cannot create an assigned comment: {e}. "
+                        "No Drive fallback was attempted."
+                    )
                 return ""
+    if assignee_email:
+        raise GdocError(
+            f"Quote text not found in document: {quote!r}. An assigned "
+            "comment must be anchored; no comment was created.",
+            exit_code=3,
+        )
     return ""
 
 
@@ -2858,42 +2895,219 @@ def cmd_comment(args) -> int:
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
 
+    quote = getattr(args, "quote", "") or ""
+    assign_raw = getattr(args, "assign", None)
+    assignee = (assign_raw or "").strip()
+    if assign_raw is not None and not assignee:
+        # A supplied but blank --assign must not silently become an
+        # unassigned Drive comment.
+        raise GdocError("--assign requires an email address", exit_code=3)
+    if assignee:
+        # Assignment is Docs-native only (insertComment.assigneeEmailAddress),
+        # and insertComment needs a range, so --assign implies --quote and
+        # never falls back to an unassigned Drive comment.
+        if not quote:
+            raise GdocError(
+                "--assign requires --quote: an assigned comment is created "
+                "through the Docs API and must be anchored to document text",
+                exit_code=3,
+            )
+        _validate_post_text(args.text)
+
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
 
-    quote = getattr(args, "quote", "") or ""
     new_id = ""
-    if quote:
+    if quote and assignee:
+        new_id = _try_anchored_comment(
+            doc_id, args.text, quote, assignee_email=assignee,
+        )
+    elif quote:
         new_id = _try_anchored_comment(doc_id, args.text, quote)
     anchored = bool(new_id)
+    if not anchored and assignee:
+        # Unreachable by construction (the assigned path returns an ID or
+        # raises); guard the one Drive write this command must never make.
+        raise GdocError(
+            "internal error: assigned comment path returned no thread; "
+            "no comment was created"
+        )
     if not anchored:
         from gdoc.api.comments import create_comment
         result = create_comment(doc_id, args.text, quote=quote)
         new_id = result["id"]
 
-    from gdoc.api.drive import get_file_version
-    command_version = get_file_version(doc_id).get("version")
+    if assignee:
+        command_version = _post_write_version(doc_id)
+    else:
+        from gdoc.api.drive import get_file_version
+        command_version = get_file_version(doc_id).get("version")
 
     from gdoc.format import get_output_mode, format_json
     mode = get_output_mode(args)
     if mode == "json":
         extra = {"anchored": anchored} if quote else {}
+        if assignee:
+            extra["assignee"] = assignee
         print(format_json(id=new_id, status="created", **extra))
     elif mode == "plain":
         print(f"id\t{new_id}")
         if quote:
             print(f"anchored\t{'true' if anchored else 'false'}")
+        if assignee:
+            print(f"assignee\t{assignee}")
     else:
         suffix = " (anchored)" if anchored else ""
+        if assignee:
+            suffix = f" (anchored, assigned to {assignee})"
         print(f"OK comment #{new_id}{suffix}")
 
-    from gdoc.state import update_state_after_command
-    update_state_after_command(
-        doc_id, change_info, command="comment", quiet=quiet,
-        command_version=command_version,
+    state_kwargs = dict(
+        command="comment", quiet=quiet, command_version=command_version,
         comment_state_patch={"add_comment_id": new_id},
     )
+    if anchored:
+        _record_native_write(doc_id, change_info, **state_kwargs)
+    else:
+        from gdoc.state import update_state_after_command
+        update_state_after_command(doc_id, change_info, **state_kwargs)
 
+    return 0
+
+
+def _post_write_version(doc_id: str) -> int | None:
+    """Drive version after a verified native write, best-effort.
+
+    The write has already been confirmed by read-back; failing the command
+    here would invite a duplicate retry. Warn on stderr and record no
+    version instead (the next pre-flight re-baselines from Drive).
+    """
+    import sys
+
+    from gdoc.api.drive import get_file_version
+
+    try:
+        return get_file_version(doc_id).get("version")
+    except Exception as e:  # noqa: BLE001 - any failure is non-fatal here
+        print(
+            f"WARN: write succeeded but the Drive version lookup failed "
+            f"({type(e).__name__}: {e}); awareness state not versioned",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _record_native_write(doc_id: str, change_info, **kwargs) -> None:
+    """Awareness-state update after a verified native write, best-effort.
+
+    The result is already printed; an unwritable state directory must not
+    turn it into a failure that invites a duplicate retry.
+    """
+    import sys
+
+    from gdoc.state import update_state_after_command
+
+    try:
+        update_state_after_command(doc_id, change_info, **kwargs)
+    except Exception as e:  # noqa: BLE001 - post-mutation local state
+        print(
+            f"WARN: write succeeded but awareness state was not persisted "
+            f"({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
+
+
+def _native_thread_or_fail(doc_id: str, thread_id: str, suggestion: bool) -> dict:
+    """Read the native threads and return the named one, or exit 3."""
+    from gdoc.api.docs import find_thread, get_document_threads
+
+    doc = get_document_threads(doc_id)
+    thread = find_thread(doc, thread_id, suggestion)
+    if thread is None:
+        kind = "suggestion" if suggestion else "comment"
+        raise GdocError(f"{kind} thread not found: {thread_id}", exit_code=3)
+    return thread
+
+
+def _validate_native_reply_args(args, suggestion: bool) -> None:
+    """Usage checks for a suggestion-thread reply or `--reassign`, before any I/O."""
+    reassign_raw = getattr(args, "reassign", None)
+    reassign = (reassign_raw or "").strip()
+    if reassign_raw is not None and not reassign:
+        raise GdocError("--reassign requires an email address", exit_code=3)
+    if suggestion and reassign:
+        raise GdocError(
+            "--reassign applies to comment threads only; a suggestion "
+            "thread has no assignee",
+            exit_code=3,
+        )
+    _validate_post_text(args.text or "", "reply text")
+
+
+def _native_reply(
+    args, doc_id: str, change_info, thread_id: str, suggestion: bool,
+) -> int:
+    """Docs-native addCommentReply: a suggestion-thread reply or `--reassign`."""
+    quiet = getattr(args, "quiet", False)
+    reassign = (getattr(args, "reassign", "") or "").strip()
+    text = args.text or ""
+
+    from gdoc.api.docs import add_comment_reply, head_post_assignee, thread_kind
+
+    if reassign:
+        # Preflight: Google rejects Post.assigneeEmail on a thread whose
+        # head post has no assignee, so read the native thread and fail
+        # before writing. Only headPost.assigneeEmail counts (fail closed).
+        thread = _native_thread_or_fail(doc_id, thread_id, suggestion=False)
+        if not head_post_assignee(thread):
+            raise GdocError(
+                f"comment #{thread_id} has no assignee on its head post; "
+                "--reassign can only move an existing assignment. Create the "
+                "thread with `comment --quote ... --assign EMAIL` instead.",
+                exit_code=3,
+            )
+
+    post = add_comment_reply(
+        doc_id, thread_id, content=text, suggestion=suggestion,
+        assignee_email=reassign or None,
+    )
+    post_id = post.get("postId", "")
+
+    command_version = _post_write_version(doc_id)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    id_key = thread_kind(suggestion)
+    # Comment-thread replies keep the Drive `reply` key (`replyId`; the ID
+    # spaces are the same) and add `postId`, the name the edit/delete
+    # commands take; suggestion threads have only `postId`.
+    ids = {} if suggestion else {"replyId": post_id}
+    if mode == "json":
+        extra = {"assignee": reassign} if reassign else {}
+        print(format_json(
+            **{id_key: thread_id}, **ids, postId=post_id, status="created",
+            **extra,
+        ))
+    elif mode == "plain":
+        print(f"{id_key}\t{thread_id}")
+        if not suggestion:
+            print(f"replyId\t{post_id}")
+        print(f"postId\t{post_id}")
+        if reassign:
+            print(f"assignee\t{reassign}")
+    else:
+        what = "suggestion " if suggestion else ""
+        suffix = f" (reassigned to {reassign})" if reassign else ""
+        print(f"OK reply on {what}#{thread_id}{suffix}")
+
+    # Comment-thread IDs are shared with the Drive comments API (the
+    # awareness system tracks them); suggestion threads are not Drive
+    # comments, so only the version is recorded for them.
+    patch = None if suggestion else {"add_comment_id": thread_id}
+    _record_native_write(
+        doc_id, change_info, command="reply", quiet=quiet,
+        command_version=command_version, comment_state_patch=patch,
+    )
     return 0
 
 
@@ -2903,8 +3117,21 @@ def cmd_reply(args) -> int:
     quiet = getattr(args, "quiet", False)
     comment_id = args.comment_id
 
+    from gdoc.api.docs import is_suggestion_id
+
+    # A suggestion ID (suggest.xxx) or any --reassign value (even blank)
+    # selects the native path, so a blank --reassign is a usage error
+    # rather than a silent Drive reply.
+    suggestion = is_suggestion_id(comment_id)
+    native = suggestion or getattr(args, "reassign", None) is not None
+    if native:
+        _validate_native_reply_args(args, suggestion)
+
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
+
+    if native:
+        return _native_reply(args, doc_id, change_info, comment_id, suggestion)
 
     from gdoc.api.comments import create_reply
     result = create_reply(doc_id, comment_id, content=args.text)
@@ -3005,10 +3232,35 @@ def cmd_reopen(args) -> int:
 
 
 def cmd_delete_comment(args) -> int:
-    """Handler for `gdoc delete-comment`."""
+    """Handler for `gdoc delete-comment`.
+
+    Without POST_ID, deletes the whole comment through Drive. With POST_ID,
+    deletes that one reply through the Docs API preview, on a comment or a
+    suggestion thread.
+    """
+    from gdoc.api.docs import is_suggestion_id
+
+    comment_id = args.comment_id
+    post_id = getattr(args, "post_id", None)
+    if post_id is not None:
+        # An empty POST_ID (say, an unset shell variable) must not widen
+        # into deleting the whole comment.
+        if not post_id.strip():
+            raise GdocError(
+                "POST_ID is empty; omit it to delete the whole comment",
+                exit_code=3,
+            )
+        return _cmd_delete_post(args, suggestion=is_suggestion_id(comment_id))
+    if is_suggestion_id(comment_id):
+        raise GdocError(
+            f"{comment_id} is a suggestion thread; delete it with "
+            f"`gdoc suggestion DOC {comment_id} --delete`, or name a "
+            "POST_ID to delete one reply",
+            exit_code=3,
+        )
+
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
-    comment_id = args.comment_id
     force = getattr(args, "force", False)
 
     from gdoc.util import confirm_destructive
@@ -3040,6 +3292,159 @@ def cmd_delete_comment(args) -> int:
         comment_state_patch={"remove_comment_id": comment_id},
     )
 
+    return 0
+
+
+def cmd_edit_comment(args) -> int:
+    """Handler for `gdoc edit-comment`: edit one post on any native thread."""
+    from gdoc.api.docs import is_suggestion_id
+
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    thread_id = args.thread_id
+    suggestion = is_suggestion_id(thread_id)
+    post_id = args.post_id
+    text = args.text or ""
+    _validate_post_text(text, "new text")
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.docs import (
+        find_post,
+        post_is_deleted,
+        thread_kind,
+        update_comment_post,
+    )
+
+    thread = _native_thread_or_fail(doc_id, thread_id, suggestion)
+    post = find_post(thread, post_id)
+    if post is None:
+        raise GdocError(
+            f"post {post_id} not found on {thread_kind(suggestion)} {thread_id}",
+            exit_code=3,
+        )
+    if post_is_deleted(post):
+        raise GdocError(
+            f"post {post_id} on #{thread_id} has been deleted", exit_code=3,
+        )
+    head_id = (thread.get("headPost") or {}).get("postId")
+    if suggestion and post_id == head_id:
+        raise GdocError(
+            "the head post of a suggestion thread is generated by Google "
+            "and cannot be edited; name a reply post instead",
+            exit_code=3,
+        )
+    if (post.get("author") or {}).get("me") is False:
+        raise GdocError(
+            f"post {post_id} was written by another user; only its author "
+            "can edit it",
+            exit_code=3,
+        )
+
+    update_comment_post(doc_id, thread_id, post_id, text, suggestion=suggestion)
+
+    command_version = _post_write_version(doc_id)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    id_key = thread_kind(suggestion)
+    if mode == "json":
+        print(format_json(**{id_key: thread_id}, postId=post_id, status="updated"))
+    elif mode == "plain":
+        print(f"{id_key}\t{thread_id}")
+        print(f"postId\t{post_id}")
+        print("status\tupdated")
+    else:
+        print(f"OK updated post {post_id} on #{thread_id}")
+
+    patch = None if suggestion else {"add_comment_id": thread_id}
+    _record_native_write(
+        doc_id, change_info, command=args.command, quiet=quiet,
+        command_version=command_version, comment_state_patch=patch,
+    )
+    return 0
+
+
+def _cmd_delete_post(args, suggestion: bool) -> int:
+    """`gdoc delete-comment DOC THREAD_ID POST_ID`: delete one reply."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    thread_id = args.comment_id
+    post_id = args.post_id
+    force = getattr(args, "force", False)
+
+    from gdoc.util import confirm_destructive
+    confirm_destructive(f"delete reply {post_id} on #{thread_id}", force=force)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+
+    from gdoc.api.docs import (
+        delete_comment_reply,
+        find_post,
+        post_is_action,
+        post_is_deleted,
+        thread_kind,
+    )
+
+    thread = _native_thread_or_fail(doc_id, thread_id, suggestion)
+    post = find_post(thread, post_id)
+    if post is None:
+        raise GdocError(
+            f"post {post_id} not found on {thread_kind(suggestion)} {thread_id}",
+            exit_code=3,
+        )
+    if post_is_deleted(post):
+        raise GdocError(
+            f"post {post_id} on #{thread_id} is already deleted", exit_code=3,
+        )
+    head_id = (thread.get("headPost") or {}).get("postId")
+    if post_id == head_id:
+        hint = (
+            "omit POST_ID to delete the whole comment"
+            if not suggestion
+            else "reject or delete the suggestion with `gdoc suggestion` instead"
+        )
+        raise GdocError(
+            f"post {post_id} is the head post of #{thread_id}, not a reply; "
+            f"{hint}",
+            exit_code=3,
+        )
+    if post_is_action(post):
+        raise GdocError(
+            f"post {post_id} records a resolve/reopen action or an "
+            "assignment; Google does not allow deleting such replies",
+            exit_code=3,
+        )
+    if (post.get("author") or {}).get("me") is False:
+        raise GdocError(
+            f"post {post_id} was written by another user; only its author "
+            "can delete it",
+            exit_code=3,
+        )
+
+    delete_comment_reply(doc_id, thread_id, post_id, suggestion=suggestion)
+
+    command_version = _post_write_version(doc_id)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    id_key = thread_kind(suggestion)
+    if mode == "json":
+        print(format_json(**{id_key: thread_id}, postId=post_id, status="deleted"))
+    elif mode == "plain":
+        print(f"{id_key}\t{thread_id}")
+        print(f"postId\t{post_id}")
+        print("status\tdeleted")
+    else:
+        print(f"OK deleted reply {post_id} from #{thread_id}")
+
+    patch = None if suggestion else {"add_comment_id": thread_id}
+    _record_native_write(
+        doc_id, change_info, command=args.command, quiet=quiet,
+        command_version=command_version, comment_state_patch=patch,
+    )
     return 0
 
 
@@ -3574,6 +3979,339 @@ def cmd_replace_image(args) -> int:
         quiet=quiet, command_version=command_version,
     )
     return 0
+
+
+# --- Suggestion threads (Docs API developer preview) ----------------------
+
+
+def _suggestion_range(loc: dict) -> str:
+    if loc.get("startIndex") is None:
+        return "(no range)"
+    return f"{loc['startIndex']}-{loc['endIndex']}"
+
+
+def _format_suggestion_location(loc: dict) -> str:
+    tab = loc.get("tab") or loc.get("tabId") or "?"
+    seg = f" {loc['segmentId']}" if loc.get("segmentId") else ""
+    return f"@{tab}{seg} {_suggestion_range(loc)} {loc['kind']}"
+
+
+def _plain_suggestion_location(loc: dict) -> str:
+    """Machine-readable location: tabId[/segmentId]:start-end:kind."""
+    where = loc.get("tabId", "")
+    if loc.get("segmentId"):
+        where += f"/{loc['segmentId']}"
+    return f"{where}:{_suggestion_range(loc)}:{loc['kind']}"
+
+
+def _print_suggestion_thread(summary: dict, locations: list[dict], mode: str,
+                             replies_label: bool = True) -> None:
+    """Terse/verbose block for one suggestion thread."""
+    created = summary["created"]
+    date_str = created if mode == "verbose" else created[:10]
+    author = summary["author"] + (" (me)" if summary["author_is_me"] else "")
+    print(f"#{summary['id']} [{summary['status']}] {author} {date_str}")
+    if summary["summary"]:
+        print(f"  {summary['summary']}")
+    for loc in locations:
+        line = f"  {_format_suggestion_location(loc)}"
+        if mode == "verbose" and loc.get("text"):
+            snippet = loc["text"].replace("\n", "\\n")
+            line += f' "{snippet}"'
+        print(line)
+    if not locations:
+        print("  (no inline location found)")
+    if mode == "verbose":
+        print(f"  Modified: {summary['updated']}")
+    if replies_label and summary["replies"]:
+        label = "reply" if summary["replies"] == 1 else "replies"
+        print(f"  {summary['replies']} {label}")
+
+
+def _format_suggestion_reply(post: dict) -> str:
+    """One reply line: author, time, post ID (for edit-/delete-comment), body."""
+    author = post.get("author") or {}
+    name = author.get("emailAddress") or author.get("displayName") or "unknown"
+    head = f"{name} {post.get('createTime', '')} [{post.get('postId', '')}]"
+    if post.get("deleted"):
+        return f"{head}: [deleted]"
+    content = post.get("content")
+    if content:
+        return f'{head}: "{content}"'
+    action = post.get("suggestionAction") or ""
+    if action and not action.startswith("NO_"):
+        return f"{head}: [{action.lower()}]"
+    return head
+
+
+def cmd_suggestions(args) -> int:
+    """Handler for `gdoc suggestions`: list native suggestion threads, or show one."""
+    include_all = getattr(args, "all", False)
+    if getattr(args, "suggestion_id", None):
+        if include_all:
+            raise GdocError(
+                "--all applies only when listing; omit it to show one "
+                "suggestion",
+                exit_code=3,
+            )
+        return _show_suggestion(args)
+
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import (
+        collect_suggestion_locations,
+        get_document_threads,
+        sorted_suggestion_threads,
+        summarize_suggestion_thread,
+    )
+    doc = get_document_threads(doc_id)
+    threads = sorted_suggestion_threads(doc)
+    if not include_all:
+        threads = [t for t in threads if t.get("status") == "OPEN"]
+    locations = collect_suggestion_locations(doc)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            suggestions=threads,
+            locations={
+                t.get("suggestionId", ""): locations.get(
+                    t.get("suggestionId", ""), [],
+                )
+                for t in threads
+            },
+            revisionId=doc.get("revisionId", ""),
+        ))
+    elif mode == "plain":
+        for t in threads:
+            s = summarize_suggestion_thread(t)
+            locs = ";".join(
+                _plain_suggestion_location(loc)
+                for loc in locations.get(s["id"], [])
+            )
+            summary = s["summary"].replace("\t", " ").replace("\n", " ")
+            print(f"{s['id']}\t{s['status']}\t{s['author']}\t{summary}\t{locs}")
+    elif not threads:
+        print("No suggestions." if include_all else "No open suggestions.")
+    else:
+        for t in threads:
+            s = summarize_suggestion_thread(t)
+            _print_suggestion_thread(s, locations.get(s["id"], []), mode)
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="suggestions", quiet=quiet,
+    )
+    return 0
+
+
+def _show_suggestion(args) -> int:
+    """`gdoc suggestions DOC SUGGESTION_ID`: one suggestion thread in full."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    suggestion_id = args.suggestion_id
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import (
+        collect_suggestion_locations,
+        find_suggestion_thread,
+        get_document_threads,
+        summarize_suggestion_thread,
+    )
+    doc = get_document_threads(doc_id)
+    thread = find_suggestion_thread(doc, suggestion_id)
+    if thread is None:
+        raise GdocError(
+            f"suggestion not found: {suggestion_id} "
+            "(`gdoc suggestions DOC --all` lists thread IDs)",
+            exit_code=3,
+        )
+    locations = collect_suggestion_locations(doc).get(suggestion_id, [])
+    summary = summarize_suggestion_thread(thread)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            suggestion=thread, locations=locations,
+            revisionId=doc.get("revisionId", ""),
+        ))
+    elif mode == "plain":
+        print(f"id\t{summary['id']}")
+        print(f"status\t{summary['status']}")
+        print(f"author\t{summary['author']}")
+        print(f"created\t{summary['created']}")
+        summary_text = summary["summary"].replace("\t", " ").replace("\n", " ")
+        print(f"summary\t{summary_text}")
+        for loc in locations:
+            print(f"location\t{_plain_suggestion_location(loc)}")
+        print(f"replies\t{summary['replies']}")
+    else:
+        _print_suggestion_thread(
+            summary, locations, mode, replies_label=mode != "verbose",
+        )
+        if mode == "verbose":
+            for post in thread.get("replies") or thread.get("posts") or []:
+                print(f"  -> {_format_suggestion_reply(post)}")
+
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="suggestions", quiet=quiet,
+    )
+    return 0
+
+
+def _decide_suggestion(args, decision: str) -> int:
+    """`gdoc suggestion DOC ID --accept|--reject|--delete`.
+
+    Reads the thread (SUGGESTIONS_INLINE, so the revision is the one the
+    write is pinned to), refuses IDs that are unknown or already decided,
+    sends exactly one decision request, then reads back and requires the
+    thread to have left the OPEN state before reporting success.
+    """
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    suggestion_id = args.suggestion_id
+    command = "suggestion"
+    from gdoc.api.docs import SUGGESTION_DECISION_STATUS
+    final_status = SUGGESTION_DECISION_STATUS[decision]
+
+    if decision == "delete":
+        from gdoc.util import confirm_destructive
+        confirm_destructive(
+            f"delete suggestion #{suggestion_id}",
+            force=getattr(args, "force", False),
+        )
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import (
+        decide_suggestion,
+        find_suggestion_thread,
+        get_document_threads,
+        summarize_suggestion_thread,
+    )
+    doc = get_document_threads(doc_id)
+    thread = find_suggestion_thread(doc, suggestion_id)
+    if thread is None:
+        raise GdocError(
+            f"suggestion not found: {suggestion_id} "
+            "(`gdoc suggestions DOC --all` lists thread IDs)",
+            exit_code=3,
+        )
+    before = summarize_suggestion_thread(thread)
+    if before["status"] != "open":
+        raise GdocError(
+            f"suggestion {suggestion_id} is already {before['status']}",
+            exit_code=3,
+        )
+
+    result = decide_suggestion(
+        doc_id, suggestion_id, decision, doc.get("revisionId", ""),
+    )
+
+    # A 200 is not proof: read back and require the thread to be in the
+    # requested state. Observed live: accepted/rejected threads stay
+    # listed with that status; a deleted thread disappears.
+    try:
+        after_doc = get_document_threads(doc_id)
+    except Exception as e:  # noqa: BLE001 — the decision is already saved
+        raise GdocError(
+            f"suggestion {suggestion_id} was reported saved after "
+            f"{decision}, but verification failed "
+            f"({str(e) or type(e).__name__}). The decision may already "
+            "have been applied — inspect `gdoc suggestions --all` before "
+            "retrying."
+        )
+    after = find_suggestion_thread(after_doc, suggestion_id)
+    after_status = (
+        summarize_suggestion_thread(after)["status"] if after else "gone"
+    )
+    expected = "gone" if decision == "delete" else final_status
+    if after_status != expected:
+        raise GdocError(
+            f"{decision} request returned OK but suggestion "
+            f"{suggestion_id} reads back as {after_status} (expected "
+            f"{expected}); the decision may still have been applied — "
+            "check `gdoc suggestions --all`"
+        )
+
+    # The decision is saved and verified at this point. Awareness
+    # bookkeeping must not turn that success into an ordinary failure that
+    # encourages an unsafe retry.
+    from gdoc.api.drive import get_file_version
+
+    version_error = None
+    command_version = None
+    try:
+        command_version = get_file_version(doc_id).get("version")
+    except Exception as e:  # noqa: BLE001 — post-mutation bookkeeping
+        version_error = e
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        extra = {}
+        if "suggestionResponses" in result:
+            extra["suggestionResponses"] = result["suggestionResponses"]
+        print(format_json(
+            id=suggestion_id, status=final_status, threadStatus=after_status,
+            **extra,
+        ))
+    elif mode == "plain":
+        print(f"id\t{suggestion_id}")
+        print(f"status\t{final_status}")
+    else:
+        print(f"OK {final_status} suggestion #{suggestion_id}")
+
+    if version_error is not None:
+        print(
+            f"WARN: suggestion #{suggestion_id} is {final_status}, but the "
+            f"document version could not be refreshed: {version_error}; "
+            "awareness state not updated",
+            file=sys.stderr,
+        )
+        return 0
+
+    from gdoc.state import update_state_after_command
+    try:
+        update_state_after_command(
+            doc_id, change_info, command=command, quiet=quiet,
+            command_version=command_version,
+        )
+    except Exception as e:  # noqa: BLE001 — post-mutation local state
+        print(
+            f"WARN: suggestion #{suggestion_id} is {final_status}, but "
+            f"awareness state was not persisted: {e}",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def cmd_suggestion(args) -> int:
+    """Handler for `gdoc suggestion`: accept, reject, or delete one suggestion."""
+    decisions = [
+        d for d in ("accept", "reject", "delete") if getattr(args, d, False)
+    ]
+    if len(decisions) != 1:
+        # argparse enforces this on the command line; MCP calls build
+        # their own argv, so check again before anything is read.
+        raise GdocError(
+            "exactly one of --accept, --reject, --delete is required",
+            exit_code=3,
+        )
+    return _decide_suggestion(args, decisions[0])
 
 
 def cmd_structure(args) -> int:
@@ -4826,15 +5564,39 @@ def build_parser() -> GdocArgumentParser:
         ),
     )
     comment_p.add_argument(
+        "--assign",
+        metavar="EMAIL",
+        help=(
+            "Assign the new comment to this user (Docs API preview; "
+            "requires --quote, no Drive fallback)"
+        ),
+    )
+    comment_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     comment_p.set_defaults(func=cmd_comment)
 
     # reply
-    reply_p = sub.add_parser("reply", parents=[output_parent], help="Reply to a comment")
+    reply_p = sub.add_parser(
+        "reply", parents=[output_parent],
+        help="Reply to a comment or suggestion thread",
+    )
     reply_p.add_argument("doc", help="Document ID or URL")
-    reply_p.add_argument("comment_id", help="Comment ID to reply to")
+    reply_p.add_argument(
+        "comment_id",
+        help=(
+            "Comment ID to reply to, or a suggestion ID (suggest.xxx) to "
+            "reply on a suggestion thread (Docs API preview)"
+        ),
+    )
     reply_p.add_argument("text", help="Reply text")
+    reply_p.add_argument(
+        "--reassign", metavar="EMAIL",
+        help=(
+            "Reassign an already-assigned comment thread to this user "
+            "(Docs API preview)"
+        ),
+    )
     reply_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
@@ -4864,10 +5626,22 @@ def build_parser() -> GdocArgumentParser:
     # delete-comment
     del_comment_p = sub.add_parser(
         "delete-comment", parents=[output_parent],
-        help="Delete a comment",
+        help="Delete a comment, or one reply on a comment or suggestion thread",
+        description=(
+            "Without POST_ID, delete the whole comment. With POST_ID, "
+            "delete that one reply you wrote (Docs API preview); THREAD_ID "
+            "may then be a comment ID or a suggestion ID (suggest.xxx)."
+        ),
     )
     del_comment_p.add_argument("doc", help="Document ID or URL")
-    del_comment_p.add_argument("comment_id", help="Comment ID to delete")
+    del_comment_p.add_argument(
+        "comment_id", metavar="thread_id",
+        help="Comment ID, or a suggestion ID (suggest.xxx) when POST_ID is given",
+    )
+    del_comment_p.add_argument(
+        "post_id", nargs="?",
+        help="Reply post ID to delete (default: delete the whole comment)",
+    )
     del_comment_p.add_argument(
         "--force", action="store_true", help="Skip confirmation prompt",
     )
@@ -4875,6 +5649,28 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks",
     )
     del_comment_p.set_defaults(func=cmd_delete_comment)
+
+    # edit-comment (Docs API preview)
+    ep = sub.add_parser(
+        "edit-comment", parents=[output_parent],
+        help="Edit the text of a comment or reply you wrote",
+        description=(
+            "Edit one post you wrote on a comment thread or a suggestion "
+            "thread (Docs API preview). A suggestion ID (suggest.xxx) "
+            "selects the suggestion thread; its generated head post "
+            "cannot be edited."
+        ),
+    )
+    ep.add_argument("doc", help="Document ID or URL")
+    ep.add_argument(
+        "thread_id", help="Comment ID or suggestion ID (suggest.xxx)",
+    )
+    ep.add_argument("post_id", help="Post ID within the thread")
+    ep.add_argument("text", help="New text")
+    ep.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    ep.set_defaults(func=cmd_edit_comment)
 
     # comment-info
     ci_p = sub.add_parser(
@@ -4887,6 +5683,69 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     ci_p.set_defaults(func=cmd_comment_info)
+
+    # suggestions (Docs API developer preview)
+    sugg_p = sub.add_parser(
+        "suggestions", parents=[output_parent],
+        help="List suggested edits, or show one (native suggestion threads)",
+        description=(
+            "List the document's native suggestion threads, or show one "
+            "in full when SUGGESTION_ID is given (Docs API Workspace "
+            "Developer Preview; requires an enrolled OAuth client "
+            "project). Each thread shows its ID, status, author, summary, "
+            "and the tab/UTF-16 range(s) it touches, derived from the "
+            "SUGGESTIONS_INLINE structure. Read-only."
+        ),
+    )
+    sugg_p.add_argument("doc", help="Document ID or URL")
+    sugg_p.add_argument(
+        "suggestion_id", nargs="?",
+        help="Show only this suggestion thread (suggest.xxx)",
+    )
+    sugg_p.add_argument(
+        "--all", action="store_true",
+        help="Include accepted/rejected threads (default: open only)",
+    )
+    sugg_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    sugg_p.set_defaults(func=cmd_suggestions)
+
+    # suggestion (Docs API developer preview)
+    sd_p = sub.add_parser(
+        "suggestion", parents=[output_parent],
+        help="Accept, reject, or delete one suggested edit",
+        description=(
+            "Decide one native suggestion thread (Docs API Workspace "
+            "Developer Preview). --accept needs edit access; --reject "
+            "needs edit access or authorship of the suggestion; --delete "
+            "needs authorship. The result is read back before OK is "
+            "printed."
+        ),
+    )
+    sd_p.add_argument("doc", help="Document ID or URL")
+    sd_p.add_argument("suggestion_id", help="Suggestion ID (suggest.xxx)")
+    decision = sd_p.add_mutually_exclusive_group(required=True)
+    decision.add_argument(
+        "--accept", action="store_true",
+        help="Apply the suggested edit (requires edit access)",
+    )
+    decision.add_argument(
+        "--reject", action="store_true",
+        help="Discard the suggested edit (edit access or its author)",
+    )
+    decision.add_argument(
+        "--delete", action="store_true",
+        help="Delete a suggestion you authored (asks for confirmation)",
+    )
+    sd_p.add_argument(
+        "--force", action="store_true",
+        help="Skip the --delete confirmation prompt",
+    )
+    sd_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks",
+    )
+    sd_p.set_defaults(func=cmd_suggestion)
 
     # images
     images_p = sub.add_parser(

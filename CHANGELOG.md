@@ -12,6 +12,37 @@ All notable changes to `gdoc` are documented here. This project follows
   for one share. The MCP share tool takes the matching option. Combining
   `--no-notify` with `--domain` or `--anyone` (link shares, which never
   send email) is rejected with exit 3 before any API call.
+- **Native comment and suggestion threads (Docs API developer preview).**
+  Three new commands, `suggestions`, `suggestion` and `edit-comment`, plus
+  native options on `comment`, `reply` and `delete-comment`:
+  - `suggestions DOC [SUGGESTION_ID] [--all]` lists Google's suggestion
+    threads, or shows one, with the tab and UTF-16 range(s) each touches
+    (derived from the `SUGGESTIONS_INLINE` structure, kept apart from the
+    raw thread in `--json`).
+  - `suggestion DOC ID --accept | --reject | --delete [--force]` decides
+    one suggestion. Accept is always pinned to `requiredRevisionId`;
+    reject/delete are pinned when the read returned a revision.
+  - `comment --quote TEXT --assign EMAIL` creates an assigned anchored
+    comment; `reply --reassign EMAIL` hands an assigned thread on and
+    refuses (exit 3) before writing when the head post has no assignee.
+  - `reply`, `edit-comment DOC THREAD_ID POST_ID TEXT` and
+    `delete-comment DOC THREAD_ID POST_ID` act on suggestion threads when
+    `THREAD_ID` starts with `suggest.`. `delete-comment` without `POST_ID`
+    still deletes the whole comment through Drive.
+
+  Threads are read with `documents.get?commentsViewMode=
+  COMMENTS_VIEW_MODE_INCLUDED` over the authorized transport (the public
+  Discovery document doesn't list the parameter). Every write requires
+  `commentUpdateState: ALL_SAVED`, then reads the thread back and prints
+  `OK` only when it shows the requested state; when that read fails, the
+  error says the write may have landed. Pre-write refusals cover unknown
+  or already-decided suggestions, a suggestion's generated head post,
+  action/assignment replies and other users' posts. There is no Drive
+  fallback: a project without preview access gets an explicit error and
+  no change. Ordinary comment reads and writes and the awareness system
+  stay on Drive. Over MCP, `suggestions` is read-only, `suggestion` and
+  `edit-comment` are writes, and `suggestion --delete` and
+  `delete-comment` require `force: true`.
 
 ## [0.22.0] — 2026-09-28
 

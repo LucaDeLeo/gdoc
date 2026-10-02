@@ -99,6 +99,7 @@ def insert_comment(
     end_index: int,
     tab_id: str | None = None,
     revision_id: str = "",
+    assignee_email: str | None = None,
 ) -> str:
     """Insert a comment anchored to a text range (Docs API insertComment).
 
@@ -119,6 +120,9 @@ def insert_comment(
         tab_id: Tab the range lives in (omitted → first tab).
         revision_id: If non-empty, sent as writeControl.requiredRevisionId
             so the anchor can't land on stale coordinates.
+        assignee_email: If given, sent as ``assigneeEmailAddress`` so the
+            new thread is created assigned to that user (a Docs-native
+            concept the Drive comments API cannot express).
 
     Returns:
         The new comment thread ID (same ID space as Drive API comments).
@@ -126,60 +130,501 @@ def insert_comment(
     range_: dict = {"startIndex": start_index, "endIndex": end_index}
     if tab_id:
         range_["tabId"] = tab_id
-    body: dict = {
-        "requests": [
-            {"insertComment": {"content": content, "range": range_}}
-        ]
-    }
+    request: dict = {"content": content, "range": range_}
+    if assignee_email:
+        request["assigneeEmailAddress"] = assignee_email
+    body: dict = {"requests": [{"insertComment": request}]}
     if revision_id:
         body["writeControl"] = {"requiredRevisionId": revision_id}
     try:
-        service = get_docs_service()
-        result = (
-            service.documents()
-            .batchUpdate(documentId=doc_id, body=body)
-            .execute()
-        )
+        # 5xx/transport failures raise GdocError (outcome uncertain) here
+        # and are deliberately not PreviewUnavailableError: falling back to
+        # a Drive comment could duplicate one Google already created.
+        result = _dispatch_native_write(doc_id, body, "insertComment")
     except HttpError as e:
         status = int(e.resp.status)
-        detail = str(e)
         # A non-enrolled project sees insertComment as an unknown field:
         # either rejected by name ("Unknown name"/"Cannot find field") or
         # silently dropped, leaving an empty request union ("No request
         # set" — the observed live behavior). We always set insertComment,
         # so an empty union can only mean the server didn't recognize it.
+        if _preview_parse_error(e):
+            raise PreviewUnavailableError(
+                "insertComment not available (preview not enabled)"
+            )
         # A revision mismatch means the doc changed between our read and
         # this write; the caller's unanchored fallback is still correct.
-        if status == 400 and (
-            "Unknown name" in detail
-            or "Cannot find field" in detail
-            or "No request set" in detail
-            or "revision" in detail.lower()
-        ):
+        if status == 400 and "revision" in str(e).lower():
             raise PreviewUnavailableError(
-                "insertComment not available or not applicable "
-                "(preview not enabled, or the document changed)"
+                "the document changed since it was read; re-run to retry"
             )
         if status == 403:
             raise PreviewUnavailableError(
-                "insertComment not permitted for this user"
+                "insertComment not permitted for this user "
+                "(comment-only access cannot batchUpdate)"
             )
         _translate_http_error(e, doc_id)
 
     # Comment saves can fail even when the batchUpdate itself returns 200.
     state = result.get("commentUpdateState", "")
-    if state and state != "ALL_SAVED":
-        raise PreviewUnavailableError(f"comment not saved ({state})")
     replies = result.get("replies", [])
     thread = (replies[0] if replies else {}).get(
         "insertComment", {},
     ).get("commentThread", {})
     comment_id = thread.get("commentId", "")
+    if assignee_email:
+        # No fallback exists for an assigned comment, and a 2xx whose state
+        # is not ALL_SAVED (or that names no thread) is mutation-ambiguous:
+        # a comment may or may not exist. Never call that "not created".
+        if state != "ALL_SAVED" or not comment_id:
+            raise GdocError(
+                "assigned comment outcome uncertain (commentUpdateState="
+                f"{state or 'missing'}, thread id "
+                f"{comment_id or 'missing'}): a comment may have been "
+                "created; inspect the document's comments before retrying"
+            )
+        # The assignment is the point of the request; verify it landed
+        # rather than echoing the requested address back as fact.
+        doc = _read_back_threads(doc_id, f"assigned comment #{comment_id}")
+        created = find_thread(doc, comment_id, suggestion=False)
+        if created is None or not _same_email(
+            head_post_assignee(created), assignee_email,
+        ):
+            raise GdocError(
+                f"comment #{comment_id} was created but the read-back does "
+                f"not show it assigned to {assignee_email}; inspect the thread"
+            )
+        return comment_id
+    if state and state != "ALL_SAVED":
+        raise PreviewUnavailableError(f"comment not saved ({state})")
     if not comment_id:
         raise PreviewUnavailableError(
             "no comment thread in insertComment response"
         )
     return comment_id
+
+
+# --- Native comment/suggestion threads (Docs API developer preview) ---
+#
+# Drive v3 remains gdoc's default read and mutation path for ordinary
+# comments (listing, pagination, tombstones and the awareness system all
+# depend on it). The helpers below are used only for what Drive cannot
+# express: assignment, replies on suggestion threads, editing a post, and
+# deleting a single reply. The CLI picks the namespace from the ID itself
+# (is_suggestion_id); these helpers take that choice as an explicit flag.
+
+_DOCS_BASE_URL = "https://docs.googleapis.com/v1/documents/"
+SUGGESTIONS_VIEW_MODE_INLINE = "SUGGESTIONS_INLINE"
+COMMENTS_VIEW_MODE_INCLUDED = "COMMENTS_VIEW_MODE_INCLUDED"
+
+_PREVIEW_UNAVAILABLE_MSG = (
+    "native comment threads are not available: the OAuth client's Cloud "
+    "project is not enrolled in the Google Workspace Developer Preview "
+    "(the Docs API rejected the preview field). No change was made."
+)
+
+
+def _preview_parse_error(e: HttpError) -> bool:
+    """True when a 400 says the server didn't understand a preview field.
+
+    A project not enrolled in the Developer Preview sees preview fields as
+    unknown — rejected by name ("Unknown name", "Cannot find field") or
+    silently dropped so the request union is empty ("No request set").
+    """
+    if int(e.resp.status) != 400:
+        return False
+    detail = str(e)
+    return (
+        "Unknown name" in detail
+        or "Cannot find field" in detail
+        or "No request set" in detail
+    )
+
+
+def _http_error_message(e: HttpError) -> str:
+    """Google's human-readable error message from an HttpError body, or ""."""
+    try:
+        import json
+
+        payload = json.loads(e.content.decode("utf-8"))
+        return str(payload.get("error", {}).get("message", "") or "")
+    except (ValueError, AttributeError, TypeError, UnicodeDecodeError):
+        return ""
+
+
+def _same_email(saved, requested: str) -> bool:
+    """Email addresses compare case-insensitively; a non-string never matches."""
+    return isinstance(saved, str) and saved.casefold() == requested.casefold()
+
+
+def _documents_get_raw(service, doc_id: str, params: dict) -> dict:
+    """documents.get through the service's authorized transport.
+
+    Bypasses the discovery-generated method so preview query parameters
+    the public Discovery document doesn't list (``commentsViewMode``) can
+    be sent: the generated ``documents().get`` rejects them client-side
+    ("Got an unexpected keyword argument"). Uses the service's authorized
+    transport (``service._http``, the same object every discovery call
+    uses) and raises HttpError on non-2xx exactly like a discovery call.
+    """
+    from urllib.parse import quote, urlencode
+
+    from googleapiclient.http import HttpRequest
+    from googleapiclient.model import JsonModel
+
+    uri = f"{_DOCS_BASE_URL}{quote(doc_id, safe='')}?{urlencode(params)}"
+    request = HttpRequest(
+        service._http, JsonModel().response, uri, method="GET",
+    )
+    return request.execute()
+
+
+def get_document_threads(doc_id: str) -> dict:
+    """Fetch the document with its native comment and suggestion threads.
+
+    Reads with includeTabsContent=true, suggestionsViewMode=
+    SUGGESTIONS_INLINE and commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED,
+    so the response carries ``comments[]`` and ``suggestions[]`` (each a
+    thread with ``headPost`` and ``replies[]`` of Posts) plus
+    ``revisionId``. Both lists are always present in the result.
+
+    Raises GdocError (exit 1) naming preview enrollment when Google rejects
+    ``commentsViewMode``; other HttpErrors are translated as usual.
+    """
+    params = {
+        "includeTabsContent": "true",
+        "suggestionsViewMode": SUGGESTIONS_VIEW_MODE_INLINE,
+        "commentsViewMode": COMMENTS_VIEW_MODE_INCLUDED,
+    }
+    try:
+        service = get_docs_service()
+        doc = _documents_get_raw(service, doc_id, params)
+    except HttpError as e:
+        if _preview_parse_error(e):
+            raise GdocError(_PREVIEW_UNAVAILABLE_MSG)
+        _translate_http_error(e, doc_id)
+    # A registered project echoes the view mode. If the parameter was
+    # silently dropped instead of rejected, the response has no thread
+    # lists at all — that must not read as "no threads".
+    if doc.get("commentsViewMode") != COMMENTS_VIEW_MODE_INCLUDED:
+        raise GdocError(_PREVIEW_UNAVAILABLE_MSG)
+    doc = dict(doc)
+    doc.setdefault("comments", [])
+    doc.setdefault("suggestions", [])
+    return doc
+
+
+_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    ConnectionError, TimeoutError, OSError,  # socket/ssl errors are OSErrors
+)
+
+
+def _read_back_threads(doc_id: str, what: str) -> dict:
+    """Verification read after a write that Google reported as ALL_SAVED.
+
+    Any failure here (preview parameter rejected, transient API error,
+    expired auth) is mutation-ambiguous: the write may well have landed.
+    Re-raise with that framing — never the pre-write "No change was made"
+    message — and keep the original exit code.
+    """
+    import httplib2
+    from google.auth.exceptions import GoogleAuthError
+
+    try:
+        return get_document_threads(doc_id)
+    except GdocError as e:
+        raise GdocError(
+            f"{what} was reported saved (commentUpdateState=ALL_SAVED) but "
+            f"the verification read failed: {e} The write may have "
+            "succeeded; inspect the thread before retrying.",
+            exit_code=e.exit_code,
+        ) from e
+    except (*_TRANSPORT_ERRORS, httplib2.HttpLib2Error, GoogleAuthError) as e:
+        raise GdocError(
+            f"{what} was reported saved (commentUpdateState=ALL_SAVED) but "
+            f"the verification read failed ({type(e).__name__}: {e}). The "
+            "write may have succeeded; inspect the thread before retrying."
+        ) from e
+
+
+SUGGESTION_ID_PREFIX = "suggest."
+
+
+def is_suggestion_id(thread_id: str) -> bool:
+    """True when an ID names a SuggestionThread rather than a CommentThread.
+
+    Every suggestion ID Google returns starts with ``suggest.`` (the Docs
+    API how-to's examples, and every thread and inline mark observed
+    live); comment and post IDs are drawn from ``[A-Za-z0-9_-]`` and never
+    contain a dot. A misrouted ID still fails closed: each path looks the
+    thread up in its own list before writing and reports "not found".
+    """
+    return thread_id.startswith(SUGGESTION_ID_PREFIX)
+
+
+def thread_kind(suggestion: bool) -> str:
+    """Request/response field naming the thread ID for its namespace."""
+    return "suggestionId" if suggestion else "commentId"
+
+
+def find_thread(doc: dict, thread_id: str, suggestion: bool) -> dict | None:
+    """Locate a native thread by ID in the namespace the caller named.
+
+    A comment ID is never looked up among suggestions or vice versa.
+    """
+    key = thread_kind(suggestion)
+    threads = doc.get("suggestions" if suggestion else "comments") or []
+    for thread in threads:
+        if thread.get(key) == thread_id:
+            return thread
+    return None
+
+
+def thread_posts(thread: dict) -> list[dict]:
+    """Head post followed by replies, in thread order."""
+    posts = []
+    head = thread.get("headPost")
+    if head:
+        posts.append(head)
+    posts.extend(thread.get("replies") or [])
+    return posts
+
+
+def find_post(thread: dict, post_id: str) -> dict | None:
+    for post in thread_posts(thread):
+        if post.get("postId") == post_id:
+            return post
+    return None
+
+
+def head_post_assignee(thread: dict) -> str:
+    """``headPost.assigneeEmail`` of a comment thread, or "" when absent.
+
+    This is the precondition Google enforces for ``Post.assigneeEmail`` on
+    a reply (400 on an unassigned parent) and the field a fresh
+    ``insertComment.assigneeEmailAddress`` lands on. Assignment history is
+    event-sourced: a reassignment reply carries the new ``assigneeEmail``
+    while the head post keeps the original (observed live), so this
+    function makes no claim about the thread's *current* assignee.
+    """
+    value = (thread.get("headPost") or {}).get("assigneeEmail")
+    return value if isinstance(value, str) else ""
+
+
+def post_is_deleted(post: dict) -> bool:
+    """True for a tombstone: Google keeps deleted posts with ``deleted``."""
+    return bool(post.get("deleted"))
+
+
+def post_is_action(post: dict) -> bool:
+    """True when a post records a resolve/reopen action or an assignment.
+
+    Such posts cannot be deleted through deleteCommentReply (Google
+    returns 400), so callers refuse before writing.
+    """
+    action = post.get("commentAction") or post.get("suggestionAction") or ""
+    if action and not action.startswith("NO_"):
+        return True
+    return bool(post.get("assigneeEmail"))
+
+
+def _dispatch_native_write(doc_id: str, body: dict, what: str) -> dict:
+    """Send one native-thread batchUpdate and return the raw response.
+
+    Definite rejections (4xx) propagate as HttpError for the caller to
+    diagnose (preview, permission, concurrency). A 5xx or a transport
+    failure (timeout, dropped connection, TLS error) after the request
+    was dispatched is mutation-ambiguous — Google may have applied it
+    before the response was lost — so it is reported as such, never as a
+    plain failure a caller might retry or fall back from (which could
+    duplicate the comment or reply).
+    """
+    import httplib2
+
+    service = get_docs_service()
+    try:
+        return (
+            service.documents()
+            .batchUpdate(documentId=doc_id, body=body)
+            .execute()
+        )
+    except HttpError as e:
+        if int(e.resp.status) >= 500:
+            raise GdocError(
+                f"{what} outcome uncertain: the Docs API returned "
+                f"{e.resp.status} after the request was sent. The write may "
+                "have succeeded; inspect the document's comments before "
+                "retrying."
+            ) from e
+        raise
+    except (*_TRANSPORT_ERRORS, httplib2.HttpLib2Error) as e:
+        raise GdocError(
+            f"{what} outcome uncertain: the connection failed after the "
+            f"request was sent ({type(e).__name__}: {e}). The write may have "
+            "succeeded; inspect the document's comments before retrying."
+        ) from e
+
+
+def _run_thread_request(doc_id: str, request: dict) -> dict:
+    """Send one comment-thread batchUpdate request and return its reply.
+
+    Requires HTTP success and ``commentUpdateState == ALL_SAVED``: a
+    thread write that the server accepted but did not save is an error,
+    never a success. Post operations carry no document ranges, so no
+    ``writeControl`` is sent (a concurrent text edit must not make a
+    reply fail on a stale revision).
+    """
+    body = {"requests": [request]}
+    what = next(iter(request))
+    try:
+        result = _dispatch_native_write(doc_id, body, what)
+    except HttpError as e:
+        if _preview_parse_error(e):
+            raise GdocError(_PREVIEW_UNAVAILABLE_MSG)
+        status = int(e.resp.status)
+        if status in (400, 403):
+            # Google's author/assignee rules (not the post's author, head
+            # post of a suggestion, action or assignment reply, unassigned
+            # parent for a reassignment) surface as 400/403 with a
+            # descriptive message. Preserve it rather than collapsing it
+            # into a generic permission error.
+            raise GdocError(
+                f"Docs API rejected the request ({status}): "
+                f"{_http_error_message(e) or e.reason or e}"
+            )
+        if status == 404:
+            raise GdocError(
+                f"Not found: document {doc_id}, or the thread/post named in "
+                "the request"
+            )
+        _translate_http_error(e, doc_id)
+    state = result.get("commentUpdateState", "")
+    if state != "ALL_SAVED":
+        raise GdocError(
+            f"comment thread update not saved (commentUpdateState="
+            f"{state or 'missing'}); inspect the thread before retrying"
+        )
+    replies = result.get("replies") or [{}]
+    return replies[0] or {}
+
+
+def add_comment_reply(
+    doc_id: str,
+    thread_id: str,
+    content: str = "",
+    suggestion: bool = False,
+    assignee_email: str | None = None,
+) -> dict:
+    """Reply to a native comment or suggestion thread (addCommentReply).
+
+    Args:
+        thread_id: CommentThread ID (``suggestion=False``) or
+            SuggestionThread ID (``suggestion=True``).
+        content: Reply text (plain). May be empty only when the post
+            carries an assignment.
+        assignee_email: If given, the post reassigns the thread
+            (``post.assigneeEmail``). Google rejects this on a thread that
+            has no assignee yet; callers preflight that.
+
+    Returns:
+        The new reply Post as returned by Google (``postId`` is required
+        and verified against a read-back of the thread).
+    """
+    post: dict = {}
+    if content:
+        post["content"] = content
+    if assignee_email:
+        post["assigneeEmail"] = assignee_email
+    request = {
+        "addCommentReply": {thread_kind(suggestion): thread_id, "post": post}
+    }
+    reply = _run_thread_request(doc_id, request)
+    new_post = reply.get("addCommentReply", {}).get("post") or {}
+    post_id = new_post.get("postId", "")
+    if not post_id:
+        raise GdocError(
+            "addCommentReply returned no post; inspect the thread before "
+            "retrying"
+        )
+    # Read back: the reply must be durable on the thread we named.
+    doc = _read_back_threads(doc_id, f"reply #{post_id}")
+    thread = find_thread(doc, thread_id, suggestion)
+    saved = find_post(thread, post_id) if thread else None
+    if saved is None:
+        raise GdocError(
+            f"reply #{post_id} was reported saved but is not on "
+            f"{thread_kind(suggestion)} {thread_id}; inspect the thread"
+        )
+    if assignee_email and not _same_email(
+        saved.get("assigneeEmail"), assignee_email,
+    ):
+        raise GdocError(
+            f"reply #{post_id} was saved but the read-back does not show "
+            f"the thread reassigned to {assignee_email}; inspect the thread"
+        )
+    return saved
+
+
+def update_comment_post(
+    doc_id: str,
+    thread_id: str,
+    post_id: str,
+    content: str,
+    suggestion: bool = False,
+) -> None:
+    """Edit a post's text (updateCommentPost) and verify it took effect.
+
+    Only the post's author can edit it; a suggestion thread's generated
+    head post cannot be edited. Google enforces both with a 400, which is
+    surfaced with its message; callers preflight the head-post case.
+    """
+    request = {
+        "updateCommentPost": {
+            thread_kind(suggestion): thread_id,
+            "postId": post_id,
+            "content": content,
+        }
+    }
+    _run_thread_request(doc_id, request)
+    doc = _read_back_threads(doc_id, f"edit of post #{post_id}")
+    thread = find_thread(doc, thread_id, suggestion)
+    post = find_post(thread, post_id) if thread else None
+    # Google may normalize surrounding whitespace; compare stripped text.
+    if post is None or (post.get("content") or "").strip() != content.strip():
+        raise GdocError(
+            f"post #{post_id} edit was reported saved but the read-back "
+            "does not show the new text; inspect the thread"
+        )
+
+
+def delete_comment_reply(
+    doc_id: str,
+    thread_id: str,
+    post_id: str,
+    suggestion: bool = False,
+) -> None:
+    """Delete one reply post (deleteCommentReply) and verify it is gone.
+
+    Only the reply's author can delete it, and action or assignment
+    replies cannot be deleted; Google enforces this with a 400. The
+    read-back accepts either a missing post or a ``deleted`` tombstone.
+    """
+    request = {
+        "deleteCommentReply": {
+            thread_kind(suggestion): thread_id,
+            "postId": post_id,
+        }
+    }
+    _run_thread_request(doc_id, request)
+    doc = _read_back_threads(doc_id, f"deletion of reply #{post_id}")
+    thread = find_thread(doc, thread_id, suggestion)
+    post = find_post(thread, post_id) if thread is not None else None
+    # Gone, or kept as a tombstone (``deleted: true``), both mean deleted.
+    if post is not None and not post_is_deleted(post):
+        raise GdocError(
+            f"reply #{post_id} deletion was reported saved but the post "
+            "is still on the thread; inspect the thread"
+        )
 
 
 def set_page_mode(doc_id: str, pageless: bool) -> None:
@@ -2523,3 +2968,339 @@ def suggest_replacement(
                 "it as a pending suggestion; inspect the document."
             )
         return outcome
+
+
+# --- Suggestion threads (Workspace Developer Preview) ---------------------
+#
+# documents.get?commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED returns native
+# `suggestions[]` (and `comments[]`) threads. The parameter, the thread
+# schema, and the accept/reject/deleteSuggestion requests are preview-only:
+# the public Discovery document doesn't list them, so the discovery-built
+# client rejects the query parameter client-side ("unexpected keyword
+# argument"). The read therefore goes over the service's authorized HTTP
+# transport directly (get_document_threads, shared with the comment-thread
+# helpers above); the write requests travel in the opaque batchUpdate body
+# like insertComment does.
+
+# batchUpdate request union member per decision, and the permission rule
+# Google documents for each (accept: edit access; reject: edit access or
+# suggestion author; delete: suggestion author).
+SUGGESTION_DECISION_STATUS = {
+    "accept": "accepted",
+    "reject": "rejected",
+    "delete": "deleted",
+}
+SUGGESTION_DECISIONS: dict[str, tuple[str, str]] = {
+    "accept": ("acceptSuggestion", "edit access"),
+    "reject": ("rejectSuggestion", "edit access or suggestion authorship"),
+    "delete": ("deleteSuggestion", "suggestion authorship"),
+}
+
+
+def _thread_author(thread: dict) -> str:
+    author = thread.get("headPost", {}).get("author", {})
+    return (
+        author.get("emailAddress")
+        or author.get("displayName")
+        or author.get("user")
+        or "unknown"
+    )
+
+
+def summarize_suggestion_thread(thread: dict) -> dict:
+    """Flatten a SuggestionThread into the fields the CLI prints.
+
+    Only fields observed live are read (suggestionId, status, headPost
+    author/createTime/updateTime, summaryText); everything else stays in
+    the raw thread, which callers pass through in --json.
+    """
+    head = thread.get("headPost", {})
+    replies = thread.get("replies") or thread.get("posts") or []
+    return {
+        "id": thread.get("suggestionId", ""),
+        "status": (thread.get("status") or "UNKNOWN").lower(),
+        "author": _thread_author(thread),
+        "author_is_me": bool(head.get("author", {}).get("me")),
+        "created": head.get("createTime", ""),
+        "updated": head.get("updateTime", ""),
+        "summary": thread.get("summaryText", ""),
+        "replies": len(replies),
+    }
+
+
+_SUGGESTION_STYLE_KEYS = {
+    "suggestedTextStyleChanges": "style",
+    "suggestedParagraphStyleChanges": "paragraph-style",
+    "suggestedBulletChanges": "bullet",
+    "suggestedTableRowStyleChanges": "table-row-style",
+    "suggestedTableCellStyleChanges": "table-cell-style",
+    "suggestedInlineObjectPropertiesChanges": "object-properties",
+    "suggestedPositionedObjectPropertiesChanges": "object-properties",
+    "suggestedDocumentStyleChanges": "document-style",
+    "suggestedNamedStylesChanges": "named-styles",
+    "suggestedListPropertiesChanges": "list-properties",
+    "suggestedDateElementPropertiesChanges": "date-properties",
+}
+
+# Non-body segments of a tab whose indexes restart at 0 (Docs API
+# "segmentId" for range requests). Body content has no segment ID.
+_SEGMENT_MAPS = {"headers": "header", "footers": "footer", "footnotes": "footnote"}
+
+
+def collect_suggestion_locations(doc: dict) -> dict[str, list[dict]]:
+    """Derive where each suggestion touches the document.
+
+    SuggestionThread carries no range. In a SUGGESTIONS_INLINE read the
+    structure marks suggested content instead: ``suggestedInsertionIds`` /
+    ``suggestedDeletionIds`` (or the singular ``suggestedInsertionId`` on
+    inline/positioned objects and lists) on structural elements, and
+    ``suggested*Changes`` maps keyed by suggestion ID. This walks every
+    tab (including child tabs) and returns, per suggestion ID, a list of
+    ``{tab, tabId, segmentId, kind, startIndex, endIndex, text}`` entries
+    using the nearest enclosing element's UTF-16 indexes.
+
+    ``segmentId`` is "" for body content and the header/footer/footnote ID
+    otherwise — those segments' indexes restart at 0, so a range is only
+    meaningful together with it. Marks on objects that have no indexes at
+    all (document style, named styles, the inlineObjects/lists maps) are
+    reported with ``startIndex``/``endIndex`` of None rather than a fake
+    0-0 range — unless the same insertion/deletion also appears on a
+    ranged element, in which case only the ranged entry is kept. A
+    textRun's insertion carries the same ID in its
+    ``suggestedTextStyleChanges``; that mirror entry is dropped so plain
+    insertions are not reported twice.
+    """
+    locations: dict[str, list[dict]] = {}
+
+    def add(sid: str, ctx: dict, kind: str, node: dict, text: str) -> None:
+        has_range = "startIndex" in node or "endIndex" in node
+        locations.setdefault(sid, []).append({
+            "tab": ctx["tab"],
+            "tabId": ctx["tabId"],
+            "segmentId": ctx["segmentId"],
+            "kind": kind,
+            "startIndex": node.get("startIndex", 0) if has_range else None,
+            "endIndex": node.get("endIndex", 0) if has_range else None,
+            "text": text,
+        })
+
+    def marked_ids(node: dict, key: str) -> list[str]:
+        """Suggestion IDs under *key* in any of the three API shapes:
+        a list (suggestedInsertionIds/suggestedDeletionIds), a single
+        string (suggestedInsertionId on objects/lists), or a map keyed by
+        suggestion ID (Paragraph.suggestedPositionedObjectIds →
+        ObjectReferences)."""
+        value = node.get(key)
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, dict):
+            return list(value)
+        return list(value) if isinstance(value, list) else []
+
+    def walk(node, ctx: dict, enclosing: dict) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item, ctx, enclosing)
+            return
+        if not isinstance(node, dict):
+            return
+        # An element with its own indexes becomes the range for anything
+        # marked inside it that lacks indexes (e.g. paragraphStyle).
+        if "startIndex" in node or "endIndex" in node:
+            enclosing = node
+        text = node.get("content", "") if "textRun" in enclosing else ""
+        if isinstance(node.get("textRun"), dict):
+            text = node["textRun"].get("content", "")
+        inserted = (
+            marked_ids(node, "suggestedInsertionIds")
+            + marked_ids(node, "suggestedInsertionId")
+        )
+        for sid in inserted:
+            add(sid, ctx, "insert", enclosing, text)
+        for sid in marked_ids(node, "suggestedDeletionIds"):
+            add(sid, ctx, "delete", enclosing, text)
+        # Paragraph.suggestedPositionedObjectIds (map suggestion ID →
+        # ObjectReferences): objects suggested to be anchored to this
+        # paragraph; the paragraph's range is the location.
+        for sid in marked_ids(node, "suggestedPositionedObjectIds"):
+            add(sid, ctx, "positioned-object", enclosing, text)
+        for key, kind in _SUGGESTION_STYLE_KEYS.items():
+            changes = node.get(key)
+            if isinstance(changes, dict):
+                for sid in changes:
+                    if key == "suggestedTextStyleChanges" and sid in inserted:
+                        continue  # style of the inserted text itself
+                    add(sid, ctx, kind, enclosing, text)
+        for key, value in node.items():
+            if key in _SUGGESTION_STYLE_KEYS or key in (
+                "suggestedInsertionIds", "suggestedInsertionId",
+                "suggestedDeletionIds", "suggestedPositionedObjectIds",
+            ):
+                continue
+            if key in _SEGMENT_MAPS and isinstance(value, dict):
+                for segment_id, segment in value.items():
+                    walk(segment, {**ctx, "segmentId": segment_id}, {})
+                continue
+            if isinstance(value, (dict, list)):
+                walk(value, ctx, enclosing)
+
+    def walk_tabs(tabs: list[dict]) -> None:
+        for tab in tabs:
+            props = tab.get("tabProperties", {})
+            ctx = {
+                "tab": props.get("title", ""),
+                "tabId": props.get("tabId", ""),
+                "segmentId": "",
+            }
+            doc_tab = tab.get("documentTab")
+            if isinstance(doc_tab, dict):
+                walk(doc_tab, ctx, {})
+            walk_tabs(tab.get("childTabs", []))
+
+    walk_tabs(doc.get("tabs", []))
+    # An inserted/deleted object is marked twice: on its ranged element in
+    # the paragraph and, without a range, in the inlineObjects/
+    # positionedObjects map. Keep the ranged one; unrelated no-range
+    # entries (e.g. an object-properties change) are preserved.
+    for sid, entries in locations.items():
+        if any(e["startIndex"] is not None for e in entries):
+            locations[sid] = [
+                e for e in entries
+                if e["startIndex"] is not None
+                or e["kind"] not in ("insert", "delete")
+            ]
+    return locations
+
+
+def sorted_suggestion_threads(doc: dict) -> list[dict]:
+    """Threads ordered by head-post createTime (the API order is arbitrary)."""
+    return sorted(
+        doc.get("suggestions", []),
+        key=lambda t: t.get("headPost", {}).get("createTime", ""),
+    )
+
+
+def find_suggestion_thread(doc: dict, suggestion_id: str) -> dict | None:
+    """Return the SuggestionThread with *suggestion_id*, or None."""
+    for thread in doc.get("suggestions", []):
+        if thread.get("suggestionId") == suggestion_id:
+            return thread
+    return None
+
+
+def decide_suggestion(
+    doc_id: str,
+    suggestion_id: str,
+    decision: str,
+    revision_id: str,
+) -> dict:
+    """Send one acceptSuggestion/rejectSuggestion/deleteSuggestion request.
+
+    One ID per call keeps a failure atomic and auditable. The write is
+    pinned to *revision_id* when the read returned one (editors always
+    get it; live, a commenter did too). Accept refuses to run unpinned;
+    reject/delete — which a commenter-author may perform — go unpinned
+    only when no revisionId was available. The raw batchUpdate response
+    is returned so the caller can inspect ``suggestionResponses`` /
+    ``commentUpdateState``; a
+    ``commentUpdateState`` other than ALL_SAVED is raised here because it
+    means the thread update was not durably saved.
+
+    Raises:
+        GdocError: revision mismatch (exit 1, "re-run"), permission denied
+            with the rule for this decision, missing revision ID, or other
+            API errors.
+        PreviewUnavailableError: the project lacks preview access.
+    """
+    if decision not in SUGGESTION_DECISIONS:
+        raise ValueError(f"unknown suggestion decision: {decision}")
+    request_key, rule = SUGGESTION_DECISIONS[decision]
+    body: dict = {
+        "requests": [{request_key: {"suggestionId": suggestion_id}}],
+    }
+    if revision_id:
+        body["writeControl"] = {"requiredRevisionId": revision_id}
+    elif decision == "accept":
+        # Google documents revisionId as available to users with edit
+        # access, which accept requires anyway; without it we cannot pin
+        # the content change to what was just read, so refuse.
+        raise GdocError(
+            "cannot accept suggestion: the document read returned no "
+            "revisionId (accepting needs edit access)"
+        )
+    # reject/delete are also open to the suggestion's author, who may be a
+    # commenter and may not receive a revisionId. Neither request depends
+    # on document coordinates, so they are sent unpinned in that case —
+    # never with an empty requiredRevisionId.
+    service = get_docs_service()
+    try:
+        result = (
+            service.documents()
+            .batchUpdate(documentId=doc_id, body=body)
+            .execute()
+        )
+    except HttpError as e:
+        status = int(e.resp.status)
+        if _preview_parse_error(e):
+            raise PreviewUnavailableError(
+                f"{request_key} is not available: the OAuth client's Cloud "
+                "project is not enrolled in the Workspace Developer Preview"
+            )
+        if status >= 500:
+            # Like a dropped connection: Google may have applied the
+            # decision before the error response was produced.
+            raise GdocError(
+                f"the {decision} request for suggestion {suggestion_id} "
+                f"returned {status}. The outcome is unknown — the decision "
+                "may or may not have been applied. Inspect `gdoc "
+                "suggestions --all` before retrying."
+            ) from e
+        _raise_if_stale_revision(e)
+        if status == 403:
+            raise GdocError(
+                f"Permission denied: cannot {decision} suggestion "
+                f"{suggestion_id} ({decision} requires {rule})"
+            )
+        message = _http_error_message(e)
+        if status == 404 and "uggestion" in message:
+            # Observed live: "Suggestion with ID suggest.x does not exist."
+            raise GdocError(
+                f"suggestion not found: {suggestion_id}", exit_code=3,
+            )
+        if status == 400:
+            raise GdocError(
+                f"cannot {decision} suggestion {suggestion_id}: "
+                f"{message or e.reason}"
+            )
+        _translate_http_error(e, doc_id)
+    except Exception as e:  # noqa: BLE001 — .execute() is the network call
+        # A timeout/reset can arrive after Google applied the decision. Do
+        # not let an automated caller mistake this for a safe-to-retry
+        # pre-write failure, especially for destructive delete requests.
+        raise GdocError(
+            f"the {decision} request for suggestion {suggestion_id} failed "
+            f"in transit ({str(e) or type(e).__name__}). The outcome is "
+            "unknown — the decision may or may not have been applied. "
+            "Inspect `gdoc suggestions --all` before retrying."
+        )
+
+    # A batch that must save a suggestion thread requires ALL_SAVED, and
+    # the 1:1 suggestionResponses entry must name this ID (observed live:
+    # {"acceptedSuggestionIds": [...]} etc.). Anything else is a failure,
+    # never a silent success — the caller's read-back then reports the
+    # thread's real state.
+    state = result.get("commentUpdateState", "")
+    if state != "ALL_SAVED":
+        raise GdocError(
+            f"suggestion {decision} not saved "
+            f"(commentUpdateState={state or 'missing'}); re-read the "
+            "document before retrying"
+        )
+    responses = result.get("suggestionResponses") or [{}]
+    key = f"{SUGGESTION_DECISION_STATUS[decision]}SuggestionIds"
+    if suggestion_id not in (responses[0] or {}).get(key, []):
+        raise GdocError(
+            f"suggestion {decision} response did not report {suggestion_id} "
+            f"under {key}; re-run `gdoc suggestions --all` to see its state"
+        )
+    return result

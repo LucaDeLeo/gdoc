@@ -57,6 +57,7 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "revisions": True,
     "comments": True,
     "comment-info": True,
+    "suggestions": True,
     "diff": True,
     "images": True,
     "structure": True,
@@ -75,6 +76,8 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "resolve": False,
     "reopen": False,
     "delete-comment": False,
+    "suggestion": False,
+    "edit-comment": False,
     "new": False,
     "cp": False,
     "mkdir": False,
@@ -144,6 +147,11 @@ _EXTRA_REQUIRED: dict[str, tuple[str, ...]] = {
     "suggest": ("old_text", "new_text"),
 }
 
+# Commands whose `force` must be true over MCP (see _EXTRA_REQUIRED).
+_FORCE_REQUIRED = frozenset(
+    cmd for cmd, params in _EXTRA_REQUIRED.items() if "force" in params
+)
+
 # Cross-parameter requirements JSON Schema could only express with a
 # root-level oneOf/anyOf, which several MCP clients reject or ignore.
 # Stated in the tool description instead; the CLI repeats the same
@@ -159,6 +167,16 @@ _DESCRIPTION_NOTES: dict[str, str] = {
         "Needs `old_text` and `new_text`. The replacement lands as a "
         "suggested edit for review, not a direct change; inline markdown "
         "only."
+    ),
+    "comment": "`assign` requires `quote` (Docs API preview, no Drive fallback).",
+    "reply": (
+        "A suggestion ID (`suggest.xxx`) replies on a suggestion thread. "
+        "`reassign` applies to comment threads only and needs a thread "
+        "that already has an assignee (Docs API preview)."
+    ),
+    "suggestion": (
+        "Exactly one of `accept`, `reject`, `delete` must be true. "
+        "`delete` also requires `force: true`."
     ),
 }
 
@@ -249,6 +267,10 @@ def _schema_for(command: str, parser: argparse.ArgumentParser) -> dict[str, Any]
             prop["enum"] = [c for c in prop["enum"] if c not in removed]
         if action.dest in extra_required and prop.get("type") == "array":
             prop["minItems"] = 1
+        if action.dest == "force" and command in _FORCE_REQUIRED:
+            # `required` alone would admit `force: false`, which always
+            # fails at runtime; say in the schema that only true is valid.
+            prop["const"] = True
         properties[action.dest] = prop
 
         is_positional = not action.option_strings
@@ -458,7 +480,10 @@ def call_command(
 
     # Schema `required` cannot force a boolean to be true, so guard here:
     # with stdin detached, confirm_destructive() can never prompt.
-    if command == "delete-comment" and not arguments.get("force"):
+    if (
+        command in _FORCE_REQUIRED
+        or (command == "suggestion" and arguments.get("delete"))
+    ) and not arguments.get("force"):
         raise ValueError(
             "`force: true` is required: deletion cannot prompt for "
             "confirmation over MCP"
