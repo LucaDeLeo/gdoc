@@ -3241,7 +3241,15 @@ def cmd_delete_comment(args) -> int:
     from gdoc.api.docs import is_suggestion_id
 
     comment_id = args.comment_id
-    if getattr(args, "post_id", None):
+    post_id = getattr(args, "post_id", None)
+    if post_id is not None:
+        # An empty POST_ID (say, an unset shell variable) must not widen
+        # into deleting the whole comment.
+        if not post_id.strip():
+            raise GdocError(
+                "POST_ID is empty; omit it to delete the whole comment",
+                exit_code=3,
+            )
         return _cmd_delete_post(args, suggestion=is_suggestion_id(comment_id))
     if is_suggestion_id(comment_id):
         raise GdocError(

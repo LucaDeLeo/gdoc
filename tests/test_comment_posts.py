@@ -1512,6 +1512,33 @@ class TestDeleteCommentRouting:
         mock_pf.assert_not_called()
         mock_del.assert_not_called()
 
+    @pytest.mark.parametrize("post_id", ["", "  "])
+    @patch("gdoc.api.docs.delete_comment_reply")
+    @patch("gdoc.api.comments.delete_comment")
+    @patch("gdoc.notify.pre_flight")
+    def test_empty_post_id_is_usage_error_not_whole_delete(
+        self, mock_pf, mock_drive_del, mock_reply_del, post_id,
+    ):
+        args = _make_args("delete-comment", comment_id="c1", post_id=post_id,
+                          force=True)
+        with pytest.raises(GdocError, match="POST_ID is empty") as ei:
+            cmd_delete_comment(args)
+        assert ei.value.exit_code == 3
+        mock_pf.assert_not_called()
+        mock_drive_del.assert_not_called()
+        mock_reply_del.assert_not_called()
+
+    def test_mcp_empty_post_id_reaches_the_guard(self):
+        from gdoc.mcp import call_command
+
+        with patch("gdoc.api.comments.delete_comment") as mock_drive_del:
+            _out, err, code = call_command(
+                "delete-comment",
+                {"doc": "d", "comment_id": "c1", "post_id": "", "force": True},
+            )
+        assert code == 3 and "POST_ID is empty" in err
+        mock_drive_del.assert_not_called()
+
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value={"version": 7})
     @patch("gdoc.api.docs.delete_comment_reply")
