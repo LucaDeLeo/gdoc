@@ -26,24 +26,27 @@ All notable changes to `gdoc` are documented here. This project follows
 - Targeted edits that would move list items a level in or out point to
   `gdoc nest` and `gdoc unnest` when those would accept the items, and to
   `write` otherwise.
-- A pulled-file header (a `gdoc` or `gdoc-*` key in the file's opening
-  `---` block or metadata-shaped lines, whatever invisible characters,
-  comments or stray symbols surround them) must be read exactly as gdoc
-  frontmatter; otherwise `write`, `push` and MCP
-  `write` refuse it, and the sync hook reports the refusal, instead of writing
-  it without stale-file checks. Other front matter is unaffected.
+- A file that doesn't start with a header as `pull` writes it, but holds a
+  `gdoc` or `gdoc-*` key line anywhere (after any prefix of spaces, `>`, list
+  markers, backticks or `<!--`, in any case), is refused by `write`, `push` and
+  MCP `write`, and the sync hook reports the refusal, instead of writing a
+  quoted, wrapped or prefixed stale header without its stale-file checks.
+  Ordinary text with such a line is refused too; a fresh pull, or escaping the
+  colon (`gdoc\:`), writes it. Other front matter is unaffected.
 - A file stamped only with `gdoc-version` whose body matches the doc is
   `already in sync`, as in 0.21.1; the pull hook blocks edits to a stale one
   and re-pulls a matching one.
 - Deleting a list item is refused when anything but a blank line, top-level
   text or the next item at its level follows it, since that content may be the
-  item's and would join the item above. Inserted items that `write` would or
-  may join to a list above them are refused, including a numbered list starting
-  at a number other than 1 when the tab has a numbered list.
-- Input with a code fence on a list item's marker line (`` 1. ``` ``,
-  `` 1) ``` ``) is refused, and so is a fence in a list item or quote that is
-  not closed before the item or quote ends; the messages give the supported
-  spelling.
+  item's and would join the item above. In a table cell, unindented text after
+  the item doesn't block the deletion. Inserted items that `write` would or
+  may join to a list beside them are refused, including a numbered list
+  starting at a number other than 1 when the tab has a numbered list.
+- Code fences in list items and quotes are accepted only as `cat` prints them:
+  on their own lines, every line carrying the container's indent or `> `, and
+  closed inside the container. Any other line starting with a fence after
+  spaces, quote markers and list markers is refused with nothing sent; the
+  message gives the accepted spelling.
 - `edit --cell` refuses an image when the cell's number of lines changes or an
   encoded line break (`&#10;`) is present, instead of dropping it.
 - `cat --comments` ignores the `<!-- -->` separator between touching runs when

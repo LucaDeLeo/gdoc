@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import random
+import re
 import sys
 
 import pytest
@@ -79,7 +80,17 @@ def _quoted(text):
     return "".join("> " + line for line in text.splitlines(keepends=True))
 
 
-# R6-01: visible text or a wrapper before the header.
+def _listed_keys(marker):
+    """R6-02: every header key written as a list item."""
+    def wrap(text):
+        head, rest = text.split("\n---\n", 1)
+        opener, *keys = head.split("\n")
+        return "\n".join([opener] + [f"{marker} {key}" for key in keys]) + (
+            "\n---\n" + rest)
+    return wrap
+
+
+# R6-01: visible text or a wrapper before the header. R6-02: keys as list items.
 WRAPPERS = {
     "fence_markdown": lambda t: "```markdown\n" + t + "```\n",
     "fence_yaml": lambda t: "```yaml\n" + t,
@@ -92,6 +103,8 @@ WRAPPERS = {
     "listed": lambda t: "- " + t.replace("\n", "\n  "),
     "indented": lambda t: "".join("    " + line
                                   for line in t.splitlines(keepends=True)),
+    **{f"keys_{name}": _listed_keys(marker) for name, marker in
+       [("star", "*"), ("plus", "+"), ("numbered", "1."), ("paren", "1)")]},
 }
 ENTRIES = ["write", "mcp", "push", "hook"]
 
@@ -270,3 +283,122 @@ def test_any_other_fence_spelling_is_refused(either, markdown):
     assert code != 0 and "code fence gdoc doesn't read" in output + error
     assert "`   ```bash`" in output + error  # the accepted spelling
     assert not either.service.batches
+
+
+# R6-03, R6-05: an unclosed fence after a `1)` item or after a lazy line.
+BAD_FENCES = {
+    "paren_item": "1) Install\n\n   ```bash\n   npm install\n2) Run it\n\n## Next\n",
+    "lazy_line": ("1. Install with\nthe manager.\n\n   ```bash\n   pip install x\n"
+                  "2. Configure\n\n## Next\n"),
+    "tab_only_line": "- a\n\t\n  ```\n  x\n- b\n\n## Next\n",
+}
+
+
+@pytest.mark.parametrize("entry", ENTRIES)
+@pytest.mark.parametrize("name", BAD_FENCES)
+def test_r6_03_05_an_unreadable_fence_is_refused_everywhere(route, tmp_path,
+                                                             name, entry):
+    path = tmp_path / "d.md"
+    assert _run("pull", "synthetic", str(path))[0] == 0
+    path.write_text(path.read_text(encoding="utf-8") + BAD_FENCES[name],
+                    encoding="utf-8")
+    code, output = _attempt(entry, path)
+    # The hook skips the file and tells the agent why.
+    assert code != 0 or entry == "hook"
+    assert "code fence gdoc doesn't read" in output, output
+    assert not route.service.batches
+    assert _texts(route) == ["Alpha.", "Beta."]
+
+
+# R6-04: a doc about gdoc. `cat` prints its key-like lines plainly, so `cat`'s
+# output is refused; a fresh pull, or escaping the colon, writes it.
+ABOUT_GDOC = [
+    "# gdoc: a CLI for Google Docs\n\nIt reads docs.\n",
+    "gdoc: is a CLI for Google Docs.\n",
+    "- gdoc: Google Docs CLI\n- gws: Workspace CLI\n",
+    "1. gdoc: first\n",
+    "Date: 2026-10-01\ngdoc-sync: on for this folder\n",
+    "## gdoc-revision: what it means\n",
+    "```\ngdoc: d\n```\n",
+]
+
+
+@pytest.mark.parametrize("markdown", ABOUT_GDOC)
+def test_r6_04_a_doc_about_gdoc_has_working_routes(route, tmp_path, markdown):
+    path = tmp_path / "d.md"
+
+    def write_pulled(body):
+        assert _run("pull", "synthetic", str(path))[0] == 0
+        header = path.read_text(encoding="utf-8").split("\n---\n", 1)[0]
+        path.write_text(header + "\n---\n" + body, encoding="utf-8")
+        assert _run("write", "synthetic", str(path))[0] == 0
+
+    if markdown.startswith("```"):  # in code a backslash is text
+        write_pulled(markdown)
+    else:
+        route.ok("cat")
+        route.ok("write", text=re.sub(r"(gdoc[\w-]*):", r"\1\\:", markdown))
+    shown = _shown(route)
+    assert shown == markdown
+    code, output, error = route.call("write", text=shown + "More.\n")
+    assert code != 0 and "may be a pulled file" in output + error
+    write_pulled(markdown + "More.\n")
+    assert _shown(route) == markdown + "More.\n"
+
+
+# R6-07: deleting an item in a table cell. `cat` prints a cell's paragraphs
+# on one line, so only an indent can make the text after it the item's.
+def _cell_doc(after_indent=0, deeper=False):
+    doc = NativeDoc(("p", "intro"),
+                    ("t", [["pp\nqq\n" + ("sub\n" if deeper else "") + "after",
+                            "z"]]),
+                    ("p", "end"))
+    for start, end in doc.paragraphs():
+        text = "".join(unit.ch for unit in doc.units[start:end])
+        style = doc.units[end].ps
+        if text in ("pp", "qq", "sub"):
+            nest = int(text == "sub")
+            doc.units[end].bullet = {"preset": "BULLET_DISC_CIRCLE_SQUARE",
+                                     "list": 1, "nest": nest}
+            style.update({"indentStart": {"magnitude": 36 * (nest + 1), "unit": "PT"},
+                          "indentFirstLine": {"magnitude": 36 * nest + 18,
+                                              "unit": "PT"}})
+        elif text == "after" and after_indent:
+            style.update({"indentStart": {"magnitude": after_indent, "unit": "PT"}})
+    doc.lists = 1
+    return doc
+
+
+def test_r6_07_deleting_an_item_before_cell_text_is_accepted(either):
+    either.load(_cell_doc())
+    either.ok("cat")
+    either.ok("edit", old_text="qq\n", new_text="")
+    assert [(text, bool(bullet)) for text, _, bullet, *_ in
+            styles(either.service.doc) if text in ("pp", "qq", "after")] == [
+        ("pp", True), ("after", False)]
+
+
+@pytest.mark.parametrize("shape", [{"after_indent": 36}, {"deeper": True}])
+def test_r6_07_deleting_an_item_before_its_cell_content_is_refused(either, shape):
+    either.load(_cell_doc(**shape))
+    either.ok("cat")
+    code, output, error = either.call("edit", old_text="qq\n", new_text="")
+    assert code != 0 and "Use write for this change" in output + error
+    assert not either.service.batches
+
+
+# R6-06: a numbered item starting at a number other than 1, inserted at the
+# start, may be continued by the tab's numbered list in a write.
+@pytest.mark.parametrize("base", ["para\n\n1. a\n", "1. a\n   - b\n", "1. a\n2. b\n"])
+@pytest.mark.parametrize("inserted", ["0. c\n", "5. c\n"])
+def test_r6_06_a_numbered_start_insert_at_the_start_is_refused(either, base,
+                                                               inserted):
+    either.load(NativeDoc())
+    either.ok("cat")
+    either.ok("write", text=base)
+    sent = len(either.service.batches)
+    code, output, error = either.call("insert", text=inserted, tab="t.0",
+                                      position="start")
+    assert code != 0 and "may join a list below them" in output + error
+    assert len(either.service.batches) == sent
+    either.ok("write", text=inserted + _shown(either))  # the route

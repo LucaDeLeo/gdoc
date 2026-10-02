@@ -606,12 +606,17 @@ structure may read differently:
   indents or separate lists), so it is unsupported: deeper items are written at
   the ninth level and `write`/`insert` warn with the affected lines. This is a
   gdoc limit, not one of the API gaps below.
-- Open a fenced code block inside a list item on its own line: the item's
-  text, a blank line, then the fence indented to the item's content, and close
-  it at that indentation before the item ends (in a quote, before the quote
-  ends). Input with a fence on a marker line (`` 1. ``` ``, `` 1) ``` ``,
-  `` + ~~~ ``, `` - > ``` ``), or one its item or quote never closes, is refused
-  with nothing sent.
+- Write fenced code as `cat` prints it. At the top level, the fence starts at
+  column 0. Inside a list item or quote, the fence goes on its own line after
+  the item's text and a blank line, and every line from the opening fence to
+  the closing one carries the container's prefix: the item's content indent
+  (`1. Install` / blank / `` ```bash `` / `make` / `` ``` ``, each code line
+  indented three spaces) or the quote's `> `. The closing fence repeats the
+  opening one. Any other line that starts with three or more backticks or
+  tildes after spaces, quote markers and list markers (an indented top-level
+  fence, `` 1. ``` ``, `` >``` ``, a fence after a line the item doesn't
+  indent) is refused with nothing sent, and the message shows the accepted
+  spelling.
 - When emphasis spans close together, mark the inner one with underscores:
   `**bold _italic_**`, not `**bold *italic***`. Spans that open together read
   as CommonMark does (`***bold** then italic*`).
@@ -680,8 +685,10 @@ and tables inside list items and quotes, are supported Markdown and never need
 consent.
 
 A changed tab rewrite deletes and reinserts the tab's body, so comments anchored in
-it can lose their anchors even where the text is unchanged; targeted edits touch
-only the replaced wording.
+it can lose their anchors even where the text is unchanged. A targeted edit
+deletes and reinserts only its matched text, but all of it: a comment on
+unchanged words inside the match can lose its anchor too, so match no more
+context than you need to make it unique.
 
 Markdown reads show a tab's text without its pending suggestions: suggested
 insertions are left out and wording suggested for deletion stays. `cat` notes on
@@ -725,16 +732,21 @@ pull or `--force`, as above. The pull hook blocks an edit to a stale file (exit 
 with the same recovery steps), re-pulls one that matches the doc, and leaves a
 current file with local edits in place. `pull` now records `gdoc-revision` and the
 tab fingerprint rather than `gdoc-version`, and a file with `gdoc-revision` ignores
-any `gdoc-version`. A file is read as pulled when its opening lines (`---`
-blocks, `key: value` lines, comments and lines without letters or digits,
-ignoring invisible characters and HTML comments) hold a `gdoc` or `gdoc-*` key,
-in any case. Its header must then be read exactly: the file's first line is
-exactly `---`, the block closes with a `---` line, every line in it is
-`key: value`, and it names the document with `gdoc: ID`. Otherwise `write` (CLI
-and MCP) and `push` refuse it with exit 3 and nothing sent, and the sync hook
-reports the refusal (exit 2); the message names the cause. Fix the header, or
-remove it to copy the text. Other front matter, a body that opens with a rule,
-and `cat`'s empty `---`/`---` block before such a body are unaffected.
+any `gdoc-version`. A file that starts (after at most one byte-order mark)
+with a header as `pull` writes it is a pulled file: `---`, `key: value` lines
+with lower-case `gdoc` keys including `gdoc: ID`, and `---`. Any other file
+that holds a `gdoc` or `gdoc-*` key line anywhere is refused: `write` (CLI and
+MCP) and `push` exit 3 with nothing sent, and the sync hook reports the refusal
+(exit 2). A key line is a `gdoc:` or `gdoc-NAME:` key after anything but
+letters and digits, or a numbered-list marker (`gdoc: ID`, `> - gdoc-revision:
+R`, `1. gdoc: ID`, `<!-- gdoc: ID`), read in any case and ignoring invisible
+characters and accents. This catches a pulled header that was quoted, wrapped
+in a code block or placed after other text, whose stale-file checks couldn't
+run. It also refuses ordinary text with such a line, including `cat` output of
+a doc that has one. To write it, pull the tab and edit the pulled file, or
+escape the colon (`gdoc\: a CLI` reads back as `gdoc: a CLI`). Other front
+matter, a body that opens with a rule, and `cat`'s empty `---`/`---` block
+before such a body are unaffected.
 
 ## Spreadsheets
 

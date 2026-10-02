@@ -3748,6 +3748,7 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
     home = containers(min(start for _, start in items))
     # In a table cell, what follows is the rest of the cell.
     at = match["startIndex"]
+    in_cell = False
     while table := next((e["table"] for e in content if "table" in e
                          and e.get("startIndex", 0) <= at < e.get("endIndex", 0)),
                         None):
@@ -3756,6 +3757,7 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
                         for cell in row.get("tableCells", [])
                         if cell.get("startIndex", 0) <= at
                         < cell.get("endIndex", 0)), [])
+        in_cell = True
     blank = False
     for element in content:
         start = element.get("startIndex", 0)
@@ -3777,8 +3779,13 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
             return not (_shown_level(paragraph, lists) <= level
                         and containers(start) == home)
         # Top-level text after a blank line ends the list; without one it
-        # could read as the item's continuation. Anything else may be the
-        # items'.
+        # could read as the item's continuation. `cat` prints a cell's
+        # paragraphs as one line, so there only an indent could make text
+        # read as the item's. Anything else may be the items'.
+        if in_cell and not _is_empty_paragraph(element):
+            return bool(covering(start)) or any(
+                (style.get(key) or {}).get("magnitude", 0)
+                for key in ("indentStart", "indentFirstLine"))
         return bool(covering(start)) or _is_empty_paragraph(element) or not blank
     return False
 
@@ -3881,16 +3888,17 @@ def _refuse_list_insert_beside_items(parsed, markdown, tab, tab_id,
                                  != "NORMAL_TEXT" or "borderBottom" in s.style)
                             for s in parsed.styles))
     # A numbered item that starts a list at a number other than 1 may
-    # continue a numbered list of the tab in a write, even across other
-    # blocks; which one is not worked out.
+    # continue, or be continued by, a numbered list of the tab in a write,
+    # even across other blocks; which one is not worked out.
     starts = parsed.non_default_list_starts
-    numbered_join = position == "end" and bool(starts) and any(
+    numbered_join = bool(starts) and any(
         _list_is_ordered(tab.get("lists", {}), b.get("listId", ""),
                          b.get("nestingLevel", 0))
         for e in blocks if "paragraph" in e
         for b in [e["paragraph"].get("bullet")] if b)
     if (touching and orphan_above) or numbered_join:
-        raise GdocError("these list items may join the list above them; "
+        where = "above" if position == "end" else "below"
+        raise GdocError(f"these list items may join a list {where} them; "
                         + _LIST_RESTRUCTURE, exit_code=3)
     bullet = (beside or {}).get("paragraph", {}).get("bullet")
     if not touching or not bullet:
