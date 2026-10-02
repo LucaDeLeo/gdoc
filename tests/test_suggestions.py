@@ -1475,6 +1475,12 @@ class TestCmdDecisions:
 
 
 class TestParserAndMcp:
+    @pytest.fixture(autouse=True)
+    def _no_allow_env(self, monkeypatch):
+        # build_tools honours GDOC_ALLOW_COMMANDS; a developer shell must
+        # not turn these into KeyErrors.
+        monkeypatch.delenv("GDOC_ALLOW_COMMANDS", raising=False)
+
     @pytest.mark.parametrize(
         "argv,expected",
         [
