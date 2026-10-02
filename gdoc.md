@@ -39,7 +39,7 @@ gdoc resolve DOC_ID COMMENT_ID              # Resolve a comment
 gdoc reopen DOC_ID COMMENT_ID               # Reopen a resolved comment
 
 gdoc info DOC_ID                             # Title, owner, last modified, word count
-gdoc share DOC_ID EMAIL [--role reader|writer|commenter]
+gdoc share DOC_ID EMAIL [--role reader|writer|commenter] [--no-notify]  # --no-notify skips Google's email
 gdoc new "Document Title" [--folder FOLDER_ID]  # Create blank doc
 gdoc cp DOC_ID "Copy Title"                  # Duplicate a doc
 

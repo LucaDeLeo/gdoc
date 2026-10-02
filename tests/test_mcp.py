@@ -153,6 +153,17 @@ def test_env_allowlist_filters_tools(monkeypatch):
     assert set(tools) == {"gdoc_cat", "gdoc_ls"}
 
 
+def test_share_exposes_no_notify_and_maps_to_flag():
+    tool = mcp.build_tools(allow={"share"})["gdoc_share"]
+    assert tool["inputSchema"]["properties"]["no_notify"]["type"] == "boolean"
+    argv = mcp._argv_for(
+        "share",
+        {"doc": "DOC1", "email": "a@b.com", "no_notify": True},
+        _subparser("share"),
+    )
+    assert "--no-notify" in argv
+
+
 def test_write_command_description_flags_mutation():
     tool = mcp.build_tools(allow={"share"})["gdoc_share"]
     assert "Writes to Google Docs/Drive." in tool["description"]

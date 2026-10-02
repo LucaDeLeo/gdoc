@@ -4,6 +4,15 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`share DOC EMAIL --no-notify` skips Google's notification email.**
+  Email shares still notify the recipient by default; the flag opts out
+  for one share. The MCP share tool takes the matching option. Combining
+  `--no-notify` with `--domain` or `--anyone` (link shares, which never
+  send email) is rejected with exit 3 before any API call.
+
 ## [0.22.0] — 2026-09-28
 
 ### Added
