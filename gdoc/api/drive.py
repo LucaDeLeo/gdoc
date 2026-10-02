@@ -568,12 +568,14 @@ def create_permission(
     domain: str | None = None,
     anyone: bool = False,
     discoverable: bool = False,
+    notify: bool = True,
 ) -> dict:
     """Share a document with a user, a whole domain, or anyone with the link.
 
     Exactly one of email / domain / anyone selects the grantee type; the
-    caller validates that. User shares send a notification email; domain
-    and anyone shares are link-based, with `discoverable` controlling
+    caller validates that. User shares send Google's notification email
+    unless `notify=False`. Domain and anyone shares are link-based (never
+    emailed), with `discoverable` controlling
     whether the file also appears in search results
     (`allowFileDiscovery` — never inferred, off by default).
 
@@ -584,6 +586,7 @@ def create_permission(
         domain: Workspace domain to share with (domain grant).
         anyone: Share with anyone who has the link.
         discoverable: Let the file surface in search (domain/anyone only).
+        notify: Send the notification email (user grants only).
 
     Returns:
         Permission resource dict from the API.
@@ -591,7 +594,7 @@ def create_permission(
     kwargs: dict = {}
     if email:
         body: dict = {"type": "user", "role": role, "emailAddress": email}
-        kwargs["sendNotificationEmail"] = True
+        kwargs["sendNotificationEmail"] = notify
     elif domain:
         body = {
             "type": "domain",

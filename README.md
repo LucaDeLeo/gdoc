@@ -272,7 +272,7 @@ the usual `ERR:` stderr format even with `--json`.
 | Command | Description |
 |---------|-------------|
 | `auth` | Authenticate with Google (`--no-browser` for headless) |
-| `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`) |
+| `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`; `--no-notify` skips Google's notification email) |
 | `share DOC --domain D` / `--anyone` | Link-based sharing with a Workspace domain or anyone with the link (`--discoverable` to also surface in search) |
 | `mkdir TITLE` | Create a Drive folder (`--parent FOLDER`) |
 | `mv DOC FOLDER` | Move a file into a folder (alias: `move`) |

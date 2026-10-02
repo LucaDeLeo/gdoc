@@ -13,6 +13,11 @@ All notable changes to `gdoc` are documented here. This project follows
 - `write` and `push` refuse identified rich-content loss before mutation.
   `--allow-lossy` permits that loss independently of revision conflicts and
   explicit sibling-tab collapse. Supported Markdown needs no loss override.
+- **`share DOC EMAIL --no-notify` skips Google's notification email.**
+  Email shares still notify the recipient by default; the flag opts out
+  for one share. The MCP share tool takes the matching option. Combining
+  `--no-notify` with `--domain` or `--anyone` (link shares, which never
+  send email) is rejected with exit 3 before any API call.
 
 ### Changed
 
