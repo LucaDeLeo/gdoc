@@ -4925,7 +4925,7 @@ def replace_formatted(
                     "so they can't be kept. Nothing was sent. Keep one line "
                     "per paragraph to reword the cell and keep its bullets, "
                     "delete an item with a targeted edit of its text and line "
-                    "break (`gdoc edit DOC 'Item\\n' ''`), or empty the cell "
+                    "break (`gdoc edit DOC $'Item\\n' ''`), or empty the cell "
                     "first (`--cell ... ''`, which removes its list) and then "
                     "write the new lines as plain paragraphs.",
                     exit_code=3,
