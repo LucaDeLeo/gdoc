@@ -1040,7 +1040,8 @@ class TestCmdReplyNative:
         # --quiet skips only the awareness pre-flight; the precondition read
         # is a correctness gate and always runs.
         mock_read.return_value = _doc(comments=[_comment_thread("c1")])
-        args = _make_args("reply", comment_id="c1", text="t", reassign=OTHER, quiet=True)
+        args = _make_args("reply", comment_id="c1", text="t", reassign=OTHER,
+                          quiet=True)
         with pytest.raises(GdocError):
             cmd_reply(args)
         mock_pf.assert_called_once_with("abc123", quiet=True)
@@ -1109,7 +1110,8 @@ class TestCmdReplyNative:
     ):
         # Whitespace-only --reassign: neither a Drive reply nor a native one.
         for value in ("", "   "):
-            args = _make_args("reply", comment_id="c1", text="t", reassign=value, quiet=False)
+            args = _make_args("reply", comment_id="c1", text="t", reassign=value,
+                              quiet=False)
             with pytest.raises(GdocError, match="requires an email") as ei:
                 cmd_reply(args)
             assert ei.value.exit_code == 3

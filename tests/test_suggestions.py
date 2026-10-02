@@ -1321,7 +1321,8 @@ class TestCmdDecisions:
                 match="Refusing to delete suggestion #suggest.a without --force",
             ) as e:
                 cmd_suggestion(
-                    _args("suggestion", delete=True, suggestion_id="suggest.a", force=False)
+                    _args("suggestion", delete=True, suggestion_id="suggest.a",
+                          force=False)
                 )
         assert e.value.exit_code == 3
         mock_decide.assert_not_called()
@@ -1431,7 +1432,8 @@ class TestCmdDecisions:
                 GdocError, match="reads back as rejected \\(expected gone\\)"
             ):
                 cmd_suggestion(
-                    _args("suggestion", delete=True, suggestion_id="suggest.a", force=True)
+                    _args("suggestion", delete=True, suggestion_id="suggest.a",
+                          force=True)
                 )
 
     def test_api_permission_error_propagates_without_state_update(self):

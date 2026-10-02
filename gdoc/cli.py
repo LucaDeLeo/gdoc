@@ -3024,7 +3024,7 @@ def _validate_native_reply_args(args, suggestion: bool) -> None:
 def _native_reply(
     args, doc_id: str, change_info, thread_id: str, suggestion: bool,
 ) -> int:
-    """Reply on a suggestion thread or with `--reassign`: Docs-native addCommentReply."""
+    """Docs-native addCommentReply: a suggestion-thread reply or `--reassign`."""
     quiet = getattr(args, "quiet", False)
     reassign = (getattr(args, "reassign", "") or "").strip()
     text = args.text or ""
@@ -3266,7 +3266,7 @@ def cmd_delete_comment(args) -> int:
 
 
 def cmd_edit_comment(args) -> int:
-    """Handler for `gdoc edit-comment`: edit one post on a comment or suggestion thread."""
+    """Handler for `gdoc edit-comment`: edit one post on any native thread."""
     from gdoc.api.docs import is_suggestion_id
 
     doc_id = _resolve_doc_id(args.doc)
@@ -5528,7 +5528,10 @@ def build_parser() -> GdocArgumentParser:
     comment_p.set_defaults(func=cmd_comment)
 
     # reply
-    reply_p = sub.add_parser("reply", parents=[output_parent], help="Reply to a comment or suggestion thread")
+    reply_p = sub.add_parser(
+        "reply", parents=[output_parent],
+        help="Reply to a comment or suggestion thread",
+    )
     reply_p.add_argument("doc", help="Document ID or URL")
     reply_p.add_argument(
         "comment_id",
