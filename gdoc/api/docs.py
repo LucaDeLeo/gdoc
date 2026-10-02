@@ -4909,8 +4909,27 @@ def replace_formatted(
         whole = _covers_whole_paragraphs(body.get("content", []), match) \
             if body is not None else False
         if replace_paragraphs:
+            lines = len(new_markdown.split("\n"))
             contextual = body is not None and not parsed.tables and (
-                len(native) == len(new_markdown.split("\n")))
+                len(native) == lines)
+            # A cell's bullets have no Markdown spelling: rewording keeps
+            # them paragraph by paragraph, and a change in the cell's
+            # paragraph count would remove them.
+            if (not contextual and new_markdown
+                    and any(p.get("bullet") for p, _, _ in native)
+                    and not any(s.type == "bullets" for s in parsed.styles)):
+                raise GdocError(
+                    f"the replacement has {lines} line{'s' * (lines != 1)} "
+                    f"but the cell has {len(native)} paragraphs, some of them "
+                    "list items. A cell's bullets have no Markdown spelling, "
+                    "so they can't be kept. Nothing was sent. Keep one line "
+                    "per paragraph to reword the cell and keep its bullets, "
+                    "delete an item with a targeted edit of its text and line "
+                    "break (`gdoc edit DOC 'Item\\n' ''`), or empty the cell "
+                    "first (`--cell ... ''`, which removes its list) and then "
+                    "write the new lines as plain paragraphs.",
+                    exit_code=3,
+                )
         else:
             if body is not None:
                 _refuse_list_restructure(parsed, new_markdown, native, whole,
@@ -4997,14 +5016,9 @@ def replace_formatted(
                 continue
             explicit = any(s.type in ("paragraph_style", "bullets")
                            for s in context[0].styles)
-            # A structural collapse keeps only the last paragraph's mark, so
-            # its bullet is the one the inserted prose would inherit.
-            if replace_paragraphs and not explicit and native and (
-                not new_markdown or (found and found[0].get("bullet"))
-                or (not contextual and native[-1][0].get("bullet"))
-            ):
-                # Plain whole-cell prose is the explicit list-removal route.
-                # Keep non-list paragraph properties and ordinary edits intact.
+            if replace_paragraphs and not explicit and native and not new_markdown:
+                # Emptying a cell removes its list. Keep non-list paragraph
+                # properties and ordinary edits intact.
                 from gdoc.mdparse import StyleRange
                 context[0].styles.append(StyleRange(
                     0, len(context[0].plain_text),

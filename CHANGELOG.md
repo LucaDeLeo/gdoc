@@ -53,6 +53,10 @@ All notable changes to `gdoc` are documented here. This project follows
   message gives the accepted spelling.
 - `edit --cell` refuses an image when the cell's number of lines changes or an
   encoded line break (`&#10;`) is present, instead of dropping it.
+- `edit --cell` with one line per paragraph keeps each paragraph's native
+  bullet. A replacement that changes the paragraph count of a cell holding
+  list items is refused with nothing sent, since the bullets would be removed;
+  emptying the cell removes its list.
 - `cat --comments` ignores the `<!-- -->` separator between touching runs when
   matching quotes, and whole-document output reports truncation.
 

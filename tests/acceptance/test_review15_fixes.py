@@ -8,9 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from tests.acceptance.test_review14_fixes import _attempt, _run, _shown, _stale, _texts
+from tests.acceptance.test_review14_fixes import (
+    _attempt,
+    _cell_doc,
+    _run,
+    _shown,
+    _stale,
+    _texts,
+)
 from tests.acceptance.test_round5_workflows import NativeRoute
-from tests.native_model import NativeDoc
+from tests.native_model import NativeDoc, styles
 
 README = Path(__file__).resolve().parents[2] / "README.md"
 
@@ -131,3 +138,48 @@ def test_r7_02_a_doc_about_gdoc_writes_with_force(either, markdown):
     either.ok("cat")
     either.ok("write", text=markdown, force=True)
     assert _shown(either) == markdown
+
+
+def _cell_edit(route, text):
+    """`edit --cell 0,0 TEXT`: the CLI takes the text as its one positional
+    argument, MCP as `new_text`."""
+    key = "old_text" if route.interface == "cli" else "new_text"
+    return route.call("edit", cell="0,0", tab="t.0", **{key: text})
+
+
+def _cell_bullets(route):
+    return [(text, bool(bullet)) for text, _, bullet in styles(route.service.doc)
+            if text.lower() in ("pp", "qq", "after")]
+
+
+# R7-03: a cell holding the native items `pp` and `qq`, then `after`.
+@pytest.mark.parametrize("text", ["pp<br>QQ<br>after", "pp<br>qq<br>AFTER"])
+def test_r7_03_cell_wording_keeps_the_cells_bullets(either, text):
+    either.load(_cell_doc())
+    either.ok("cat")
+    code, output, error = _cell_edit(either, text)
+    assert code == 0, output + error
+    words = text.split("<br>")
+    assert _cell_bullets(either) == [
+        (words[0], True), (words[1], True), (words[2], False)]
+
+
+@pytest.mark.parametrize("text", ["pp<br>QQ", "pp<br>qq<br>rr<br>after", "pp qq"])
+def test_r7_03_changing_a_list_cells_paragraph_count_is_refused(either, text):
+    either.load(_cell_doc())
+    either.ok("cat")
+    code, output, error = _cell_edit(either, text)
+    assert code != 0 and "bullets have no Markdown spelling" in output + error
+    assert not either.service.batches
+
+
+def test_r7_03_the_refusals_routes_work(either):
+    either.load(_cell_doc())
+    either.ok("cat")
+    either.ok("edit", old_text="qq\n", new_text="")  # Delete an item.
+    assert _cell_bullets(either) == [("pp", True), ("after", False)]
+    either.ok("cat")
+    assert _cell_edit(either, "")[0] == 0  # Empty the cell: its list goes.
+    either.ok("cat")
+    assert _cell_edit(either, "pp<br>QQ")[0] == 0
+    assert _cell_bullets(either) == [("pp", False), ("QQ", False)]

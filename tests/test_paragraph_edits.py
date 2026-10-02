@@ -150,12 +150,13 @@ def _bullet_resets(requests):
 
 
 @pytest.mark.parametrize("new", ["Plain", "## Heading", "", "- item"])
-def test_cell_replacement_removes_inherited_list_unless_requested(mocker, new):
-    """Whole-cell prose removes lists; list Markdown recreates membership."""
+def test_cell_replacement_keeps_its_list_unless_restyled_or_emptied(mocker, new):
+    """Cell wording keeps a list item's bullet; emptying the cell removes it,
+    and heading or list Markdown restyles it."""
     body = _body(("Old", "NORMAL_TEXT", True))
     body = {"content": [{"table": {"tableRows": [{"tableCells": [body]}]}}]}
     requests = _requests(mocker, body, "Old", new, replace_paragraphs=True)
-    assert len(_bullet_resets(requests)) == 1
+    assert len(_bullet_resets(requests)) == (new != "Plain")
     if new == "- item":
         assert any("createParagraphBullets" in req for req in requests)
     else:
@@ -285,16 +286,16 @@ def test_empty_multiline_replacement_retains_only_mandatory_mark(mocker):
     }}}]
 
 
-def test_explicit_multiline_cell_can_remove_paragraphs(mocker):
-    """Whole-cell prose collapses list items and removes list membership."""
+def test_collapsing_a_cells_list_items_is_refused(mocker):
+    """R7-03: the items' bullets would be removed, so nothing is sent."""
     body = _body(("Alpha", "NORMAL_TEXT", True), ("Beta", "NORMAL_TEXT", True))
     body = {"content": [{"table": {"tableRows": [{"tableCells": [body]}]}}]}
-    requests = _requests(mocker, body, "Alpha\nBeta", "Prose", replace_paragraphs=True)
-    assert requests[0]["deleteContentRange"]["range"] == {
-        "startIndex": 1, "endIndex": 11, "tabId": "synthetic-tab",
-    }
-    assert len(requests) == 4
-    assert requests[1]["insertText"]["text"] == "Prose"
+    service = mocker.patch("gdoc.api.docs.get_docs_service")
+    matches = find_text_in_document(None, "Alpha\nBeta", body=body)
+    with pytest.raises(GdocError, match="bullets have no Markdown spelling"):
+        replace_formatted("doc", matches, "Prose", "rev", body=body,
+                          replace_paragraphs=True)
+    service.assert_not_called()
 
 
 def test_cell_blockquote_keeps_explicit_indent(mocker):
@@ -645,24 +646,17 @@ def test_insert_leading_rule_at_end_keeps_separator(mocker):
                                "tabId": "synthetic-tab"}
 
 
-def test_cell_collapse_resets_bullet_of_retained_last_paragraph(mocker):
-    """Collapsing a mixed cell keeps only the last paragraph's mark, so its
-    bullet must be removed even though the first paragraph had none."""
+def test_cell_collapse_onto_a_list_item_is_refused(mocker):
+    """Collapsing a mixed cell keeps only the last paragraph's mark, a list
+    item's, whose bullet can't stay on prose that replaced other paragraphs;
+    nothing is sent (R7-03)."""
     body = _body(("Plain intro", "NORMAL_TEXT", False),
                  ("Listed", "NORMAL_TEXT", True))
-    service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
-    replace_formatted("synthetic-doc", [{"startIndex": 1, "endIndex": 19}],
-                      "One line", "rev", body=body, replace_paragraphs=True)
-    requests = service.documents.return_value.batchUpdate.call_args.kwargs[
-        "body"]["requests"]
-    assert _apply_text_requests(body, requests) == "One line\n"
-    resets = [r["deleteParagraphBullets"]["range"] for r in requests
-              if "deleteParagraphBullets" in r]
-    assert resets == [{"startIndex": 1, "endIndex": 9}]
-    style = next(r["updateParagraphStyle"] for r in requests
-                 if "updateParagraphStyle" in r)
-    assert style["range"] == {"startIndex": 1, "endIndex": 9}
-    assert style["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
+    service = mocker.patch("gdoc.api.docs.get_docs_service")
+    with pytest.raises(GdocError, match="bullets have no Markdown spelling"):
+        replace_formatted("synthetic-doc", [{"startIndex": 1, "endIndex": 19}],
+                          "One line", "rev", body=body, replace_paragraphs=True)
+    service.assert_not_called()
 
 
 @pytest.mark.parametrize('multiline', [False, True])
@@ -813,8 +807,9 @@ def test_single_paragraph_cannot_bypass_unmatched_newline_check(mocker, new):
 @pytest.mark.parametrize("count", [1, 2])
 @pytest.mark.parametrize("new", ["Prose 😀", "", "- Item", "First\nSecond"])
 @pytest.mark.parametrize("bullet", [False, True])
-def test_whole_cell_list_removal_request_ranges(mocker, count, new, bullet):
-    """Prose, empty, Markdown lists and non-list cells keep scoped requests."""
+def test_whole_cell_request_ranges(mocker, count, new, bullet):
+    """Cell wording keeps each paragraph's marks, bullets included; emptying
+    a cell removes its list; a list cell's paragraph count can't change."""
     from gdoc.cli import build_parser, cmd_edit
 
     cell = _body(*[("Old", "HEADING_2", bullet)] * count)
@@ -840,6 +835,11 @@ def test_whole_cell_list_removal_request_ranges(mocker, count, new, bullet):
     args = build_parser().parse_args([
         "edit", "--cell", "0,0", "--tab", "Notes", "--", "doc", new,
     ])
+    if bullet and new and count != len(new.split("\n")):
+        with pytest.raises(GdocError, match="bullets have no Markdown spelling"):
+            cmd_edit(args)
+        service.documents.return_value.batchUpdate.assert_not_called()
+        return
     assert cmd_edit(args) == 0
     requests = service.documents.return_value.batchUpdate.call_args.kwargs[
         "body"]["requests"]
@@ -854,18 +854,12 @@ def test_whole_cell_list_removal_request_ranges(mocker, count, new, bullet):
               .get("paragraphStyle", {})]
     creates = [r for r in requests if "createParagraphBullets" in r]
     assert not creates
-    if not bullet and not creates and new:
+    if new:
         assert resets == styles == []
         return
-    expected_ranges = ([{"startIndex": 5, "endIndex": 11, "tabId": "tab"},
-                        {"startIndex": 1, "endIndex": 6, "tabId": "tab"}]
-                       if count == 2 and new == "First\nSecond" else
-                       [{"startIndex": 1,
-                         "endIndex": 1 + max(1, utf16_len(rendered)),
-                         "tabId": "tab"}])
+    expected_ranges = [{"startIndex": 1, "endIndex": 2, "tabId": "tab"}]
     assert [s["range"] for s in styles] == expected_ranges
-    if bullet or not new or count != len(new.split("\n")):
-        assert resets == expected_ranges
+    assert resets == expected_ranges
     for style in styles:
         assert style["paragraphStyle"]["namedStyleType"] == "NORMAL_TEXT"
         assert "alignment" not in style["fields"]

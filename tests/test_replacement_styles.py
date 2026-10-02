@@ -276,17 +276,15 @@ def test_whole_paragraph_fence_uses_target_style_before_explicit_code_font(
     }] * len("Revised")
 
 
-def test_cell_list_reset_precedes_target_style_restoration(mocker):
+def test_cell_wording_keeps_its_bullet_and_restores_target_style(mocker):
     body = _body(("Old value", LINK), ("\n", LINK))
     paragraph = body["content"][0]["paragraph"]
     paragraph["bullet"] = {"listId": "synthetic-list"}
     body = {"content": [{"table": {"tableRows": [{"tableCells": [body]}]}}]}
     requests = _batch(mocker, body, "Old value", "Confirmed", replace_paragraphs=True)
     kinds = [next(iter(request)) for request in requests]
-    assert kinds.index("updateParagraphStyle") < kinds.index("updateTextStyle")
-    baseline = requests[kinds.index("updateTextStyle")]["updateTextStyle"]
-    assert baseline["textStyle"] == RED
-    assert baseline["fields"] == "foregroundColor,link,underline"
+    assert "deleteParagraphBullets" not in kinds
+    assert "updateParagraphStyle" not in kinds
     assert _replacement_styles(requests, LINK) == [RED] * len("Confirmed")
 
 

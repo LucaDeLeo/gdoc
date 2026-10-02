@@ -680,7 +680,7 @@ heading, inside a cell has no Markdown spelling, nor does a native rule or an in
 paragraph in a cell. Reads name such a table as omitted content, a rewrite of it
 is refused, and with `--allow-lossy` those cell paragraphs become plain text and
 rules in cells are dropped; edit the
-cell's wording with `edit --cell` to keep them. Lists around and beside tables,
+cell's wording with `edit --cell`, one line per paragraph, to keep them. Lists around and beside tables,
 and tables inside list items and quotes, are supported Markdown and never need
 consent.
 
@@ -918,7 +918,7 @@ gdoc edit DOC --cell "Status" --col 2 "Done"
 
 Labels must identify exactly one first-column row in the selected table(s). If the same text also appears in a value column, label mode refuses with exit code 3; use explicit `--table` and `--cell ROW,COL` coordinates.
 
-Cell edits preserve the cell's paragraph structure; an empty cell is filled in place. The replacement supports the same Markdown formatting as a normal `edit`.
+A cell's paragraphs are separated by `<br>` in the replacement, as `cat` prints them. With one line per paragraph, each paragraph is reworded in place and keeps its style and any native bullet. A different number of lines replaces the cell's paragraphs. In a cell holding list items that is refused with nothing sent, since their bullets have no Markdown spelling: delete an item with a targeted edit of its text and line break (`gdoc edit DOC $'Item\n' ''`), or empty the cell first (`--cell 0,0 ''`, which removes its list) to write plain paragraphs. An empty cell is filled in place. The replacement supports the same Markdown formatting as a normal `edit`.
 
 ### Matching tolerance
 

@@ -679,19 +679,19 @@
   {
     "id": "R3-F009",
     "assertions": [
-      "tests/test_paragraph_edits.py::test_cell_replacement_removes_inherited_list_unless_requested"
+      "tests/test_paragraph_edits.py::test_cell_replacement_keeps_its_list_unless_restyled_or_emptied"
     ],
-    "verifies": "Bullet deletion precedes requested plain/heading/list cell style.",
+    "verifies": "Cell wording keeps a list item's bullet; bullet deletion precedes a requested heading/list cell style or an emptied cell.",
     "gap": "",
     "evidence": "offline assertion; no live native evidence",
     "baseline_results": {
-      "tests/test_paragraph_edits.py::test_cell_replacement_removes_inherited_list_unless_requested": {
+      "tests/test_paragraph_edits.py::test_cell_replacement_keeps_its_list_unless_restyled_or_emptied": {
         "passed": 4,
         "failed": 0
       }
     },
     "integration_results": {
-      "tests/test_paragraph_edits.py::test_cell_replacement_removes_inherited_list_unless_requested": {
+      "tests/test_paragraph_edits.py::test_cell_replacement_keeps_its_list_unless_restyled_or_emptied": {
         "passed": 4,
         "failed": 0
       }
