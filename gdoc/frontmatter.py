@@ -88,9 +88,11 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
 
 # A line holding a gdoc key (`gdoc`, `gdoc-*`, maybe quoted, then a colon and
 # a space or the line end) after any run of characters other than letters and
-# digits: `gdoc: ID`, `> - gdoc-revision: R`, `"gdoc": ID`. `cat`'s `gdoc-image:ID` and
+# digits, and of numbered-list markers: `gdoc: ID`, `> - gdoc-revision: R`,
+# `1. gdoc: ID`, `"gdoc": ID`. `cat`'s `gdoc-image:ID` and
 # `<!-- gdoc:TITLE -->` tokens are not keys.
-_GDOC_KEY_LINE_RE = re.compile(r"[\W_]*gdoc(?:-[\w.-]*)?[\"']?[ \t]*:(?=\s|$)")
+_GDOC_KEY_LINE_RE = re.compile(
+    r"(?:[\W_]|\d+[.)])*gdoc(?:-[\w.-]*)?[\"']?[ \t]*:(?=\s|$)")
 # A gdoc key spelled as `pull` writes it.
 _PULLED_KEY_RE = re.compile(r"gdoc(?:-[a-z0-9-]+)?:(?: |$)")
 
