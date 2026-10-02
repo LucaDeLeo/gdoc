@@ -82,7 +82,7 @@ def test_r4_plain_deletions_still_work(route, base, old, expected):
 ])
 def test_r4_an_unreadable_gdoc_header_is_refused(route, header):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "looks like a pulled file", text=header + "Changed.\n")
+    _refused(route, "write", "may be a pulled file", text=header + "Changed.\n")
 
 
 def test_r4_08_push_and_the_sync_hook_refuse_it_too(monkeypatch, tmp_path, capsys):
@@ -93,11 +93,11 @@ def test_r4_08_push_and_the_sync_hook_refuse_it_too(monkeypatch, tmp_path, capsy
     pulled = tmp_path / "d.md"
     pulled.write_text("---\ngdoc: synthetic\nhttps://example.com/ref\n---\nChanged.\n")
     assert cli.run_argv(["push", str(pulled)], check_updates=False) == 3
-    assert "looks like a pulled file" in capsys.readouterr().err
+    assert "may be a pulled file" in capsys.readouterr().err
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
         {"tool_input": {"file_path": str(pulled)}})))
     assert cli.cmd_sync_hook(SimpleNamespace()) == 2
-    assert "looks like a pulled file" in capsys.readouterr().err
+    assert "may be a pulled file" in capsys.readouterr().err
     assert not route.service.batches
 
 

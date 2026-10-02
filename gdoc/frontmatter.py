@@ -86,89 +86,62 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     return metadata, body
 
 
-# Letters that render as blank space.
-_BLANK_LETTERS = "\u115f\u1160\u3164\uffa0"
-# A dash run, counting Unicode dashes, or a `...` closer.
-_BLOCK_CLOSE_RE = re.compile(
-    r"(?:[-\u2010-\u2015\u2212\ufe58\ufe63\uff0d]{3,}|\.\.\.)[ \t]*")
-# A gdoc key (`gdoc`, `gdoc-*`) in any case: starting a line, indented,
-# quoted, commented out or as a list item, or inside a flow mapping.
-_GDOC_KEY_RE = re.compile(
-    r"(?:^[\s#-]*|[{,]\s*)[\"']?gdoc(?:-[^\s:\uff1a\"',}]*)?[\"']?\s*[:\uff1a]",
-    re.IGNORECASE)
+# A line holding a gdoc key (`gdoc`, `gdoc-*`, maybe quoted, then a colon and
+# a space or the line end) after any run of characters other than letters and
+# digits: `gdoc: ID`, `> - gdoc-revision: R`, `"gdoc": ID`. `cat`'s `gdoc-image:ID` and
+# `<!-- gdoc:TITLE -->` tokens are not keys.
+_GDOC_KEY_LINE_RE = re.compile(r"[\W_]*gdoc(?:-[\w.-]*)?[\"']?[ \t]*:(?=\s|$)")
+# A gdoc key spelled as `pull` writes it.
+_PULLED_KEY_RE = re.compile(r"gdoc(?:-[a-z0-9-]+)?:(?: |$)")
 
 
-def _shown(line: str) -> str:
-    """*line* as it reads: control, format and combining characters and
-    blank letters removed, and surrounding whitespace stripped."""
+def _gdoc_key_lines(text: str) -> list[str]:
+    """The lines of *text* holding a gdoc key, as read after NFKC, with
+    format characters and combining marks removed, in lower case."""
     import unicodedata
 
-    return "".join(
-        char for char in line
-        if char.isspace() or (unicodedata.category(char)[0] not in "CM"
-                              and char not in _BLANK_LETTERS)
-    ).strip()
+    text = "".join(char for char in unicodedata.normalize("NFKC", text)
+                   if unicodedata.category(char) != "Cf"
+                   and unicodedata.category(char)[0] != "M").lower()
+    return [line for line in text.splitlines()
+            if _GDOC_KEY_LINE_RE.match(line)]
 
 
-def _header_shaped(line: str) -> bool:
-    """Whether *line* could belong to a metadata block: it has no letters or
-    digits, or it is a `key: value` line, a comment or an indented line."""
-    import unicodedata
-
-    shown = _shown(line)
-    return (not any(unicodedata.category(char)[0] in "LN" for char in shown)
-            or shown.startswith("#") or line[:1] in (" ", "\t")
-            or bool(_KEY_LINE_RE.match(shown) or _GDOC_KEY_RE.search(shown)))
+def _pulled_header(content: str) -> bool:
+    """Whether *content* starts, after at most one byte-order mark, with a
+    header as `pull` writes it: `---`, `key: value` lines naming the document
+    (`gdoc: ID`), each gdoc key spelled in lower case at the line start, and
+    `---`."""
+    content = content.removeprefix("\ufeff")
+    match = _FRONTMATTER_RE.match(content)
+    if not match or not parse_frontmatter(content)[0].get("gdoc"):
+        return False
+    return all(
+        line and _KEY_LINE_RE.match(line)
+        and (not _gdoc_key_lines(line) or _PULLED_KEY_RE.match(line))
+        for line in re.split(r"\r?\n", match[1]))
 
 
 def provenance_header_problem(content: str) -> str | None:
-    """Why *content*'s pulled-file header can't be trusted, or None.
+    """Why *content* can't be written safely as a pulled file, or None.
 
-    A pulled-file header is the file's leading run of header-shaped lines
-    (see `_header_shaped`) and `---` blocks, ignoring invisible characters
-    and HTML comments, when it holds a `gdoc` or `gdoc-*` key. It must be read
-    exactly: it starts the file (after at most one byte-order mark), opens
-    and closes with `---` lines, holds only `key: value` lines, and names
-    the document (`gdoc: ID`). Otherwise its stale-file checks could not run
-    and the header would be written as text. Other front matter, and a body
-    that opens with a rule or after an empty `---`/`---` block, are
-    unaffected.
+    A file that starts with a header as `pull` writes it (see
+    `_pulled_header`) is a pulled file, and its stale-file checks run. Any
+    other file holding a `gdoc` or `gdoc-*` key line anywhere, after any
+    prefix of characters other than letters and digits (spaces, `>`, `-`,
+    backticks, `<!--`) and ignoring case, invisible characters and accents,
+    is refused: it may be a pulled file whose header gdoc can't read, so its
+    stale-file checks couldn't run and the header would be written as text.
+    Such a line in ordinary text is refused too; escaping its colon
+    (`gdoc\\:`) or writing from a fresh pull avoids that.
     """
-    content = content.removeprefix("\ufeff")
-    if _EMPTY_FRONTMATTER_RE.match(content):
-        return None  # `cat`'s spelling of a body that opens with a rule
-    visible = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
-    inside = False  # between a dash line and its closer, any line counts
-    for line in visible.splitlines():
-        if _GDOC_KEY_RE.search(_shown(line)):
-            break
-        if _BLOCK_CLOSE_RE.fullmatch(_shown(line)):
-            inside = not inside
-        elif not (inside or _header_shaped(line)):
-            return None
-    else:
+    if _pulled_header(content):
         return None
-    lines = re.split(r"\r\n|\r|\n", content)
-    if lines[0] != "---":
-        return ("its first line must be exactly `---`, with nothing before or "
-                "after the dashes")
-    close = next((k for k in range(1, len(lines))
-                  if _BLOCK_CLOSE_RE.fullmatch(_shown(lines[k]))), None)
-    if close is None:
-        return "its opening `---` block never closes"
-    if lines[close] != "---" or "\n" not in content:
-        return "its opening block must open and close with `---` lines"
-    block = lines[1:close]
-    first = next((line for line in block if not line.startswith("#")), "")
-    if not first.strip():
-        return "its opening block starts with a blank line, so it is read as text"
-    for line in block:
-        if line.strip() and not _KEY_LINE_RE.match(line):
-            return ("its opening block has a line that isn't `key: value`: "
-                    f"{line.rstrip()!r}")
-    if not parse_frontmatter(content)[0].get("gdoc"):
-        return "its opening block doesn't name the document with a `gdoc: ID` line"
-    return None
+    found = _gdoc_key_lines(content)
+    if not found:
+        return None
+    return (f"it has a gdoc header line ({found[0].strip()[:60]!r}) but doesn't "
+            "start with a header gdoc can read")
 
 
 def add_frontmatter(body: str, metadata: dict) -> str:

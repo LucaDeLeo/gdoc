@@ -2068,17 +2068,19 @@ def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
 
 
 def _refuse_unreadable_provenance(content: str) -> None:
-    """Refuse input whose opening block mentions gdoc but can't be read
-    exactly: its revision checks couldn't run, and the header itself would
-    become text in the tab. Shared by write, push and the sync hook."""
+    """Refuse input holding a gdoc header line without starting with a
+    header gdoc can read: its revision checks couldn't run, and the header
+    itself would become text in the tab. Shared by write, push and the sync
+    hook."""
     from gdoc.frontmatter import provenance_header_problem
 
     problem = provenance_header_problem(content)
     if problem:
         raise GdocError(
-            f"this file looks like a pulled file, but {problem}. Nothing was "
-            "sent. Fix the header, remove it to copy the text, or pull the "
-            "tab again.", exit_code=3,
+            f"this file may be a pulled file: {problem}. Nothing was sent. "
+            "Pull the tab again and copy your edits into the fresh file, or "
+            "delete the stray header lines. If the line is meant as text, "
+            "escape its colon (`gdoc\\:`).", exit_code=3,
         )
 
 

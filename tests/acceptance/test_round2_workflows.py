@@ -27,10 +27,17 @@ def test_leading_rule_block_survives_unchanged_and_changed_writes(scenario):
         _leading_rule_document(scenario, middle)
         markdown = read(scenario)
         assert markdown == f"---\n---\n---\n{middle}\n---\nBody text\n"
-
-        # Unchanged: nothing is removed, so nothing needs writing.
-        scenario.ok("write", tab="draft", text=markdown)
-        assert not scenario.batches
+        if middle.startswith("gdoc"):
+            # A gdoc key line outside a pulled header is refused; escaping
+            # its colon writes it as text.
+            code, output, error = scenario.call("write", tab="draft", text=markdown)
+            assert code != 0 and "may be a pulled file" in output + error
+            assert not scenario.batches
+            markdown = markdown.replace("gdoc:", "gdoc\\:")
+        else:
+            # Unchanged: nothing is removed, so nothing needs writing.
+            scenario.ok("write", tab="draft", text=markdown)
+            assert not scenario.batches
 
         # Changed: the leading rule block is written as content.
         scenario.ok("write", tab="draft", text=markdown + "More.\n")

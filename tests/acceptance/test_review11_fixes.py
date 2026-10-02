@@ -80,7 +80,7 @@ def test_r3_04_an_unreadable_pulled_header_is_refused(route, extra):
     _written(route, "Alpha.\nBeta.\n")
     text = (f"---\ngdoc: synthetic\ntitle: T\ngdoc-version: 1\n{extra}\n---\n"
             "Alpha edited.\nBeta.\n")
-    _refused(route, "write", "looks like a pulled file", text=text)
+    _refused(route, "write", "may be a pulled file", text=text)
 
 
 def test_r3_12_level_change_names_nest_only_when_it_would_work(route):
@@ -123,7 +123,7 @@ def test_f6_02_quoted_provenance_keys_are_recognised(route):
     _written(route, "Alpha.\n")
     text = ('---\n"gdoc": synthetic\n"gdoc-version": 1\nhttps://example.com/ref\n'
             "---\nChanged.\n")
-    _refused(route, "write", "looks like a pulled file", text=text)
+    _refused(route, "write", "may be a pulled file", text=text)
 
 
 def test_f6_03_a_child_deleted_before_item_content_is_refused(route):
@@ -135,9 +135,13 @@ def test_f6_03_a_child_deleted_before_item_content_is_refused(route):
     route.ok("write", text="1. parent\n\n   parent detail\n2. next\n")
 
 
-def test_f6_04_an_empty_block_before_a_gdoc_line_is_body(route):
+def test_f6_04_a_gdoc_line_after_an_empty_block_is_refused(route):
+    """A gdoc key line anywhere outside a pulled header is refused; escaping
+    its colon writes it as text."""
     _written(route, "Alpha.\n")
-    route.ok("write", text="---\n---\ngdoc: example\n---\nBody.\n")
+    _refused(route, "write", "may be a pulled file",
+             text="---\n---\ngdoc: example\n---\nBody.\n")
+    route.ok("write", text="---\n---\ngdoc\\: example\n---\nBody.\n")
     assert "gdoc: example" in _read(route)
 
 

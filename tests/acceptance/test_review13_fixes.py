@@ -78,7 +78,8 @@ def test_r5_06_07_every_marker_spelling_is_refused(route, markdown):
 ])
 def test_r5_02_a_prefixed_pulled_header_is_refused(route, prefix):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "first line must be exactly", text=prefix + HEADER + "Changed.\n")
+    _refused(route, "write", "may be a pulled file",
+             text=prefix + HEADER + "Changed.\n")
 
 
 @pytest.mark.parametrize("opener", [
@@ -87,7 +88,7 @@ def test_r5_02_a_prefixed_pulled_header_is_refused(route, prefix):
 ])
 def test_r5_02_an_opener_with_anything_around_it_is_refused(route, opener):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "first line must be exactly",
+    _refused(route, "write", "may be a pulled file",
              text=opener + HEADER[3:] + "Changed.\n")
 
 
@@ -98,7 +99,7 @@ def test_r5_02_an_opener_with_anything_around_it_is_refused(route, opener):
 ])
 def test_r5_02_key_spellings_are_refused(route, header):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "looks like a pulled file", text=header + "Changed.\n")
+    _refused(route, "write", "may be a pulled file", text=header + "Changed.\n")
 
 
 @pytest.mark.parametrize("markdown,expected", [
@@ -119,9 +120,9 @@ def test_r5_04_a_body_opening_with_a_rule_is_body(route):
     assert "We use gdoc daily." in _read(route)
 
 
-def test_r5_05_the_message_names_a_leading_blank_line(route):
+def test_r5_05_a_header_after_a_blank_line_is_refused(route):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "starts with a blank line",
+    _refused(route, "write", "may be a pulled file",
              text="---\n\ngdoc: synthetic\ntitle: T\n---\nChanged.\n")
 
 
@@ -141,7 +142,7 @@ def test_r5_03_the_sync_hook_skips_ordinary_front_matter(monkeypatch, tmp_path, 
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
         {"tool_input": {"file_path": str(pulled)}})))
     assert cli.cmd_sync_hook(SimpleNamespace()) == 2
-    assert "first line must be exactly" in capsys.readouterr().err
+    assert "may be a pulled file" in capsys.readouterr().err
     assert cli.run_argv(["push", str(pulled)], check_updates=False) == 3
     assert not route.service.batches
 
