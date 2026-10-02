@@ -188,7 +188,9 @@ class TestGetDocumentThreads:
             "revisionId": "r",
             "commentsViewMode": "COMMENTS_VIEW_MODE_INCLUDED",
         }
-        assert get_document_threads("doc1")["suggestions"] == []
+        doc = get_document_threads("doc1")
+        assert doc["suggestions"] == []
+        assert doc["comments"] == []
 
     @pytest.mark.parametrize("mode", [None, "", "DEFAULT_FOR_CURRENT_ACCESS"])
     @patch("gdoc.api.docs._documents_get_raw")
@@ -202,8 +204,9 @@ class TestGetDocumentThreads:
         if mode is not None:
             doc["commentsViewMode"] = mode
         mock_raw.return_value = doc
-        with pytest.raises(PreviewUnavailableError, match="did not apply"):
+        with pytest.raises(GdocError, match="not enrolled") as e:
             get_document_threads("doc1")
+        assert type(e.value) is GdocError
 
     @patch("gdoc.api.docs._documents_get_raw")
     @patch("gdoc.api.docs.get_docs_service")
@@ -215,8 +218,11 @@ class TestGetDocumentThreads:
             b'received. Unknown name \\"comments_view_mode\\": Cannot bind '
             b'query parameter.", "status": "INVALID_ARGUMENT"}}',
         )
-        with pytest.raises(PreviewUnavailableError, match="not enrolled"):
+        with pytest.raises(GdocError, match="not enrolled") as e:
             get_document_threads("doc1")
+        # Plain GdocError, not PreviewUnavailableError: nothing may treat
+        # a missing thread view as a cue to fall back to Drive.
+        assert type(e.value) is GdocError
 
     @patch("gdoc.api.docs._documents_get_raw")
     @patch("gdoc.api.docs.get_docs_service")
@@ -1107,7 +1113,7 @@ class TestCmdSuggestions:
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch(
         "gdoc.api.docs.get_document_threads",
-        side_effect=PreviewUnavailableError("suggestion threads are not available: x"),
+        side_effect=GdocError("native comment threads are not available: x"),
     )
     def test_preview_unavailable_is_a_failure_not_a_fallback(
         self, _get, _pf, mock_update
@@ -1448,10 +1454,10 @@ class TestCmdDecisions:
     def test_preview_unavailable_read_fails_before_write(self):
         p = _decision_patches("ACCEPTED")
         with p[0], p[1], p[2], p[3] as mock_decide, p[4] as mock_get:
-            mock_get.side_effect = PreviewUnavailableError(
-                "suggestion threads are not available"
+            mock_get.side_effect = GdocError(
+                "native comment threads are not available"
             )
-            with pytest.raises(PreviewUnavailableError):
+            with pytest.raises(GdocError, match="not available"):
                 cmd_accept_suggestion(
                     _args("accept-suggestion", suggestion_id="suggest.a")
                 )

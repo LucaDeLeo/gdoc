@@ -227,12 +227,16 @@ gdoc cat 1aBcDeFg...
 | Command | Description |
 |---------|-------------|
 | `comments DOC` | List all open comments (`--all` to include resolved) |
-| `comment DOC TEXT` | Add a comment (`--quote` to anchor it to text — see below) |
+| `comment DOC TEXT` | Add a comment (`--quote` to anchor it to text — see below; `--assign EMAIL` to assign it, preview) |
 | `comment-info DOC ID` | Get a single comment with full detail |
-| `reply DOC COMMENT_ID TEXT` | Reply to a comment |
+| `reply DOC COMMENT_ID TEXT` | Reply to a comment (`--suggestion` for a suggestion thread, `--reassign EMAIL` to hand an assigned comment on — preview) |
 | `resolve DOC COMMENT_ID` | Resolve a comment (`--message` to include a note) |
 | `reopen DOC COMMENT_ID` | Reopen a resolved comment |
 | `delete-comment DOC ID` | Delete a comment (`--force` to skip confirmation) |
+| `edit-comment DOC COMMENT_ID POST_ID TEXT` | Edit a comment or reply you wrote (preview) |
+| `edit-suggestion-reply DOC SUGGESTION_ID POST_ID TEXT` | Edit a reply you wrote on a suggestion thread (preview) |
+| `delete-reply DOC COMMENT_ID POST_ID` | Delete one reply you wrote (`--force` to skip confirmation; preview) |
+| `delete-suggestion-reply DOC SUGGESTION_ID POST_ID` | Delete one reply you wrote on a suggestion thread (`--force`; preview) |
 
 ### Suggestions (Docs API developer preview)
 
@@ -278,6 +282,37 @@ transparently to the Drive API path: the comment is created unanchored
 text but the Docs UI does not highlight. Same command either way — anchoring
 problems never fail the comment (though unrelated API errors, like a missing doc or
 expired auth, still do).
+
+#### Native thread operations (developer preview)
+
+Ordinary comment reads and writes stay on the Drive API. A few operations
+only exist in the Docs API's native comment threads, and the commands marked
+*preview* above use them — there is no Drive fallback, so they require an
+enrolled Cloud project and fail with a message naming the reason otherwise:
+
+- `comment DOC TEXT --quote "doc text" --assign EMAIL` creates an anchored
+  comment assigned to `EMAIL` (`insertComment.assigneeEmailAddress`). It
+  requires `--quote` and never degrades to an unassigned comment.
+- `reply DOC COMMENT_ID TEXT --reassign EMAIL` hands an **already assigned**
+  thread to someone else. The thread is read first and the command stops
+  (exit 3) unless its head post carries an assignee — Google rejects
+  reassignment of an unassigned thread — so start with `comment --assign`.
+- `reply DOC SUGGESTION_ID TEXT --suggestion` replies on a suggestion
+  thread. IDs are opaque: the flag (or the `*-suggestion-reply` command),
+  never the ID's shape, selects the namespace.
+- `edit-comment` / `edit-suggestion-reply` change the text of a post you
+  wrote; `delete-reply` / `delete-suggestion-reply` remove one reply you
+  wrote. `POST_ID` is the reply ID shown by `comment-info` (native post IDs
+  and Drive reply IDs are the same; a comment's head post ID equals its
+  comment ID). A suggestion's generated head post cannot be edited,
+  replies that carry a resolve/reopen action or an assignment cannot be
+  deleted, and an already-deleted post is refused — all before any write.
+
+Every native write requires `commentUpdateState: ALL_SAVED` and is verified
+by reading the thread back (an assignment must appear on the thread, not
+just in the response); `--json` reports `postId` (comment-thread replies also
+keep `replyId`, the same value) plus `assignee` for `--assign`/`--reassign`. The awareness system is unchanged: comment threads
+keep their Drive IDs, and suggestion-thread posts are not tracked as comments.
 
 ### Other
 

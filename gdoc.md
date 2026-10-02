@@ -35,6 +35,13 @@ gdoc comments DOC_ID                         # List open comments
 gdoc comments DOC_ID --all                   # Include resolved
 gdoc comment DOC_ID "comment text"           # Add unanchored comment
 gdoc reply DOC_ID COMMENT_ID "reply text"    # Reply to a comment
+gdoc comment DOC_ID "text" --quote "doc text" --assign EMAIL   # Assigned anchored comment (preview)
+gdoc reply DOC_ID COMMENT_ID "text" --reassign EMAIL          # Reassign an assigned thread (preview)
+gdoc reply DOC_ID SUGGESTION_ID "text" --suggestion           # Reply on a suggestion thread (preview)
+gdoc edit-comment DOC_ID COMMENT_ID POST_ID "new text"        # Edit a post you wrote (preview)
+gdoc edit-suggestion-reply DOC_ID SUGGESTION_ID POST_ID "new"  # Same, on a suggestion thread (preview)
+gdoc delete-reply DOC_ID COMMENT_ID POST_ID --force           # Delete a reply you wrote (preview)
+gdoc delete-suggestion-reply DOC_ID SUGGESTION_ID POST_ID --force  # Same, on a suggestion thread (preview)
 gdoc resolve DOC_ID COMMENT_ID              # Resolve a comment
 gdoc reopen DOC_ID COMMENT_ID               # Reopen a resolved comment
 
@@ -387,7 +394,7 @@ No other dependencies. Intentionally minimal.
 
 3. **`edit` is the workhorse for agents** — mirrors Claude Code's Edit tool. Agents `cat` the doc, find the text to change, and `edit` it with an exact unique match. No index math needed.
 
-4. **Comments use Drive API, not Docs API** — The Docs API can read comments embedded in the document structure, but CRUD operations on comments are exclusively through the Drive API v3.
+4. **Ordinary comment CRUD uses the Drive API; a few operations use the Docs API preview** — Listing, creating, replying, resolving, reopening and deleting comments go through Drive v3 `comments`/`replies`. Anchored comments (`comment --quote`), assignment (`--assign`, `reply --reassign`), suggestion-thread replies, and editing or deleting a single post use the Docs API's native comment threads (`documents.batchUpdate` `insertComment` / `addCommentReply` / `updateCommentPost` / `deleteCommentReply`, Workspace Developer Preview), verified by `documents.get` with `commentsViewMode`. Drive reply IDs and native post IDs are the same values.
 
 5. **`write` is destructive** — Full doc replacement. Blocked when doc changed since last read unless `--force` is passed. Agents should prefer `edit` for targeted edits.
 

@@ -36,6 +36,23 @@ All notable changes to `gdoc` are documented here. This project follows
   delete: author). `delete-suggestion` uses the standard destructive
   confirmation / `--force`. All five are exposed over MCP.
 
+
+- **Native comment assignment and post operations (developer preview).**
+  `comment --quote TEXT --assign EMAIL` creates an anchored comment assigned
+  to a user (`insertComment.assigneeEmailAddress`; requires `--quote`, no
+  Drive fallback). `reply --reassign EMAIL` hands an already-assigned thread
+  on and refuses (exit 3) before writing when the thread's head post has
+  no assignee;
+  `reply --suggestion` replies on a suggestion thread. New `edit-comment`,
+  `edit-suggestion-reply`, `delete-reply` and `delete-suggestion-reply`
+  commands edit or remove a single post you wrote (`updateCommentPost`,
+  `deleteCommentReply`), with pre-write refusals for a suggestion's
+  generated head post and for action/assignment replies. Each native write
+  requires `commentUpdateState: ALL_SAVED` and is verified by reading the
+  thread back. Ordinary comment reads and writes, and the awareness system,
+  stay on the Drive API. The four new commands are exposed over MCP as
+  writes; the delete commands require `force: true` there.
+
 ## [0.22.0] — 2026-09-28
 
 ### Added

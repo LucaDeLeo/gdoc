@@ -80,6 +80,10 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "accept-suggestion": False,
     "reject-suggestion": False,
     "delete-suggestion": False,
+    "edit-comment": False,
+    "edit-suggestion-reply": False,
+    "delete-reply": False,
+    "delete-suggestion-reply": False,
     "new": False,
     "cp": False,
     "mkdir": False,
@@ -148,7 +152,14 @@ _EXTRA_REQUIRED: dict[str, tuple[str, ...]] = {
     # mode, so the text pair is the only way to supply the replacement
     "suggest": ("old_text", "new_text"),
     "delete-suggestion": ("force",),
+    "delete-reply": ("force",),
+    "delete-suggestion-reply": ("force",),
 }
+
+# Commands whose `force` must be true over MCP (see _EXTRA_REQUIRED).
+_FORCE_REQUIRED = frozenset(
+    cmd for cmd, params in _EXTRA_REQUIRED.items() if "force" in params
+)
 
 # Cross-parameter requirements JSON Schema could only express with a
 # root-level oneOf/anyOf, which several MCP clients reject or ignore.
@@ -165,6 +176,11 @@ _DESCRIPTION_NOTES: dict[str, str] = {
         "Needs `old_text` and `new_text`. The replacement lands as a "
         "suggested edit for review, not a direct change; inline markdown "
         "only."
+    ),
+    "comment": "`assign` requires `quote` (Docs API preview, no Drive fallback).",
+    "reply": (
+        "`suggestion` and `reassign` are mutually exclusive; `reassign` "
+        "needs a thread that already has an assignee (Docs API preview)."
     ),
 }
 
@@ -255,6 +271,10 @@ def _schema_for(command: str, parser: argparse.ArgumentParser) -> dict[str, Any]
             prop["enum"] = [c for c in prop["enum"] if c not in removed]
         if action.dest in extra_required and prop.get("type") == "array":
             prop["minItems"] = 1
+        if action.dest == "force" and command in _FORCE_REQUIRED:
+            # `required` alone would admit `force: false`, which always
+            # fails at runtime; say in the schema that only true is valid.
+            prop["const"] = True
         properties[action.dest] = prop
 
         is_positional = not action.option_strings
@@ -464,9 +484,7 @@ def call_command(
 
     # Schema `required` cannot force a boolean to be true, so guard here:
     # with stdin detached, confirm_destructive() can never prompt.
-    if command in ("delete-comment", "delete-suggestion") and not arguments.get(
-        "force"
-    ):
+    if command in _FORCE_REQUIRED and not arguments.get("force"):
         raise ValueError(
             "`force: true` is required: deletion cannot prompt for "
             "confirmation over MCP"
