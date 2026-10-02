@@ -238,26 +238,23 @@ def _code_spans(text: str) -> list[re.Match]:
     return spans
 
 
-# A fence opener after a list marker (and any further markers or quote
-# markers on the same line): `1. ```, `- ~~~`, `- > ````.
-_MARKER_LINE_FENCE_RE = re.compile(r"(?:[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+|>))*")
+# Leading whitespace, quote markers and list markers of any spelling.
+_LINE_MARKERS_RE = re.compile(r"(?:[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+|>))*[ \t]*")
 
 
-def _refuse_marker_line_fence(item: str, line_index: int) -> None:
-    """Refuse a code fence opened on a list item's marker line: Markdown
-    readers disagree about it, and a later fence line could then swallow
-    the rest of the input."""
-    rest = item[_MARKER_LINE_FENCE_RE.match(item).end():]
-    if _fence_open(rest):
-        from gdoc.util import GdocError
+def _fence_spelling_error(line_index: int):
+    """A fence gdoc can't place as other Markdown readers would."""
+    from gdoc.util import GdocError
 
-        raise GdocError(
-            f"line {line_index + 1} opens a code block on a list item's marker "
-            "line, which gdoc does not read. Put the item's text on the marker "
-            "line, then a blank line, then the fence indented to the item's "
-            "content (`1. Install` / blank / `   ```bash`). Nothing was sent.",
-            exit_code=3,
-        )
+    return GdocError(
+        f"line {line_index + 1} has a code fence gdoc doesn't read. Write "
+        "fences as `cat` prints them: at the top level from column 0; in a "
+        "list item or quote, on lines of their own after the item's indent "
+        "or the quote's `> `, with the code and the closing fence spelled "
+        "the same way (`1. Install` / blank / `   ```bash` / `   make` / "
+        "`   ````, or `> ```` / `> make` / `> ````). Nothing was sent.",
+        exit_code=3,
+    )
 
 
 def cell_inline(text: str) -> str:
@@ -881,26 +878,25 @@ def _quoted_in_item(path: tuple) -> bool:
     return any(token != "q" for token in path[:last])
 
 
-def _strip_path(line: str, path: tuple, lenient: bool = False) -> str | None:
+def _strip_path(line: str, path: tuple) -> str | None:
     """A line with its container markers removed, or None when outside them.
 
-    A blank line stays inside list item content. ``lenient`` (fenced code)
-    also accepts a missing quote marker and a shallower indent.
+    A blank line stays inside list item content.
     """
     for token in path:
         if token == "q":
             match = _BLOCKQUOTE_RE.match(line)
             if match:
                 line = match[1]
-            elif not (lenient or not line.strip()):
+            elif line.strip():
                 return None
-            elif not line.strip():
+            else:
                 line = ""
         else:
             spaces = len(line) - len(line.lstrip(" "))
             if spaces >= token:
                 line = line[token:]
-            elif lenient or not line.strip():
+            elif not line.strip():
                 line = line[spaces:]
             else:
                 return None
@@ -1163,58 +1159,36 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             line = ""
         enter(path)
 
-        # Fenced code block: ``` (or ~~~) ... ```
-        fence_indent = len(line) - len(line.lstrip(" "))
+        # Fenced code block: ``` (or ~~~) ... ```. At the top level it opens
+        # at column 0. In a list item or quote, every line from the opener to
+        # the closer is spelled as `cat` prints it: the container's prefix,
+        # then the fence or the code.
+        lead = path_lead(path)
         fence_m = _fence_open(line)
-        if fence_m:
+        if fence_m and lines[i] == lead + line and line[0] in "`~":
             list_levels.clear()
             fence = fence_m.group(1)
-            fence_char = fence[0]
             code_start = offset
             opened_at = i
-
-            def closed() -> bool:
-                """Whether a closing fence follows while the item or quote
-                that holds the opener is still open."""
-                for later in lines[i + 1:]:
-                    # A blank line without its quote marker ends the quote.
-                    inner = (None if "q" in path and not later.strip()
-                             else _strip_path(later, path))
-                    if inner is None:
-                        return False
-                    inner = inner[min(fence_indent,
-                                      len(inner) - len(inner.lstrip(" "))):]
-                    found = _FENCE_CLOSE_RE.match(inner)
-                    if found and found.group(1)[0] == fence_char and len(
-                            found.group(1)) >= len(fence):
-                        return True
-                return False
-
-            if path and not closed():
-                # Inside a list item or quote, an unclosed fence would take in
-                # every later block; refuse instead.
-                from gdoc.util import GdocError
-
-                raise GdocError(
-                    f"line {opened_at + 1} opens a code block inside a list item "
-                    "or quote that is never closed before the item or quote "
-                    "ends. Close it with a matching fence line at the same "
-                    "indentation. Nothing was sent.", exit_code=3,
-                )
             i += 1
             while i < len(lines):
-                code_line = _strip_path(lines[i], path, lenient=True)
-                # Fence indentation belongs to the container, not the code.
-                strip = min(fence_indent, len(code_line) - len(code_line.lstrip(" ")))
-                code_line = code_line[strip:]
-                close = _FENCE_CLOSE_RE.match(code_line)
-                if close:
-                    close_fence = close.group(1)
-                    if close_fence[0] == fence_char and len(
-                        close_fence
-                    ) >= len(fence):
-                        i += 1
-                        break
+                code_line = lines[i]
+                if path and code_line.rstrip(" \t") == lead + fence:
+                    i += 1
+                    break
+                if path:
+                    code_line = (
+                        code_line[len(lead):] if code_line.startswith(lead)
+                        else "" if code_line.rstrip(" \t") == lead.rstrip(" \t")
+                        else None)
+                close = code_line is not None and _FENCE_CLOSE_RE.match(code_line)
+                if close and close[1][0] == fence[0] and len(close[1]) >= len(fence):
+                    if path:
+                        raise _fence_spelling_error(i)
+                    i += 1
+                    break
+                if code_line is None:
+                    raise _fence_spelling_error(i)
                 styles = (
                     [StyleRange(0, len(code_line), _CODE_FONT, "text_style")]
                     if code_line else []
@@ -1223,10 +1197,15 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                     code_line, styles, {"namedStyleType": "NORMAL_TEXT"},
                 )
                 i += 1
+            else:
+                if path:
+                    raise _fence_spelling_error(opened_at)
             if offset == code_start:
                 emit_paragraph("", [], {"namedStyleType": "NORMAL_TEXT"})
             code_blocks.append(CodeBlockData(code_start, offset))
             continue
+        if _fence_open(lines[i][_LINE_MARKERS_RE.match(lines[i]).end():]):
+            raise _fence_spelling_error(i)
 
         # Table: header row + separator row + data rows. Tables may sit inside
         # quotes and, indented, inside list items; the container is recorded.
@@ -1355,7 +1334,6 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         bullet_m = _BULLET_RE.match(line)
         if bullet_m:
             item = bullet_m.group(2) or ""
-            _refuse_marker_line_fence(item, i)
             heading = _HEADING_RE.match(item)
             named = _NAMED_STYLE_RE.match(item)
             item_style = "NORMAL_TEXT"
@@ -1381,7 +1359,6 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         numbered_m = _NUMBERED_RE.match(line)
         if numbered_m:
             item = numbered_m.group(2) or ""
-            _refuse_marker_line_fence(item, i)
             heading = _HEADING_RE.match(item)
             named = _NAMED_STYLE_RE.match(item)
             item_style = "NORMAL_TEXT"
@@ -1406,8 +1383,6 @@ def parse_markdown(text: str) -> ParsedMarkdown:
 
         # Normal paragraph line. Explicit NORMAL_TEXT so inserted paragraphs
         # don't inherit the style of the paragraph at the insertion point.
-        # `1)` is not a list marker here, but other readers take it as one.
-        _refuse_marker_line_fence(line, i)
         inline_text, inline_styles = _parse_inline(line, references)
         emit_paragraph(
             inline_text, inline_styles, {"namedStyleType": "NORMAL_TEXT"},

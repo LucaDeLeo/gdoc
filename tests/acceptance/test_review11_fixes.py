@@ -55,7 +55,7 @@ def test_r3_02_a_fence_on_a_marker_line_is_refused(route, fence):
     """Round 4: refused outright, with the canonical spelling in the message,
     so no spelling can swallow later blocks."""
     _written(route, "Alpha.\n")
-    _refused(route, "write", "marker line",
+    _refused(route, "write", "code fence gdoc doesn't read",
              text=f"1. {fence}\n   npm install\n   ```\n2. Run it\n\n## Next\n")
     canonical = "1. Install\n\n   ```\n   npm install\n   ```\n2. Run it\n\n## Next\n"
     route.ok("write", text=canonical.replace("```\n   npm", "```bash\n   npm"))
@@ -115,7 +115,7 @@ def test_r3_11_nest_after_cat_does_not_warn(route):
 
 def test_f6_01_a_marker_fence_before_other_code_is_refused(route):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "marker line",
+    _refused(route, "write", "code fence gdoc doesn't read",
              text="1. ```\n\nOutside.\n\n```\ncode\n```\n\n## Next\n")
 
 

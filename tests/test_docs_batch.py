@@ -741,10 +741,11 @@ def test_non_body_rejects_paragraph_breaks_and_empty_renderings(
 
 @pytest.mark.parametrize("markdown,inserted,code_font", [
     # A single line can never be a fenced block: a closed backtick string is
-    # an inline code span and an unmatched or indented one stays literal.
+    # an inline code span and an unmatched one stays literal. An indented
+    # fence is refused (see `_fence_spelling_error`); escaped, it is text.
     ("```code``` after", "code after", True),
     ("``` not closed", "``` not closed", False),
-    ("    ```", "    ```", False),
+    ("    \\```", "    ```", False),
 ])
 def test_non_body_accepts_single_line_backtick_strings(
     mocker, markdown, inserted, code_font,

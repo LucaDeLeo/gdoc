@@ -112,7 +112,7 @@ def test_rename_image_references_changes_only_image_destinations():
     renamed = rename_image_references(source, {"old": "new"})
     listed = "- ```\n  ![](gdoc-image:old)\n  ```\n"
     # A fence on a list marker line is refused as input.
-    with pytest.raises(GdocError, match="marker line"):
+    with pytest.raises(GdocError, match="code fence gdoc doesn't read"):
         parse_markdown(listed)
     assert renamed == (
         "```\n![](gdoc-image:old)\n```\n"

@@ -197,3 +197,76 @@ def test_a_gdoc_line_in_ordinary_text_has_working_routes(route, tmp_path):
     route.ok("write", text=shown.replace("gdoc-revision:", "gdoc-revision\\:")
              + "Again.\n")
     assert _texts(route) == ["Notes.", "gdoc-revision: x", "Again."]
+
+
+@pytest.fixture(params=["cli", "mcp"])
+def either(request, monkeypatch, tmp_path):
+    return NativeRoute(request.param, monkeypatch, tmp_path)
+
+
+def _shown(route):
+    from gdoc.frontmatter import parse_frontmatter
+
+    return parse_frontmatter(route.ok("cat"))[1]
+
+
+# Code in list items and quotes, as `cat` prints it: the container's prefix
+# on every line, then the fence or the code.
+CAT_SPELLINGS = [
+    "- a\n\n  ```\n  x\n  ```\n",
+    "1. a\n\n   ```\n   x\n\n   y\n   ```\n2. b\n",
+    "- a\n  - b\n\n    ```\n    x\n    ```\n",
+    "- a\n  - b\n    - c\n\n      ```\n      x\n      ```\n",
+    "> ```\n> x\n>\n> y\n> ```\nafter\n",
+    "> > ```\n> > x\n> > ```\n",
+    "> - a\n>\n>   ```\n>   x\n>   ```\n",
+    "- a\n\n  > ```\n  > x\n  > ```\n",
+    "- a\n\n  ````\n  ```\n  x\n  ```\n  ````\n",
+]
+
+
+@pytest.mark.parametrize("markdown", CAT_SPELLINGS)
+def test_code_in_a_container_round_trips_as_cat_prints_it(either, markdown):
+    either.load(NativeDoc())
+    either.ok("cat")
+    either.ok("write", text=markdown)
+    shown = _shown(either)
+    sent = len(either.service.batches)
+    either.ok("write", text=shown)
+    assert len(either.service.batches) == sent
+    edited = shown.replace("x\n", "x2\n", 1)
+    either.ok("write", text=edited)
+    assert _shown(either) == edited
+
+
+def test_an_info_string_and_editor_trimmed_blank_lines_are_accepted(either):
+    either.load(NativeDoc())
+    either.ok("cat")
+    either.ok("write", text="1. a\n\n   ```bash\n   x\n\n   y\n   ```\n"
+                            "> ```\n> x\n>\n> y\n> ```\n")
+    assert _shown(either) == ("1. a\n\n   ```\n   x\n   \n   y\n   ```\n"
+                              "> ```\n> x\n> \n> y\n> ```\n")
+
+
+@pytest.mark.parametrize("markdown", [
+    "  ```\nx\n  ```\n",                       # indented top-level fence
+    "- ```\n  x\n  ```\n",                     # fence on a marker line
+    "1) ```\nx\n```\n",                        # `1)` marker line
+    "- a\n\n   ```\n   x\n   ```\n".replace("   ```", "    ```", 1),
+    ">```\n>x\n>```\n",                        # quote without its space
+    ">  ```\n>  x\n>  ```\n",                  # extra indent in a quote
+    "- a\n\n  ```\n  x\n   ```\n",             # closer indented differently
+    "- a\n\n  ```\n  x\n  ````\n",             # longer closer
+    "- a\n\n  ```\n  x\n",                     # never closed
+    "1. a\n\n   ```\n   x\n2. b\n\n```\n",     # closer outside the item
+    "- a\n\n  ```\nx\n  ```\n",                # code line outside the item
+    "> ```\n> x\n\n> ```\n",                   # blank line ends the quote
+    "- a\n\n  ~~~\n  x\n  ```\n  ~~~~\n",      # closer-like line in the code
+])
+def test_any_other_fence_spelling_is_refused(either, markdown):
+    either.load(NativeDoc(("p", "Alpha.")))
+    either.ok("cat")
+    code, output, error = either.call("write", text=markdown)
+    assert code != 0 and "code fence gdoc doesn't read" in output + error
+    assert "`   ```bash`" in output + error  # the accepted spelling
+    assert not either.service.batches

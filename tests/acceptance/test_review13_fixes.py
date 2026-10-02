@@ -48,7 +48,7 @@ def _refused(route, command, needle, **arguments):
 ])
 def test_r5_01_a_fence_closes_only_inside_its_container(route, markdown):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "never closed", text=markdown)
+    _refused(route, "write", "code fence gdoc doesn't read", text=markdown)
 
 
 @pytest.mark.parametrize("markdown", [
@@ -68,7 +68,7 @@ def test_r5_01_a_fence_closed_in_its_container_is_written(route, markdown):
 ])
 def test_r5_06_07_every_marker_spelling_is_refused(route, markdown):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "marker line", text=markdown)
+    _refused(route, "write", "code fence gdoc doesn't read", text=markdown)
 
 
 @pytest.mark.parametrize("prefix", [

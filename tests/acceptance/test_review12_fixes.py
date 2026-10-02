@@ -207,7 +207,7 @@ def test_f7b_any_other_number_is_refused(route, inserted):
 
 def test_an_unclosed_fence_in_an_item_is_refused(route):
     _written(route, "Alpha.\n")
-    _refused(route, "write", "never closed",
+    _refused(route, "write", "code fence gdoc doesn't read",
              text="1. a\n\n   ```\n   x\n2. b\n\n## H\n\nprose\n")
     route.ok("write", text="1. a\n\n   ```\n   x\n   ```\n2. b\n\n## H\n\nprose\n")
 
