@@ -12,46 +12,37 @@ All notable changes to `gdoc` are documented here. This project follows
   for one share. The MCP share tool takes the matching option. Combining
   `--no-notify` with `--domain` or `--anyone` (link shares, which never
   send email) is rejected with exit 3 before any API call.
+- **Native comment and suggestion threads (Docs API developer preview).**
+  Three new commands, `suggestions`, `suggestion` and `edit-comment`, plus
+  native options on `comment`, `reply` and `delete-comment`:
+  - `suggestions DOC [SUGGESTION_ID] [--all]` lists Google's suggestion
+    threads, or shows one, with the tab and UTF-16 range(s) each touches
+    (derived from the `SUGGESTIONS_INLINE` structure, kept apart from the
+    raw thread in `--json`).
+  - `suggestion DOC ID --accept | --reject | --delete [--force]` decides
+    one suggestion. Accept is always pinned to `requiredRevisionId`;
+    reject/delete are pinned when the read returned a revision.
+  - `comment --quote TEXT --assign EMAIL` creates an assigned anchored
+    comment; `reply --reassign EMAIL` hands an assigned thread on and
+    refuses (exit 3) before writing when the head post has no assignee.
+  - `reply`, `edit-comment DOC THREAD_ID POST_ID TEXT` and
+    `delete-comment DOC THREAD_ID POST_ID` act on suggestion threads when
+    `THREAD_ID` starts with `suggest.`. `delete-comment` without `POST_ID`
+    still deletes the whole comment through Drive.
 
-- **Suggestion threads: `suggestions`, `suggestion-info`,
-  `accept-suggestion`, `reject-suggestion`, `delete-suggestion`.** Reads
-  Google's native suggestion threads through the Docs API developer
-  preview (`documents.get?commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED`,
-  sent over the authorized transport because the public Discovery document
-  doesn't list the parameter) and decides one suggestion per command with
-  `acceptSuggestion`/`rejectSuggestion`/`deleteSuggestion`. Accept is
-  always pinned to `requiredRevisionId`; reject/delete are pinned when the
-  read returned a revision and go unpinned only when it did not (a
-  suggestion's commenter-author may not receive one). Each decision
-  requires `commentUpdateState: ALL_SAVED` and its ID in
-  `suggestionResponses`, then reads the document back and only reports
-  `OK` when the thread is in the requested state. Threads carry no
-  range, so each command derives the tab and UTF-16 range(s) a
-  suggestion touches from the `SUGGESTIONS_INLINE` structure
-  (`suggestedInsertionIds`, `suggestedDeletionIds`, `suggested*Changes`,
-  header/footer/footnote segment IDs) and reports them separately from
-  the raw thread. No Drive fallback: a project without preview access
-  gets an explicit error and no mutation. Permission failures name the
-  rule Google applies (accept: edit access; reject: edit access or author;
-  delete: author). `delete-suggestion` uses the standard destructive
-  confirmation / `--force`. All five are exposed over MCP.
-
-
-- **Native comment assignment and post operations (developer preview).**
-  `comment --quote TEXT --assign EMAIL` creates an anchored comment assigned
-  to a user (`insertComment.assigneeEmailAddress`; requires `--quote`, no
-  Drive fallback). `reply --reassign EMAIL` hands an already-assigned thread
-  on and refuses (exit 3) before writing when the thread's head post has
-  no assignee;
-  `reply --suggestion` replies on a suggestion thread. New `edit-comment`,
-  `edit-suggestion-reply`, `delete-reply` and `delete-suggestion-reply`
-  commands edit or remove a single post you wrote (`updateCommentPost`,
-  `deleteCommentReply`), with pre-write refusals for a suggestion's
-  generated head post and for action/assignment replies. Each native write
-  requires `commentUpdateState: ALL_SAVED` and is verified by reading the
-  thread back. Ordinary comment reads and writes, and the awareness system,
-  stay on the Drive API. The four new commands are exposed over MCP as
-  writes; the delete commands require `force: true` there.
+  Threads are read with `documents.get?commentsViewMode=
+  COMMENTS_VIEW_MODE_INCLUDED` over the authorized transport (the public
+  Discovery document doesn't list the parameter). Every write requires
+  `commentUpdateState: ALL_SAVED`, then reads the thread back and prints
+  `OK` only when it shows the requested state; when that read fails, the
+  error says the write may have landed. Pre-write refusals cover unknown
+  or already-decided suggestions, a suggestion's generated head post,
+  action/assignment replies and other users' posts. There is no Drive
+  fallback: a project without preview access gets an explicit error and
+  no change. Ordinary comment reads and writes and the awareness system
+  stay on Drive. Over MCP, `suggestions` is read-only, `suggestion` and
+  `edit-comment` are writes, and `suggestion --delete` and
+  `delete-comment` require `force: true`.
 
 ## [0.22.0] — 2026-09-28
 

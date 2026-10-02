@@ -37,13 +37,16 @@ gdoc comment DOC_ID "comment text"           # Add unanchored comment
 gdoc reply DOC_ID COMMENT_ID "reply text"    # Reply to a comment
 gdoc comment DOC_ID "text" --quote "doc text" --assign EMAIL   # Assigned anchored comment (preview)
 gdoc reply DOC_ID COMMENT_ID "text" --reassign EMAIL          # Reassign an assigned thread (preview)
-gdoc reply DOC_ID SUGGESTION_ID "text" --suggestion           # Reply on a suggestion thread (preview)
-gdoc edit-comment DOC_ID COMMENT_ID POST_ID "new text"        # Edit a post you wrote (preview)
-gdoc edit-suggestion-reply DOC_ID SUGGESTION_ID POST_ID "new"  # Same, on a suggestion thread (preview)
-gdoc delete-reply DOC_ID COMMENT_ID POST_ID --force           # Delete a reply you wrote (preview)
-gdoc delete-suggestion-reply DOC_ID SUGGESTION_ID POST_ID --force  # Same, on a suggestion thread (preview)
+gdoc reply DOC_ID suggest.xxx "text"                          # Reply on a suggestion thread (preview)
+gdoc edit-comment DOC_ID THREAD_ID POST_ID "new text"         # Edit a post you wrote; THREAD_ID may be suggest.xxx (preview)
+gdoc delete-comment DOC_ID COMMENT_ID --force                 # Delete a whole comment
+gdoc delete-comment DOC_ID THREAD_ID POST_ID --force          # Delete one reply you wrote (preview)
 gdoc resolve DOC_ID COMMENT_ID              # Resolve a comment
 gdoc reopen DOC_ID COMMENT_ID               # Reopen a resolved comment
+
+gdoc suggestions DOC_ID                      # List open suggestion threads (--all: decided too; preview)
+gdoc suggestions DOC_ID suggest.xxx          # One suggestion thread in full (preview)
+gdoc suggestion DOC_ID suggest.xxx --accept  # Or --reject, or --delete [--force] (preview)
 
 gdoc info DOC_ID                             # Title, owner, last modified, word count
 gdoc share DOC_ID EMAIL [--role reader|writer|commenter] [--no-notify]  # --no-notify skips Google's email
