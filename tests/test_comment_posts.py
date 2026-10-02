@@ -1149,6 +1149,55 @@ class TestCmdReplyNative:
 # --- post-write Drive version lookup is best-effort -------------------------
 
 
+class TestStateWriteBestEffort:
+    """A verified native write must not fail on persisting awareness state:
+    that would invite a duplicate retry."""
+
+    @pytest.fixture(autouse=True)
+    def _patches(self):
+        with patch("gdoc.notify.pre_flight", return_value=None), \
+                patch("gdoc.api.drive.get_file_version",
+                      return_value={"version": 7}), \
+                patch("gdoc.state.update_state_after_command",
+                      side_effect=OSError("read-only file system")):
+            yield
+
+    @patch("gdoc.api.docs.add_comment_reply", return_value=_post("p9", "hi"))
+    def test_native_reply(self, _add, capsys):
+        args = _make_args("reply", comment_id="suggest.s1", text="hi", reassign=None)
+        assert cmd_reply(args) == 0
+        out, err = capsys.readouterr()
+        assert "OK reply" in out and "not persisted" in err
+
+    @patch("gdoc.api.docs.update_comment_post")
+    @patch("gdoc.api.docs.get_document_threads")
+    def test_edit(self, mock_read, _upd, capsys):
+        mock_read.return_value = _doc(
+            comments=[_comment_thread("c1", replies=[_post("r1")])]
+        )
+        args = _make_args("edit-comment", thread_id="c1", post_id="r1", text="n")
+        assert cmd_edit_comment(args) == 0
+        assert "not persisted" in capsys.readouterr().err
+
+    @patch("gdoc.api.docs.delete_comment_reply")
+    @patch("gdoc.api.docs.get_document_threads")
+    def test_delete_post(self, mock_read, _del, capsys):
+        mock_read.return_value = _doc(
+            comments=[_comment_thread("c1", replies=[_post("r1")])]
+        )
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1",
+                          force=True)
+        assert cmd_delete_comment(args) == 0
+        assert "not persisted" in capsys.readouterr().err
+
+    @patch("gdoc.api.docs.insert_comment", return_value="c_assigned")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_TABS_DOC)
+    def test_assigned_insert(self, _get, _ins, capsys):
+        args = _make_args("comment", text="p", quote="quick", assign=ME)
+        assert cmd_comment(args) == 0
+        assert "not persisted" in capsys.readouterr().err
+
+
 @patch("gdoc.state.update_state_after_command")
 @patch("gdoc.notify.pre_flight", return_value=None)
 @patch("gdoc.api.drive.get_file_version", side_effect=GdocError("API error (503)"))

@@ -1146,6 +1146,28 @@ class TestCmdSuggestionInfo:
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_document_threads")
+    def test_verbose_shows_replies(self, mock_get, _pf, _u, capsys):
+        # Live shapes: a text reply, and the action post Google adds on accept.
+        thread = {**_thread("suggest.v"), "replies": [
+            {"postId": "AAAr1", "content": "why this?",
+             "author": {"displayName": "Ann", "me": False},
+             "createTime": "2026-10-02T14:30:00Z"},
+            {"postId": "AAAr2", "author": None,
+             "createTime": "2026-10-02T14:31:00Z", "suggestionAction": "ACCEPT"},
+            {"postId": "AAAr3", "deleted": True,
+             "author": {"displayName": "Ann"}, "createTime": "t"},
+        ]}
+        mock_get.return_value = {**_DOC, "suggestions": [thread]}
+        cmd_suggestions(_args("suggestions", suggestion_id="suggest.v", verbose=True))
+        out = capsys.readouterr().out
+        assert '  -> Ann 2026-10-02T14:30:00Z [AAAr1]: "why this?"\n' in out
+        assert "  -> unknown 2026-10-02T14:31:00Z [AAAr2]: [accept]\n" in out
+        assert "  -> Ann t [AAAr3]: [deleted]\n" in out
+        assert " replies" not in out  # the posts replace the count
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
     def test_plain(self, _get, _pf, _u, capsys):
         cmd_suggestions(

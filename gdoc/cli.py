@@ -2962,12 +2962,15 @@ def cmd_comment(args) -> int:
             suffix = f" (anchored, assigned to {assignee})"
         print(f"OK comment #{new_id}{suffix}")
 
-    from gdoc.state import update_state_after_command
-    update_state_after_command(
-        doc_id, change_info, command="comment", quiet=quiet,
-        command_version=command_version,
+    state_kwargs = dict(
+        command="comment", quiet=quiet, command_version=command_version,
         comment_state_patch={"add_comment_id": new_id},
     )
+    if anchored:
+        _record_native_write(doc_id, change_info, **state_kwargs)
+    else:
+        from gdoc.state import update_state_after_command
+        update_state_after_command(doc_id, change_info, **state_kwargs)
 
     return 0
 
@@ -2992,6 +2995,26 @@ def _post_write_version(doc_id: str) -> int | None:
             file=sys.stderr,
         )
         return None
+
+
+def _record_native_write(doc_id: str, change_info, **kwargs) -> None:
+    """Awareness-state update after a verified native write, best-effort.
+
+    The result is already printed; an unwritable state directory must not
+    turn it into a failure that invites a duplicate retry.
+    """
+    import sys
+
+    from gdoc.state import update_state_after_command
+
+    try:
+        update_state_after_command(doc_id, change_info, **kwargs)
+    except Exception as e:  # noqa: BLE001 - post-mutation local state
+        print(
+            f"WARN: write succeeded but awareness state was not persisted "
+            f"({type(e).__name__}: {e})",
+            file=sys.stderr,
+        )
 
 
 def _native_thread_or_fail(doc_id: str, thread_id: str, suggestion: bool) -> dict:
@@ -3077,12 +3100,11 @@ def _native_reply(
         suffix = f" (reassigned to {reassign})" if reassign else ""
         print(f"OK reply on {what}#{thread_id}{suffix}")
 
-    from gdoc.state import update_state_after_command
     # Comment-thread IDs are shared with the Drive comments API (the
     # awareness system tracks them); suggestion threads are not Drive
     # comments, so only the version is recorded for them.
     patch = None if suggestion else {"add_comment_id": thread_id}
-    update_state_after_command(
+    _record_native_write(
         doc_id, change_info, command="reply", quiet=quiet,
         command_version=command_version, comment_state_patch=patch,
     )
@@ -3328,9 +3350,8 @@ def cmd_edit_comment(args) -> int:
     else:
         print(f"OK updated post {post_id} on #{thread_id}")
 
-    from gdoc.state import update_state_after_command
     patch = None if suggestion else {"add_comment_id": thread_id}
-    update_state_after_command(
+    _record_native_write(
         doc_id, change_info, command=args.command, quiet=quiet,
         command_version=command_version, comment_state_patch=patch,
     )
@@ -3411,9 +3432,8 @@ def _cmd_delete_post(args, suggestion: bool) -> int:
     else:
         print(f"OK deleted reply {post_id} from #{thread_id}")
 
-    from gdoc.state import update_state_after_command
     patch = None if suggestion else {"add_comment_id": thread_id}
-    update_state_after_command(
+    _record_native_write(
         doc_id, change_info, command=args.command, quiet=quiet,
         command_version=command_version, comment_state_patch=patch,
     )
@@ -4000,6 +4020,22 @@ def _print_suggestion_thread(summary: dict, locations: list[dict], mode: str,
         print(f"  {summary['replies']} {label}")
 
 
+def _format_suggestion_reply(post: dict) -> str:
+    """One reply line: author, time, post ID (for edit-/delete-comment), body."""
+    author = post.get("author") or {}
+    name = author.get("emailAddress") or author.get("displayName") or "unknown"
+    head = f"{name} {post.get('createTime', '')} [{post.get('postId', '')}]"
+    if post.get("deleted"):
+        return f"{head}: [deleted]"
+    content = post.get("content")
+    if content:
+        return f'{head}: "{content}"'
+    action = post.get("suggestionAction") or ""
+    if action and not action.startswith("NO_"):
+        return f"{head}: [{action.lower()}]"
+    return head
+
+
 def cmd_suggestions(args) -> int:
     """Handler for `gdoc suggestions`: list native suggestion threads, or show one."""
     include_all = getattr(args, "all", False)
@@ -4112,7 +4148,12 @@ def _show_suggestion(args) -> int:
             print(f"location\t{_plain_suggestion_location(loc)}")
         print(f"replies\t{summary['replies']}")
     else:
-        _print_suggestion_thread(summary, locations, mode)
+        _print_suggestion_thread(
+            summary, locations, mode, replies_label=mode != "verbose",
+        )
+        if mode == "verbose":
+            for post in thread.get("replies") or thread.get("posts") or []:
+                print(f"  -> {_format_suggestion_reply(post)}")
 
     from gdoc.state import update_state_after_command
     update_state_after_command(
