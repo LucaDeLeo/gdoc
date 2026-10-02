@@ -187,7 +187,9 @@ def insert_comment(
         # rather than echoing the requested address back as fact.
         doc = _read_back_threads(doc_id, f"assigned comment #{comment_id}")
         created = find_thread(doc, comment_id, suggestion=False)
-        if created is None or head_post_assignee(created) != assignee_email:
+        if created is None or not _same_email(
+            head_post_assignee(created), assignee_email,
+        ):
             raise GdocError(
                 f"comment #{comment_id} was created but the read-back does "
                 f"not show it assigned to {assignee_email}; inspect the thread"
@@ -240,17 +242,19 @@ def _preview_parse_error(e: HttpError) -> bool:
 
 
 def _http_error_message(e: HttpError) -> str:
-    """Google's human-readable error message from an HttpError body."""
+    """Google's human-readable error message from an HttpError body, or ""."""
     try:
         import json
 
         payload = json.loads(e.content.decode("utf-8"))
-        msg = payload.get("error", {}).get("message", "")
-        if msg:
-            return msg
-    except (ValueError, AttributeError, UnicodeDecodeError):
-        pass
-    return e.reason or str(e)
+        return str(payload.get("error", {}).get("message", "") or "")
+    except (ValueError, AttributeError, TypeError, UnicodeDecodeError):
+        return ""
+
+
+def _same_email(saved, requested: str) -> bool:
+    """Email addresses compare case-insensitively; a non-string never matches."""
+    return isinstance(saved, str) and saved.casefold() == requested.casefold()
 
 
 def _documents_get_raw(service, doc_id: str, params: dict) -> dict:
@@ -486,7 +490,7 @@ def _run_thread_request(doc_id: str, request: dict) -> dict:
             # into a generic permission error.
             raise GdocError(
                 f"Docs API rejected the request ({status}): "
-                f"{_http_error_message(e)}"
+                f"{_http_error_message(e) or e.reason or e}"
             )
         if status == 404:
             raise GdocError(
@@ -551,7 +555,9 @@ def add_comment_reply(
             f"reply #{post_id} was reported saved but is not on "
             f"{thread_kind(suggestion)} {thread_id}; inspect the thread"
         )
-    if assignee_email and saved.get("assigneeEmail") != assignee_email:
+    if assignee_email and not _same_email(
+        saved.get("assigneeEmail"), assignee_email,
+    ):
         raise GdocError(
             f"reply #{post_id} was saved but the read-back does not show "
             f"the thread reassigned to {assignee_email}; inspect the thread"
@@ -3255,7 +3261,7 @@ def decide_suggestion(
                 f"Permission denied: cannot {decision} suggestion "
                 f"{suggestion_id} ({decision} requires {rule})"
             )
-        message = _error_message(e)
+        message = _http_error_message(e)
         if status == 404 and "uggestion" in message:
             # Observed live: "Suggestion with ID suggest.x does not exist."
             raise GdocError(
@@ -3298,13 +3304,3 @@ def decide_suggestion(
             f"under {key}; re-run `gdoc suggestions --all` to see its state"
         )
     return result
-
-
-def _error_message(e: HttpError) -> str:
-    """Google's error message from the response body, or ""."""
-    try:
-        import json
-
-        return str(json.loads(e.content.decode("utf-8"))["error"]["message"])
-    except Exception:  # noqa: BLE001 - best effort decoration only
-        return ""

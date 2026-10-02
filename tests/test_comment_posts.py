@@ -306,6 +306,17 @@ class TestInsertCommentAssignee:
 
     @patch("gdoc.api.docs.get_document_threads")
     @patch("gdoc.api.docs.get_docs_service")
+    def test_assignee_read_back_ignores_case(self, mock_svc, mock_read):
+        # Google may store a canonical lowercase address; a verified write
+        # must not be reported as failed (and invite a duplicate retry).
+        mock_svc.return_value = _mock_docs_service(_INSERT_OK)
+        mock_read.return_value = _doc(comments=[_comment_thread("c_new", assignee=ME)])
+        assert insert_comment(
+            "abc123", "hi", 5, 9, assignee_email=ME.upper(),
+        ) == "c_new"
+
+    @patch("gdoc.api.docs.get_document_threads")
+    @patch("gdoc.api.docs.get_docs_service")
     def test_no_assignee_leaves_request_unchanged(self, mock_svc, mock_read):
         service = _mock_docs_service(_INSERT_OK)
         mock_svc.return_value = service
@@ -445,6 +456,20 @@ class TestAddCommentReply:
         assert _batch_body(service)["requests"][0]["addCommentReply"]["post"] == {
             "content": "t", "assigneeEmail": OTHER,
         }
+
+    @patch("gdoc.api.docs.get_document_threads")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_reassign_read_back_ignores_case(self, mock_svc, mock_read):
+        mock_svc.return_value = _mock_docs_service(
+            _reply_ok("p_new", "t", assignee=OTHER)
+        )
+        mock_read.return_value = _doc(comments=[_comment_thread(
+            "c1", assignee=ME, replies=[_post("p_new", "t", assignee=OTHER)],
+        )])
+        saved = add_comment_reply(
+            "abc123", "c1", content="t", assignee_email=OTHER.upper(),
+        )
+        assert saved["postId"] == "p_new"
 
     @patch("gdoc.api.docs.get_document_threads")
     @patch("gdoc.api.docs.get_docs_service")

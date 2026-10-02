@@ -297,9 +297,11 @@ enrolled Cloud project and fail with a message naming the reason otherwise:
   `suggest.` (as `gdoc suggestions` prints them); comment IDs never contain
   a dot.
 - `edit-comment` changes the text of a post you wrote; `delete-comment DOC
-  THREAD_ID POST_ID` removes one reply you wrote. `POST_ID` is the reply ID
-  shown by `comment-info` (native post IDs and Drive reply IDs are the same;
-  a comment's head post ID equals its comment ID). A suggestion's generated head post cannot be edited,
+  THREAD_ID POST_ID` removes one reply you wrote. `POST_ID` is a reply's
+  `id` in `comment-info --json` (native post IDs and Drive reply IDs are the
+  same; a comment's head post ID equals its comment ID), or the `[ID]` on
+  each reply in `suggestions DOC SUGGESTION_ID --verbose`. A suggestion's
+  generated head post cannot be edited,
   replies that carry a resolve/reopen action or an assignment cannot be
   deleted, and an already-deleted post is refused — all before any write.
 
