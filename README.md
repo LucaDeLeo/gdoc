@@ -743,11 +743,16 @@ letters and digits, or a numbered-list marker (`gdoc: ID`, `> - gdoc-revision:
 R`, `1. gdoc: ID`, `<!-- gdoc: ID`), read in any case and ignoring invisible
 characters and accents. This catches a pulled header that was quoted, wrapped
 in a code block or placed after other text, whose stale-file checks couldn't
-run. It also refuses ordinary text with such a line, including `cat` output of
-a doc that has one. To write it, pull the tab and edit the pulled file, or
-escape the colon (`gdoc\: a CLI` reads back as `gdoc: a CLI`). Other front
-matter, a body that opens with a rule, and `cat`'s empty `---`/`---` block
-before such a body are unaffected.
+run. The refusal names the line that stops the header being read (such as a
+`tags:` list or a blank line an editor added) or says that text comes before
+it. Pull the tab again and copy your edits into the fresh file, or fix that
+line; either way the stale-file checks run. The refusal also covers ordinary
+text with such a line, including `cat` output of a doc that has one: write it
+from a fresh pull, or, when the file holds no `gdoc-revision` or
+`gdoc-version` key (keys only `pull` writes), with `write --force` (MCP
+`force: true`), which writes it as it is. Other front matter, a body that
+opens with a rule, and `cat`'s empty `---`/`---` block before such a body are
+unaffected.
 
 ## Spreadsheets
 

@@ -32,8 +32,11 @@ All notable changes to `gdoc` are documented here. This project follows
   MCP `write`, instead of writing a quoted, wrapped or prefixed stale header
   without its stale-file checks. The sync hook pushes only files that start
   with such a header and skips every other file.
-  Ordinary text with such a line is refused too; a fresh pull, or escaping the
-  colon (`gdoc\:`), writes it. Other front matter is unaffected.
+  The refusal names the line that stops the header being read, and its
+  advice (pull again, or fix that line) keeps the stale-file checks. Ordinary
+  text with such a line is refused too; a fresh pull writes it, and so does
+  `--force` when the file holds no `gdoc-revision` or `gdoc-version` key.
+  Other front matter is unaffected.
 - A file stamped only with `gdoc-version` whose body matches the doc is
   `already in sync`, as in 0.21.1; the pull hook blocks edits to a stale one
   and re-pulls a matching one.

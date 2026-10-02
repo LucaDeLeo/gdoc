@@ -2067,21 +2067,28 @@ def _refuse_stale_version_stamp(metadata: dict, doc_id: str, file_path: str,
     return None
 
 
-def _refuse_unreadable_provenance(content: str) -> None:
+def _refuse_unreadable_provenance(content: str, force: bool = False) -> None:
     """Refuse input holding a gdoc header line without starting with a
     header gdoc can read: its revision checks couldn't run, and the header
-    itself would become text in the tab. Shared by write, push and the sync
-    hook."""
+    itself would become text in the tab. Shared by write and push. The
+    advice keeps those checks: pull again, or fix what stops the header
+    being read. Only a file holding no key that `pull` alone writes may be
+    written as it is, with *force*."""
     from gdoc.frontmatter import provenance_header_problem
 
     problem = provenance_header_problem(content)
-    if problem:
-        raise GdocError(
-            f"this file may be a pulled file: {problem}. Nothing was sent. "
-            "Pull the tab again and copy your edits into the fresh file, or "
-            "delete the stray header lines. If the line is meant as text, "
-            "escape its colon (`gdoc\\:`).", exit_code=3,
-        )
+    if not problem:
+        return
+    where, fix, stamped = problem
+    if force and not stamped:
+        return
+    raise GdocError(
+        f"this file may be a pulled file whose header gdoc can't read: "
+        f"{where}. Nothing was sent. Pull the tab again and copy your edits "
+        f"into the fresh file{f', or {fix}' if fix else ''}."
+        + ("" if stamped else " If the file was never pulled, `write --force`"
+           " (MCP `force: true`) writes it as it is."), exit_code=3,
+    )
 
 
 def _report_in_sync(args, doc_id: str, match: dict) -> int:
@@ -2122,7 +2129,7 @@ def cmd_write(args) -> int:
     # document and tab; writing it elsewhere must be explicit.
     from gdoc.frontmatter import parse_frontmatter
     raw = content
-    _refuse_unreadable_provenance(raw)
+    _refuse_unreadable_provenance(raw, getattr(args, "force", False))
     metadata, content = parse_frontmatter(content)
     pulled_doc = metadata.get("gdoc")
     if pulled_doc and _resolve_doc_id(pulled_doc) != doc_id:

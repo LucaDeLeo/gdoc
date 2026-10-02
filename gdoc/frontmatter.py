@@ -109,6 +109,13 @@ def _gdoc_key_lines(text: str) -> list[str]:
             if _GDOC_KEY_LINE_RE.match(line)]
 
 
+def _pulled_line(line: str) -> bool:
+    """Whether *line* can stand in a header as `pull` writes it: a key line,
+    whose gdoc key, if any, is spelled in lower case at the line start."""
+    return bool(line and _KEY_LINE_RE.match(line)
+                and (not _gdoc_key_lines(line) or _PULLED_KEY_RE.match(line)))
+
+
 def _pulled_header(content: str) -> bool:
     """Whether *content* starts, after at most one byte-order mark, with a
     header as `pull` writes it: `---`, `key: value` lines naming the document
@@ -118,13 +125,16 @@ def _pulled_header(content: str) -> bool:
     match = _FRONTMATTER_RE.match(content)
     if not match or not parse_frontmatter(content)[0].get("gdoc"):
         return False
-    return all(
-        line and _KEY_LINE_RE.match(line)
-        and (not _gdoc_key_lines(line) or _PULLED_KEY_RE.match(line))
-        for line in re.split(r"\r?\n", match[1]))
+    return all(_pulled_line(line) for line in re.split(r"\r?\n", match[1]))
 
 
-def provenance_header_problem(content: str) -> str | None:
+# A key line only `pull` writes, so a file holding one was pulled.
+_STAMP_KEY_LINE_RE = re.compile(
+    r"(?:[\W_]|\d+[.)])*gdoc-(?:revision|version)[\"']?[ \t]*:")
+
+
+def provenance_header_problem(
+        content: str) -> tuple[str, str | None, bool] | None:
     """Why *content* can't be written safely as a pulled file, or None.
 
     A file that starts with a header as `pull` writes it (see
@@ -134,16 +144,48 @@ def provenance_header_problem(content: str) -> str | None:
     backticks, `<!--`) and ignoring case, invisible characters and accents,
     is refused: it may be a pulled file whose header gdoc can't read, so its
     stale-file checks couldn't run and the header would be written as text.
-    Such a line in ordinary text is refused too; escaping its colon
-    (`gdoc\\:`) or writing from a fresh pull avoids that.
+
+    Returns where the header stops being read, the fix that makes it read
+    (None for text before the header in a file that may never have been
+    pulled, where that text may be the document's own), and whether the file
+    holds a `gdoc-revision` or `gdoc-version` key, which only `pull` writes.
     """
     if _pulled_header(content):
         return None
     found = _gdoc_key_lines(content)
     if not found:
         return None
-    return (f"it has a gdoc header line ({found[0].strip()[:60]!r}) but doesn't "
-            "start with a header gdoc can read")
+    stamped = any(_STAMP_KEY_LINE_RE.match(line) for line in found)
+    lines = re.split(r"\r?\n", content.removeprefix("\ufeff"))
+    if len(lines) > 1 and not lines[-1]:
+        lines.pop()  # The final line break ends a line; it starts none.
+    first = next((number for number, line in enumerate(lines, 1)
+                  if _gdoc_key_lines(line)), 1)
+    if lines[0] == "---":
+        for number, line in enumerate(lines[1:], 2):
+            if line == "---":
+                break
+            if not _pulled_line(line):
+                return (f"line {number} ({line[:60]!r}) stops the header "
+                        "being read", f"correct line {number} to `---`"
+                        if line.strip() == "---" else
+                        f"correct or remove line {number}", stamped)
+        else:
+            return ("the header has no closing `---` line",
+                    "restore the closing `---` line", stamped)
+        if first < number:  # Such as `gdoc:` naming no document.
+            return f"gdoc can't read the header ending at line {number}", None, stamped
+    if first == 1:
+        return (f"line 1 ({lines[0].strip()[:60]!r}) has no `---` line above "
+                "it", "restore the header's opening `---`" if stamped else None,
+                stamped)
+    if first == 2 and lines[0].strip(" \t\ufeff") == "---":
+        return (f"line 1 ({lines[0][:60]!r}) stops the header being read",
+                "correct line 1 to `---`", stamped)
+    return (f"text comes before its gdoc header line, line {first} "
+            f"({lines[first - 1].strip()[:60]!r})",
+            "delete the text above the header's opening `---`"
+            if stamped else None, stamped)
 
 
 def add_frontmatter(body: str, metadata: dict) -> str:

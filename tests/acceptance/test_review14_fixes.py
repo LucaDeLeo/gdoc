@@ -198,7 +198,8 @@ def test_text_without_a_gdoc_key_line_is_ordinary(text):
 def test_a_gdoc_line_in_ordinary_text_has_working_routes(route, tmp_path):
     """The accepted over-refusal: a tab whose text holds a line like
     `gdoc-revision: x`. `cat`'s output is refused as a write without a
-    header; writing from a fresh pull, or escaping the colon, works."""
+    header; writing from a fresh pull works, and so does escaping the
+    colon."""
     route.load(NativeDoc(("p", "Notes."), ("p", "gdoc-revision: x")))
     shown = route.ok("cat")
     code, output, error = route.call("write", text=shown + "More.\n")
