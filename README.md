@@ -612,7 +612,8 @@ structure may read differently:
   the closing one carries the container's prefix: the item's content indent
   (`1. Install` / blank / `` ```bash `` / `make` / `` ``` ``, each code line
   indented three spaces) or the quote's `> `. The closing fence repeats the
-  opening one. Any other line that starts with three or more backticks or
+  opening backticks or tildes, without the info string (`` ```bash `` closes
+  with `` ``` ``). Any other line that starts with three or more backticks or
   tildes after spaces, quote markers and list markers (an indented top-level
   fence, `` 1. ``` ``, `` >``` ``, a fence after a line the item doesn't
   indent) is refused with nothing sent, and the message shows the accepted

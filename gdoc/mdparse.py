@@ -247,12 +247,14 @@ def _fence_spelling_error(line_index: int):
     from gdoc.util import GdocError
 
     return GdocError(
-        f"line {line_index + 1} has a code fence gdoc doesn't read. Write "
-        "fences as `cat` prints them: at the top level from column 0; in a "
-        "list item or quote, on lines of their own after the item's indent "
-        "or the quote's `> `, with the code and the closing fence spelled "
-        "the same way (`1. Install` / blank / `   ```bash` / `   make` / "
-        "`   ````, or `> ```` / `> make` / `> ````). Nothing was sent.",
+        f"line {line_index + 1} (counted below any `---` header) is at or "
+        "after a code fence gdoc doesn't read. Write fences as `cat` prints "
+        "them: at the top level from column 0; in a list item or quote, on "
+        "lines of their own after the item's indent or the quote's `> `, "
+        "with the code and the closing fence spelled the same way (`1. "
+        "Install` / blank / `   ```bash` / `   make` / `   ````, or `> ```` / "
+        "`> make` / `> ````). The closing fence repeats the opening backticks "
+        "or tildes, without the info string. Nothing was sent.",
         exit_code=3,
     )
 
