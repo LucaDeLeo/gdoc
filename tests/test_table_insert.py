@@ -8,6 +8,7 @@ import pytest
 from gdoc.api.docs import (
     _find_table_cell_indices,
     _insert_table,
+    replace_formatted,
 )
 from gdoc.cli import cmd_edit
 from gdoc.mdparse import TableData
@@ -38,6 +39,7 @@ def _make_document_with_table(table_start=5, rows=2, cols=2):
         table_rows.append({"tableCells": cells})
 
     return {
+        "revisionId": "rev1",
         "body": {
             "content": [
                 {
@@ -100,8 +102,10 @@ class TestInsertTable:
         # Then get: returns doc with table
         doc = _make_document_with_table(table_start=5, rows=2, cols=2)
         mock_service.documents().get().execute.return_value = doc
-        # batchUpdate returns {} for both calls
-        mock_service.documents().batchUpdate().execute.return_value = {}
+        # Both writes return the revision used by the synthetic read-back.
+        mock_service.documents().batchUpdate().execute.return_value = {
+            "writeControl": {"requiredRevisionId": "rev1"},
+        }
 
         table = TableData(
             rows=[["H1", "H2"], ["a", "b"]],
@@ -121,7 +125,9 @@ class TestInsertTable:
 
         doc = _make_document_with_table(table_start=5, rows=2, cols=2)
         mock_service.documents().get().execute.return_value = doc
-        mock_service.documents().batchUpdate().execute.return_value = {}
+        mock_service.documents().batchUpdate().execute.return_value = {
+            "writeControl": {"requiredRevisionId": "rev1"},
+        }
 
         table = TableData(
             rows=[["H1", "H2"], ["a", "b"]],
@@ -142,7 +148,9 @@ class TestInsertTable:
 
         doc = _make_document_with_table(table_start=5, rows=1, cols=2)
         mock_service.documents().get().execute.return_value = doc
-        mock_service.documents().batchUpdate().execute.return_value = {}
+        mock_service.documents().batchUpdate().execute.return_value = {
+            "writeControl": {"requiredRevisionId": "rev1"},
+        }
 
         # One row with one empty cell
         table = TableData(
@@ -168,13 +176,13 @@ class TestInsertTable:
 
 
 class TestEditTableRestriction:
-    @patch("gdoc.api.docs.replace_formatted")
-    @patch("gdoc.api.docs.find_text_in_document")
-    @patch("gdoc.api.docs.get_document")
-    @patch("gdoc.notify.pre_flight", return_value=None)
-    def test_tables_blocked_with_all(
-        self, _pf, mock_get_doc, mock_find, mock_replace,
-    ):
+    # The guard lives in replace_formatted (it needs the per-match contexts),
+    # so run the real function against a mocked Docs service.
+    def test_tables_blocked_with_all(self, mocker):
+        mock_svc = mocker.patch("gdoc.api.docs.get_docs_service")
+        mock_find = mocker.patch("gdoc.api.docs.find_text_in_document")
+        mock_get_doc = mocker.patch("gdoc.api.docs.get_document_with_tabs")
+        mocker.patch("gdoc.notify.pre_flight", return_value=None)
         mock_get_doc.return_value = {"revisionId": "rev1", "body": {}}
         mock_find.return_value = [
             {"startIndex": 1, "endIndex": 5},
@@ -199,6 +207,42 @@ class TestEditTableRestriction:
 
         with pytest.raises(GdocError, match="tables not supported"):
             cmd_edit(args)
+        mock_svc.return_value.documents.return_value.batchUpdate.assert_not_called()
+
+    def test_single_match_table_takes_structural_path(self, mocker):
+        # A Markdown table replacing one paragraph is structural: it must
+        # bypass the contextual wording path (which would refuse on the
+        # paragraph count) and reach _insert_table, as on main.
+        mock_svc = mocker.patch("gdoc.api.docs.get_docs_service")
+        mock_insert = mocker.patch("gdoc.api.docs._insert_table")
+        content, index = [], 1
+        for text in ("Intro", "placeholder", "Outro"):
+            end = index + len(text) + 1
+            content.append({
+                "startIndex": index, "endIndex": end,
+                "paragraph": {
+                    "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+                    "elements": [{
+                        "startIndex": index, "endIndex": end,
+                        "textRun": {"content": text + "\n", "textStyle": {}},
+                    }],
+                },
+            })
+            index = end
+        match = {"startIndex": 7, "endIndex": 18}
+
+        count = replace_formatted(
+            "doc1", [match], "| A |\n|---|\n| 1 |", "rev1",
+            body={"content": content},
+        )
+
+        assert count == 1
+        batch = mock_svc.return_value.documents.return_value.batchUpdate
+        assert batch.call_args.kwargs["body"]["requests"] == [
+            {"deleteContentRange": {"range": match}},
+        ]
+        assert mock_insert.call_count == 1
+        assert mock_insert.call_args.args[:2] == ("doc1", 7)
 
 
 class TestFindTableCellIndicesBody:
@@ -223,13 +267,16 @@ class TestInsertTableTabId:
         doc = _make_document_with_table(table_start=5, rows=2, cols=2)
         # When tab_id is provided, _insert_table fetches with includeTabsContent
         mock_tabs_doc = {
+            "revisionId": "rev1",
             "tabs": [{
                 "tabProperties": {"tabId": "tab1", "title": "Tab 1", "index": 0},
                 "documentTab": doc,
             }]
         }
         mock_service.documents().get().execute.return_value = mock_tabs_doc
-        mock_service.documents().batchUpdate().execute.return_value = {}
+        mock_service.documents().batchUpdate().execute.return_value = {
+            "writeControl": {"requiredRevisionId": "rev1"},
+        }
 
         table = TableData(
             rows=[["H1", "H2"], ["a", "b"]],

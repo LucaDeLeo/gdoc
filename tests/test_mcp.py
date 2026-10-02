@@ -87,11 +87,13 @@ def test_cells_is_classified_as_write():
     assert "Writes to Google Docs/Drive." in tool["description"]
 
 
-def test_image_commands_are_not_exposed():
+def test_image_commands_expose_url_inputs():
     tools = mcp.build_tools()
-    # Both require a local image path a chat client cannot provide.
-    assert "gdoc_insert_image" not in tools
-    assert "gdoc_replace_image" not in tools
+    for name in ("gdoc_insert_image", "gdoc_replace_image"):
+        assert name in tools
+        description = tools[name]["inputSchema"]["properties"]["image"]["description"]
+        assert "HTTP(S)" in description
+        assert name not in mcp.build_tools(read_only=True)
 
 
 def test_local_path_params_are_stripped_from_schemas():
@@ -705,3 +707,44 @@ def test_serve_protects_the_protocol_stream_from_stray_prints(mocker):
     # Every line on the protocol stream is still valid JSON-RPC.
     for line in stdout.getvalue().splitlines():
         assert json.loads(line)["jsonrpc"] == "2.0"
+
+
+@pytest.mark.parametrize("body", ["  indented\n\n", "\n", "", "\tcode  "])
+def test_mcp_preserves_document_whitespace_from_cli(mocker, body):
+    from gdoc import cli
+
+    def emit_content(args):
+        print(body, end="")
+        return 0
+
+    mocker.patch.object(cli, "cmd_cat", side_effect=emit_content)
+    stdout, _, code = mcp.call_command("cat", {"doc": "synthetic"})
+    result = mcp.MCPServer().handle_tools_call({
+        "name": "gdoc_cat", "arguments": {"doc": "synthetic"},
+    })
+    assert code == 0
+    assert result["isError"] is False
+    assert result["content"][0]["text"] == stdout == body
+
+
+@pytest.mark.parametrize("command", ["insert-image", "replace-image"])
+@pytest.mark.parametrize("source", ["/tmp/image.png", "file:///tmp/image.png", "-"])
+def test_image_tools_reject_server_file_sources_before_dispatch(
+    mocker, command, source,
+):
+    run = mocker.patch("gdoc.cli.run_argv")
+    with pytest.raises(ValueError, match="HTTP"):
+        mcp.call_command(command, {"doc": "synthetic", "image": source})
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["insert-image", "replace-image"])
+def test_image_tools_dispatch_public_url_to_shared_cli(mocker, command):
+    run = mocker.patch("gdoc.cli.run_argv", return_value=0)
+    arguments = {"doc": "synthetic", "image": "https://example.org/image.png"}
+    if command == "replace-image":
+        arguments["object_id"] = "synthetic-image"
+    mcp.call_command(command, arguments)
+    argv = run.call_args.args[0]
+    assert command in argv
+    assert arguments["image"] in argv

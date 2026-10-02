@@ -44,8 +44,8 @@ TOOL_PREFIX = "gdoc_"
 # Subcommands exposed as tools, and whether each one only reads.
 # Anything absent is deliberately not exposed: `auth` needs an interactive
 # browser, `update` mutates the install, `config` is machine-wide, and
-# `pull`/`push`/`export`/`insert-image`/`replace-image` work on local file
-# paths a chat client cannot see.
+# `pull`/`push`/`export` work on local file paths a chat client cannot see.
+# Image tools accept URL sources over MCP.
 EXPOSED_COMMANDS: dict[str, bool] = {
     # read-only
     "ls": True,
@@ -67,6 +67,8 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "nest": False,
     "unnest": False,
     "insert": False,
+    "insert-image": False,
+    "replace-image": False,
     "write": False,
     "cells": False,
     "add-tab": False,
@@ -274,6 +276,11 @@ def _description_for(command: str, parser: argparse.ArgumentParser) -> str:
     text = (parser.description or "").strip()
     if not text:
         text = (getattr(parser, "_gdoc_help", "") or "").strip()
+    # The CLI's usage rules (matching, paragraph counts, suggest mode) apply
+    # to the tool as well, so tools carry the same epilog agents see in --help.
+    epilog = (parser.epilog or "").strip()
+    if epilog:
+        text = f"{text}\n\n{epilog}" if text else epilog
     note = _DESCRIPTION_NOTES.get(command)
     if note:
         text = f"{text}\n\n{note}" if text else note
@@ -327,6 +334,11 @@ def build_tools(
         sub._gdoc_help = help_by_command.get(command, "")
         schema = _schema_for(command, sub)
 
+        if command in ("insert-image", "replace-image"):
+            schema["properties"]["image"]["description"] = (
+                "Publicly retrievable HTTP(S) image URL; host-local paths "
+                "are not accepted over MCP."
+            )
         file_arg = _TEXT_TO_FILE.get(command)
         if file_arg:
             schema["properties"]["text"] = {
@@ -455,6 +467,17 @@ def call_command(
 
     _reject_local_paths(command, arguments)
     _reject_stdin_sentinels(command, arguments)
+    if (command == "edit" and arguments.get("cell") is not None
+            and arguments.get("new_text") is not None
+            and arguments.get("old_text") is None):
+        # A cell edit has one replacement value; the CLI reads it from either
+        # positional, so a value given as new_text takes the first slot.
+        arguments = {**arguments, "old_text": arguments["new_text"]}
+        del arguments["new_text"]
+    if command in ("insert-image", "replace-image"):
+        source = arguments.get("image")
+        if not isinstance(source, str) or not source.startswith(("https://", "http://")):
+            raise ValueError("image must be an HTTP(S) URL over MCP")
 
     # Schema `required` cannot force a boolean to be true, so guard here:
     # with stdin detached, confirm_destructive() can never prompt.
@@ -559,12 +582,16 @@ def _materialised_text(command: str, arguments: dict[str, Any]):
     handle = tempfile.NamedTemporaryFile(
         "w", suffix=".md", encoding="utf-8", delete=False
     )
+    from gdoc.util import mcp_text_path
+
+    token = mcp_text_path.set(handle.name)
     try:
         with handle:
             handle.write(arguments["text"])
         prepared[file_arg] = handle.name
         yield prepared
     finally:
+        mcp_text_path.reset(token)
         with contextlib.suppress(OSError):
             os.unlink(handle.name)
 
@@ -674,7 +701,9 @@ class MCPServer:
 
         # Notes travel as a second content item so machine-readable stdout
         # (e.g. `json: true`) stays parseable on its own.
-        content = [{"type": "text", "text": stdout.strip() or "OK"}]
+        # Whitespace and empty output can be document content. Preserve the
+        # exact CLI output so a read-modify-write over MCP has the same input.
+        content = [{"type": "text", "text": stdout}]
         notes = _clean_notes(stderr)
         if notes:
             content.append({"type": "text", "text": f"--- notes ---\n{notes}"})

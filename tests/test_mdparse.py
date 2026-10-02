@@ -1,6 +1,8 @@
 """Tests for the markdown parser and Docs API request builder."""
 
-from gdoc.mdparse import parse_markdown, to_docs_requests
+import pytest
+
+from gdoc.mdparse import parse_inline, parse_markdown, to_docs_requests
 
 
 class TestParsePlainText:
@@ -343,7 +345,8 @@ class TestToDocsRequests:
         assert len(bullet_reqs) == 1
         cpb = bullet_reqs[0]["createParagraphBullets"]
         assert cpb["bulletPreset"] == "BULLET_DISC_CIRCLE_SQUARE"
-        assert cpb["range"]["startIndex"] == 1
+        # The range starts at the temporary anchor before the item.
+        assert cpb["range"]["startIndex"] == 2
 
     def test_numbered_generates_create_paragraph_bullets(self):
         parsed = parse_markdown("1. item")
@@ -787,17 +790,19 @@ class TestNewToDocsRequests:
         ]
         assert starts == sorted(starts)
 
-    def test_nested_bullet_range_adjusted_for_removed_tabs(self):
-        # The level-1 item removes 1 tab; the following level-0 item's
-        # createParagraphBullets range is shifted left by that 1.
+    def test_nested_items_share_one_list_range(self):
+        # Parent and child must be created together to preserve nesting.
         reqs = to_docs_requests(
             parse_markdown("- a\n  - b\n- c"), insert_index=1,
         )
-        starts = [
-            r["createParagraphBullets"]["range"]["startIndex"]
-            for r in reqs if "createParagraphBullets" in r
-        ]
-        assert starts == [1, 3, 5]
+        from tests.test_list_request_semantics import apply_list_requests
+
+        # One range establishes the entire nested list.
+        assert sum("createParagraphBullets" in r for r in reqs) == 1
+        paragraphs = [p for p in apply_list_requests(reqs) if p["list"]]
+        assert [(p["text"], p["depth"]) for p in paragraphs] == [
+            ("a\n", 0), ("b\n", 1), ("c\n", 0)]
+        assert len({p["list"] for p in paragraphs}) == 1
 
 
 class TestTableTabAdjustment:
@@ -819,3 +824,229 @@ class TestTableTabAdjustment:
     def test_total_removed_tabs_zero_without_nesting(self):
         result = parse_markdown("- a\n- b\nplain")
         assert result.removed_tabs == 0
+
+
+_CODE = {"weightedFontFamily": {"fontFamily": "Courier New"}}
+_BOLD = {"bold": True}
+_STRIKE = {"strikethrough": True}
+
+
+@pytest.mark.parametrize("source,text,ranges", [
+    # Single, double and triple backtick strings are all code-span delimiters;
+    # content is verbatim and only an equal-length string closes the span.
+    ("`code`", "code", [(0, 4, _CODE)]),
+    ("``co`de``", "co`de", [(0, 5, _CODE)]),
+    # Content is normalised per CommonMark 6.1: line endings become spaces
+    # and one leading plus one trailing space is dropped when both exist.
+    ("`` `x` ``", "`x`", [(0, 3, _CODE)]),
+    ("```\ncode\n```", "code", [(0, 4, _CODE)]),
+    ("```python\nx = 1\n```", "python x = 1 ", [(0, 13, _CODE)]),
+    ("```\n**code** `x`\n```", "**code** `x`", [(0, 12, _CODE)]),
+    ("` `", " ", [(0, 1, _CODE)]),
+    ("` a`", " a", [(0, 2, _CODE)]),
+    ("`a` and ``b`` and ```c```", "a and b and c",
+     [(0, 1, _CODE), (6, 7, _CODE), (12, 13, _CODE)]),
+    # Escapes are not processed inside a code span (CommonMark 6.1): the first
+    # backtick after the opener closes it, the backslash stays, and the
+    # trailing backtick is literal text.
+    (r"`a\`b`", "a\\b`", [(0, 2, _CODE)]),
+    # An unmatched backtick string is literal; the text around it still parses.
+    ("``` **b**", "``` b", [(4, 5, _BOLD)]),
+    ("```\n**code**", "```\ncode", [(4, 8, _BOLD)]),
+    ("``x`", "``x`", []),
+    ("`x``", "`x``", []),
+    ("``", "``", []),
+    # Equal-length strings match wherever they sit, so a mid-line run closes
+    # a span opened at the start; what follows parses normally.
+    ("```\nfirst ``` literal\n**second**", "first literal\nsecond",
+     [(0, 5, _CODE), (14, 20, _BOLD)]),
+    # Tildes are strikethrough only in pairs (GFM); longer runs are literal.
+    ("~~s~~", "s", [(0, 1, _STRIKE)]),
+    ("~~~s~~~", "~~~s~~~", []),
+    ("~~~\n**code**\n~~~", "~~~\ncode\n~~~", [(4, 8, _BOLD)]),
+    # Block-level syntax is literal inline: inline content cannot start a block.
+    ("# heading", "# heading", []),
+    ("- item", "- item", []),
+    ("1. item", "1. item", []),
+    ("> quote", "> quote", []),
+    ("---", "---", []),
+])
+def test_inline_code_spans_and_literal_blocks(source, text, ranges):
+    got_text, got_styles = parse_inline(source)
+    assert got_text == text
+    assert [(s.start, s.end, s.style) for s in got_styles] == ranges
+    assert all(s.type == "text_style" for s in got_styles)
+
+
+class TestBalancedLinkDestinations:
+    @pytest.mark.parametrize("destination, expected", [
+        ("https://example.org/Inverse_image_(set_theory)",
+         "https://example.org/Inverse_image_(set_theory)"),
+        ("https://example.org/a_(b_(c))?d=(e)",
+         "https://example.org/a_(b_(c))?d=(e)"),
+        (r"https://example.org/a_\(b\)", "https://example.org/a_(b)"),
+        (r"https://example.org/a\)b", "https://example.org/a)b"),
+        (r"https://example.org/a\(b", "https://example.org/a(b"),
+        (r"https://example.org/a\\(b)", "https://example.org/a\\(b)"),
+    ])
+    @pytest.mark.parametrize("suffix", [".", ")", ", next"])
+    def test_destination_and_adjacent_punctuation(self, destination, expected, suffix):
+        plain, styles = parse_inline(f"See [**inverse image**]({destination}){suffix}")
+        assert plain == f"See inverse image{suffix}"
+        assert [(s.start, s.end, s.style) for s in styles] == [
+            (4, 17, {"bold": True}),
+            (4, 17, {"link": {"url": expected}}),
+        ]
+        requests = to_docs_requests(
+            parse_markdown(f"[inverse image]({destination})"), 1,
+        )
+        links = [r["updateTextStyle"] for r in requests if "updateTextStyle" in r]
+        assert links[0]["textStyle"] == {"link": {"url": expected}}
+        assert links[0]["range"] == {"startIndex": 1, "endIndex": 14}
+
+    @pytest.mark.parametrize("text", [
+        "[label](https://example.org/(unclosed)",
+        "[label](https://example.org/unclosed",
+        "[label](https://example.org/\nnext)",
+        r"\[label](https://example.org/(x))",
+    ])
+    def test_invalid_or_escaped_link_is_literal(self, text):
+        plain, styles = parse_inline(text)
+        assert plain == text.removeprefix("\\")
+        assert styles == []
+
+    def test_unclosed_link_does_not_hide_later_valid_link(self):
+        plain, styles = parse_inline("[bad](unclosed [good](https://example.org/(x))")
+        assert plain == "[bad](unclosed good"
+        assert styles[0].style == {"link": {"url": "https://example.org/(x)"}}
+
+
+class TestNativeImages:
+    """Images carry native placeholders; incomplete syntax stays literal."""
+
+    def _image(self, text):
+        parsed = parse_markdown(text)
+        assert len(parsed.images) == 1
+        image = parsed.images[0]
+        assert parsed.plain_text[image.plain_text_offset] == " "
+        assert image.uri.startswith("https://")
+        return image
+
+    def test_inline_image_represented(self):
+        self._image("Intro\n\n![photo](https://example.com/a.png)\n")
+
+    def test_reference_image_with_definition_represented(self):
+        self._image(
+            "See ![Logo][logo] here\n\n[LOGO]: https://example.com/l.png\n"
+        )
+
+    def test_collapsed_reference_image_represented(self):
+        self._image("![logo][]\n\n[logo]: https://example.com/l.png\n")
+
+    def test_nested_bracket_alt_inline_represented(self):
+        self._image("![a [nested] label](https://example.com/image.png)\n")
+
+    def test_nested_bracket_alt_reference_represented(self):
+        self._image("![a [nested] label][pic]\n\n[pic]: https://example.com/i.png\n")
+
+    def test_bracketed_label_cannot_define_a_reference(self):
+        # CommonMark link labels may not contain brackets, so no definition
+        # can resolve this shortcut form; it is literal text.
+        parsed = parse_markdown(
+            "![a [nested] label]\n\n[a [nested] label]: https://x.test/i.png\n"
+        )
+        assert "![a [nested] label]" in parsed.plain_text
+
+    def test_deeply_nested_alt_inline_represented(self):
+        self._image("![a [b [c] d] e](https://example.com/i.png)\n")
+
+    def test_deeply_nested_alt_reference_represented(self):
+        self._image("![a [b [c] d] e][pic]\n\n[pic]: https://example.com/i.png\n")
+
+    def test_deeply_nested_alt_without_destination_is_literal(self):
+        parsed = parse_markdown("See ![a [b [c] d] e] here\n")
+        assert "![a [b [c] d] e]" in parsed.plain_text
+
+    def test_unbalanced_opener_is_not_an_image(self):
+        # `![a ` never closes, so the inner `[b](url)` is an ordinary link.
+        parsed = parse_markdown("![a [b](https://example.com) tail\n")
+        assert "tail" in parsed.plain_text
+
+    def test_unbalanced_destination_is_literal(self):
+        parsed = parse_markdown("Malformed ![x](foo(bar) example\n")
+        assert "![x](foo(bar)" in parsed.plain_text
+
+    def test_multiline_destination_is_literal(self):
+        parsed = parse_markdown("![x](first\nsecond) tail\n")
+        assert "tail" in parsed.plain_text
+
+    def test_balanced_parenthesised_destination_represented(self):
+        self._image("![x](https://example.com/a_(b).png)\n")
+
+    def test_empty_destination_is_literal(self):
+        parsed = parse_markdown("An empty ![x]() marker\n")
+        assert "![x]()" in parsed.plain_text
+
+    def test_image_like_text_inside_link_destination_is_a_link(self):
+        parsed = parse_markdown("See [link](https://example.com/![a](b)) now\n")
+        assert "link" in parsed.plain_text
+        assert any(s.style.get("link") for s in parsed.styles)
+
+    def test_linked_image_still_represented(self):
+        self._image("[![img](https://x.test/i.png)](https://x.test/)\n")
+
+    def test_image_after_link_still_represented(self):
+        self._image("See [x](https://x.test/) then ![a](https://x.test/i.png)\n")
+
+    def test_nested_bracket_without_destination_is_literal(self):
+        parsed = parse_markdown("An ![a [nested] label] marker\n")
+        assert "![a [nested] label]" in parsed.plain_text
+
+    def test_html_img_requires_markdown_syntax(self):
+        from gdoc.util import GdocError
+
+        with pytest.raises(GdocError, match="Markdown image syntax"):
+            parse_markdown('Text <img src="x.png"> more\n')
+
+    def test_bare_opener_is_literal(self):
+        parsed = parse_markdown("Use ![ literally in prose\n")
+        assert parsed.plain_text.startswith("Use ![")
+
+    def test_undefined_reference_is_literal(self):
+        parsed = parse_markdown("An unmatched ![alt] marker\n")
+        assert "![alt]" in parsed.plain_text
+
+    def test_reference_without_definition_is_literal(self):
+        parsed = parse_markdown("![alt][missing] and [other]: https://example.com\n")
+        assert "![alt][missing]" in parsed.plain_text
+
+    def test_image_inside_fence_is_literal(self):
+        parsed = parse_markdown("```\n![photo](https://example.com/a.png)\n```\n")
+        assert "![photo]" in parsed.plain_text
+
+    def test_image_inside_code_span_is_literal(self):
+        parsed = parse_markdown("Type `![alt](url)` to embed\n")
+        assert "![alt](url)" in parsed.plain_text
+
+
+class TestSingleLineTripleBacktickSpan:
+    """A backtick fence's info string holds no backtick (CommonMark 4.5)."""
+
+    def test_single_line_span_is_inline_code_not_a_fence(self):
+        parsed = parse_markdown("```code```\n")
+        assert parsed.plain_text == "code\n"
+        assert any(s.style == {"weightedFontFamily": {"fontFamily": "Courier New"}}
+                   or "fontFamily" in str(s.style) for s in parsed.styles)
+
+    def test_single_line_span_never_swallows_following_content(self):
+        parsed = parse_markdown("Intro\n```code```\nAfter\n")
+        assert parsed.plain_text == "Intro\ncode\nAfter\n"
+
+    def test_real_fence_still_opens(self):
+        parsed = parse_markdown("```python\nx = 1\n```\nAfter\n")
+        assert parsed.plain_text == "x = 1\nAfter\n"
+
+    def test_image_after_closed_span_is_represented(self):
+        parsed = parse_markdown("```code```\n![a](https://x.test/i.png)\n")
+        assert parsed.plain_text == "code\n \n"
+        assert parsed.images[0].uri == "https://x.test/i.png"

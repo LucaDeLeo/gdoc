@@ -117,6 +117,12 @@ class TestCatRevision:
             cmd_cat(_cat_args(revision="1", tab="Notes"))
         assert exc_info.value.exit_code == 3
 
+    def test_truncated_revision_is_explicit(self, _pf, _list, _export, _update, capsys):
+        cmd_cat(_cat_args(revision="1", max_bytes=3, json=True))
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["scope"]["truncated"] is True
+        assert "--max-bytes 0" in captured.err
+
     def test_unknown_revision_errors(self, _pf, _list, _export, _update):
         with pytest.raises(GdocError, match="revision not found") as exc_info:
             cmd_cat(_cat_args(revision="999"))
@@ -168,8 +174,15 @@ class TestPullRevision:
         self, _pf, _list, mock_export, _info, mock_update, tmp_path,
     ):
         with patch(
-            "gdoc.api.drive.export_doc", return_value="current body\n",
-        ) as mock_doc_export:
+            "gdoc.api.docs.get_tab_text", return_value="current body\n",
+        ) as mock_doc_export, patch(
+            "gdoc.api.docs.get_document_with_tabs", return_value={
+                "revisionId": "r1", "tabs": [{
+                    "tabProperties": {"tabId": "main", "title": "Main"},
+                    "documentTab": {"body": {"content": []}},
+                }],
+            },
+        ):
             out = tmp_path / "cur.md"
             rc = cmd_pull(_pull_args(file=str(out)))
             assert rc == 0
@@ -177,4 +190,4 @@ class TestPullRevision:
         mock_export.assert_not_called()
         content = out.read_text()
         assert "gdoc: abc123" in content
-        assert mock_update.call_args.kwargs.get("command") == "pull"
+        assert mock_update.call_args.kwargs.get("command") == "pull-content"

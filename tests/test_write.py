@@ -1,848 +1,361 @@
-"""Tests for the `gdoc write` command handler."""
+"""Write transport, native snapshot provenance and explicit tab scope."""
 
 import json
-import os
+from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
 
 import pytest
 
+from gdoc import state
 from gdoc.cli import cmd_write
 from gdoc.notify import ChangeInfo
-from gdoc.state import DocState
 from gdoc.util import AuthError, GdocError
 
 
 def _make_args(**overrides):
-    """Build a SimpleNamespace mimicking parsed write args.
+    return SimpleNamespace(
+        **{
+            "command": "write",
+            "doc": "abc123",
+            "file": "/missing.md",
+            "force": False,
+            "quiet": False,
+            "json": False,
+            "verbose": False,
+            "plain": False,
+            "tab": None,
+            "force_collapse_tabs": False,
+            "allow_lossy": False,
+            **overrides,
+        }
+    )
 
-    Defaults match what `build_parser()` produces: `tab=None`,
-    `force_collapse_tabs=False`. Tests that need to bypass the
-    multi-tab safety gate either pass `force_collapse_tabs=True`
-    or rely on the module-level `_stub_single_tab` autouse fixture
-    below, which pretends the remote doc has a single tab.
-    """
-    defaults = {
-        "command": "write",
-        "doc": "abc123",
-        "file": "/tmp/test.md",
-        "force": False,
-        "json": False,
-        "verbose": False,
-        "quiet": False,
-        "tab": None,
-        "force_collapse_tabs": False,
+
+def native_tab(tab_id="first", title="Draft", text="Remote notes\n"):
+    end = 1 + len(text.encode("utf-16-le")) // 2
+    return {
+        "tabProperties": {"tabId": tab_id, "title": title},
+        "documentTab": {
+            "body": {
+                "content": [
+                    {
+                        "startIndex": 1,
+                        "endIndex": end,
+                        "paragraph": {
+                            "elements": [
+                                {
+                                    "startIndex": 1,
+                                    "endIndex": end,
+                                    "textRun": {"content": text},
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        },
     }
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
 
 
-@pytest.fixture(autouse=True)
-def _stub_single_tab():
-    """Default `count_document_tabs` to `1` for the whole test module.
+@pytest.fixture
+def native_write(mocker, tmp_path):
+    """Mock mutation boundaries; keep native read coverage and state code real."""
+    document = {"revisionId": "r10", "tabs": [native_tab()]}
+    read = mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=document)
+    info = ChangeInfo(current_version=10, last_read_version=10)
+    preflight = mocker.patch(
+        "gdoc.notify.pre_flight",
+        side_effect=lambda *a, quiet=False: None if quiet else info,
+    )
+    version = mocker.patch(
+        "gdoc.api.drive.get_file_version", return_value={"version": 42}
+    )
+    details = {
+        "input_revision_id": "r10",
+        "acknowledged_revision_id": "r11",
+        "rebased": False,
+    }
 
-    Keeps legacy success-path tests honest to the real CLI defaults
-    (force_collapse_tabs=False) without forcing every test to decorate
-    the patch. Tests that need a different count (e.g.
-    `TestWriteCollapseSafety.test_refuses_multi_tab_without_flag`)
-    stack their own `@patch("gdoc.api.docs.count_document_tabs", ...)`
-    on top — unittest.mock.patch is LIFO so the inner patch wins for
-    the duration of the test.
-    """
-    with patch("gdoc.api.docs.count_document_tabs", return_value=1):
-        yield
+    def update(*args, result_details, **kwargs):
+        result_details.update(details)
+        return 42
+
+    write = mocker.patch("gdoc.api.drive.update_doc_content", side_effect=update)
+    tab_write = mocker.patch(
+        "gdoc.api.docs.insert_markdown_into_tab",
+        side_effect=lambda *a, **kw: dict(details),
+    )
+    state.record_content_read("abc123", ["first"], "r10")
+    path = tmp_path / "content.md"
+    path.write_text("# New heading\n\nNew content.\n")
+    return SimpleNamespace(
+        document=document,
+        read=read,
+        preflight=preflight,
+        info=info,
+        version=version,
+        write=write,
+        tab_write=tab_write,
+        details=details,
+        path=path,
+    )
 
 
-class TestWriteBasic:
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_success(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path, capsys,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("# Hello")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
+@pytest.mark.parametrize(
+    "doc", ["abc123", "https://docs.google.com/document/d/abc123/edit"]
+)
+@pytest.mark.parametrize(
+    "text", ["# Heading\n\nContent.", "",
+             "---\ngdoc: abc123\ngdoc-revision: r10\n---\n# Body\n"]
+)
+def test_write_transports_content_and_native_snapshot(native_write, doc, text):
+    env = native_write
+    env.path.write_text(text)
+    before = deepcopy(env.document)
+    assert cmd_write(_make_args(doc=doc, file=str(env.path))) == 0
+    expected = "# Body\n" if text.startswith("---\n") else text
+    env.write.assert_called_once_with(
+        "abc123",
+        expected,
+        expected_version=10,
+        document=env.document,
+        allow_lossy=False,
+        collapse_tabs=False,
+        result_details=env.details,
+        image_aliases={},
+    )
+    assert env.document == before
+    assert state.load_state("abc123").read_revision_ids == {"first": "r11"}
+
+
+@pytest.mark.parametrize("mode", ["terse", "json", "plain"])
+def test_write_output_names_scope_and_acknowledged_revision(native_write, capsys, mode):
+    assert (
+        cmd_write(
+            _make_args(
+                file=str(native_write.path), **({mode: True} if mode != "terse" else {})
+            )
         )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        rc = cmd_write(args)
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "OK written" in out
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_reads_file_content(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("# My Document\n\nContent here.")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
+        == 0
+    )
+    output = capsys.readouterr().out
+    if mode == "json":
+        assert json.loads(output) == {
+            "ok": True,
+            "written": True,
+            "tab_id": "first",
+            "tab_title": "Draft",
+            "revision_id": "r11",
+            "version": 42,
+        }
+    elif mode == "plain":
+        assert (
+            "id\tabc123" in output
+            and "tab_id\tfirst" in output
+            and "status\tupdated" in output
         )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        cmd_write(args)
-        mock_update_doc.assert_called_once_with(
-            "abc123", "# My Document\n\nContent here.",
-        )
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_json_output(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path, capsys,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("# Hello")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f), json=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        data = json.loads(capsys.readouterr().out)
-        assert data == {"ok": True, "written": True, "version": 42}
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_url_input(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(
-            doc="https://docs.google.com/document/d/abc123/edit",
-            file=str(f),
-        )
-        cmd_write(args)
-        mock_update_doc.assert_called_once_with("abc123", "content")
+    else:
+        assert "OK written" in output and "Draft" in output
 
 
-class TestWriteFileErrors:
-    @patch("gdoc.notify.pre_flight")
-    @patch("gdoc.api.drive.update_doc_content")
-    def test_write_file_not_found(self, mock_update_doc, _pf):
-        args = _make_args(file="/nonexistent/path.md")
-        with pytest.raises(GdocError, match="file not found") as exc:
+@pytest.mark.parametrize("quiet", [False, True])
+@pytest.mark.parametrize("baseline", [None, "stale", "metadata"])
+def test_write_requires_complete_native_revision(native_write, quiet, baseline):
+    saved = state.DocState(last_read_version=10, last_version=10)
+    if baseline == "stale":
+        saved.read_revision_ids = {"first": "r9"}
+    state.save_state("abc123", saved)
+    before = state.load_state("abc123")
+    with pytest.raises(GdocError) as error:
+        cmd_write(_make_args(file=str(native_write.path), quiet=quiet))
+    assert error.value.exit_code == 3
+    assert (
+        "changed since last read" in str(error.value)
+        if baseline == "stale"
+        else "no complete read baseline" in str(error.value)
+    )
+    assert "--force" in str(error.value)
+    native_write.write.assert_not_called()
+    native_write.tab_write.assert_not_called()
+    assert state.load_state("abc123") == before
+
+
+@pytest.mark.parametrize("quiet", [False, True])
+@pytest.mark.parametrize("force", [False, True])
+def test_write_uses_snapshot_revision_despite_drive_history(native_write, quiet, force):
+    native_write.info.last_read_version = 3
+    native_write.info.current_version = 99
+    assert (
+        cmd_write(_make_args(file=str(native_write.path), quiet=quiet, force=force))
+        == 0
+    )
+    native_write.preflight.assert_called_once_with("abc123", quiet=quiet)
+    assert native_write.write.call_args.kwargs["document"]["revisionId"] == "r10"
+    assert state.load_state("abc123").read_revision_ids["first"] == "r11"
+
+
+@pytest.mark.parametrize("quiet", [False, True])
+def test_force_authorizes_new_snapshot_but_requires_revision(native_write, quiet):
+    state.save_state("abc123", state.DocState())
+    assert (
+        cmd_write(_make_args(file=str(native_write.path), quiet=quiet, force=True)) == 0
+    )
+    native_write.write.reset_mock()
+    native_write.document.pop("revisionId")
+    with pytest.raises(GdocError, match="unpinned write"):
+        cmd_write(_make_args(file=str(native_write.path), quiet=quiet, force=True))
+    native_write.write.assert_not_called()
+
+
+@pytest.mark.parametrize("baseline", [None, "stale"])
+@pytest.mark.parametrize("tab", [None, "Draft"])
+def test_matching_native_content_is_noop_and_establishes_no_read(
+    native_write, baseline, tab, capsys
+):
+    """Equal Markdown is not a read: invisible native changes could differ."""
+    state.save_state(
+        "abc123",
+        state.DocState(read_revision_ids={"first": baseline} if baseline else {}),
+    )
+    native_write.path.write_text("Remote notes\n")
+    assert cmd_write(_make_args(file=str(native_write.path), tab=tab, json=True)) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "in_sync": True,
+        "tab_id": "first",
+        "revision_id": "r10",
+    }
+    native_write.write.assert_not_called()
+    native_write.tab_write.assert_not_called()
+    assert state.load_state("abc123").read_revision_ids == (
+        {"first": baseline} if baseline else {})
+
+
+def test_default_write_preserves_siblings_without_collapse_consent(native_write):
+    native_write.document["tabs"].append(
+        native_tab("second", "Reference", "Protected\n")
+    )
+    before = deepcopy(native_write.document)
+    assert cmd_write(_make_args(file=str(native_write.path))) == 0
+    assert native_write.write.call_args.kwargs["collapse_tabs"] is False
+    assert native_write.document == before
+    assert state.load_state("abc123").read_revision_ids == {"first": "r11"}
+
+
+@pytest.mark.parametrize(
+    "coverage,force,allowed",
+    [(False, False, False), (True, False, True), (False, True, True)],
+)
+def test_explicit_collapse_requires_all_tab_coverage_or_force(
+    native_write, coverage, force, allowed
+):
+    native_write.document["tabs"].append(native_tab("second", "Reference"))
+    if coverage:
+        state.record_content_read("abc123", ["second"], "r10")
+    args = _make_args(
+        file=str(native_write.path), force_collapse_tabs=True, force=force
+    )
+    if not allowed:
+        with pytest.raises(GdocError, match="complete read baseline"):
             cmd_write(args)
-        assert exc.value.exit_code == 3
-        mock_update_doc.assert_not_called()
-
-    @patch("gdoc.notify.pre_flight")
-    @patch("gdoc.api.drive.update_doc_content")
-    def test_write_file_unreadable(
-        self, mock_update_doc, _pf, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        f.chmod(0o000)
-        args = _make_args(file=str(f))
-        try:
-            with pytest.raises(GdocError, match="cannot read file"):
-                cmd_write(args)
-        finally:
-            f.chmod(0o644)
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_empty_file(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_update_doc.assert_called_once_with("abc123", "")
+        native_write.write.assert_not_called()
+    else:
+        assert cmd_write(args) == 0
+        native_write.read.assert_called_once_with("abc123")
+        assert native_write.write.call_args.kwargs["collapse_tabs"] is True
+        assert native_write.write.call_args.kwargs["document"] is native_write.document
 
 
-class TestWriteConflictNormal:
-    """Not quiet, not force."""
-
-    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_blocked_on_conflict(
-        self, mock_pf, mock_update_doc, _export, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=5,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        with pytest.raises(GdocError) as exc:
+@pytest.mark.parametrize("force", [False, True])
+def test_tab_write_uses_same_snapshot_and_preserves_unread_sibling(native_write, force):
+    env = native_write
+    env.document["tabs"].append(native_tab("second", "Reference"))
+    args = _make_args(file=str(env.path), tab="Reference", force=force)
+    if not force:
+        with pytest.raises(GdocError, match="complete read baseline"):
             cmd_write(args)
-        assert exc.value.exit_code == 3
-        assert "doc changed since last read" in str(exc.value)
-        mock_update_doc.assert_not_called()
+        env.tab_write.assert_not_called()
+        state.record_content_read("abc123", ["second"], "r10")
+    assert cmd_write(args) == 0
+    env.tab_write.assert_called_once_with(
+        "abc123",
+        "second",
+        env.path.read_text(),
+        replace=True,
+        allow_lossy=False,
+        document=env.document,
+        image_aliases={},
+    )
+    env.write.assert_not_called()
+    assert state.load_state("abc123").read_revision_ids == {
+        "first": "r11",
+        "second": "r11",
+    }
 
-    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_blocked_no_prior_read(
-        self, mock_pf, mock_update_doc, _export, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=None,
+
+def test_tab_write_strips_frontmatter_and_forced_write_exposes_only_target(
+    native_write,
+):
+    env = native_write
+    state.save_state("abc123", state.DocState())
+    env.path.write_text("---\ngdoc: abc123\n---\n# Body\n")
+    assert cmd_write(_make_args(file=str(env.path), tab="Draft", force=True)) == 0
+    assert env.tab_write.call_args.args == ("abc123", "first", "# Body\n")
+    assert state.load_state("abc123").read_revision_ids == {"first": "r11"}
+
+
+def test_tab_and_collapse_conflict_precedes_read(native_write):
+    with pytest.raises(GdocError, match="cannot be combined"):
+        cmd_write(
+            _make_args(
+                file=str(native_write.path), tab="Draft", force_collapse_tabs=True
+            )
         )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        with pytest.raises(GdocError) as exc:
-            cmd_write(args)
-        assert exc.value.exit_code == 3
-        mock_update_doc.assert_not_called()
-
-    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_blocked_no_prior_read_correct_message(
-        self, mock_pf, mock_update_doc, _export, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=None,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        with pytest.raises(GdocError, match="no read baseline"):
-            cmd_write(args)
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_proceeds_no_conflict(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_update_doc.assert_called_once()
-
-    @patch("gdoc.api.drive.export_doc", return_value="something else entirely")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_conflict_error_message(
-        self, mock_pf, mock_update_doc, _export, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=5,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        with pytest.raises(GdocError) as exc:
-            cmd_write(args)
-        msg = str(exc.value)
-        assert "doc changed since last read" in msg
-        assert "--force" in msg
+    native_write.read.assert_not_called()
+    native_write.write.assert_not_called()
 
 
-class TestWriteInSync:
-    """Version drifted but content already matches — skip the upload."""
-
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 12})
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.export_doc", return_value="content")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_noop_when_doc_matches(
-        self, mock_pf, mock_update_doc, _export, mock_state, _ver,
-        tmp_path, capsys,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        mock_pf.return_value = ChangeInfo(current_version=12, last_read_version=5)
-        args = _make_args(file=str(f))
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_update_doc.assert_not_called()
-        assert "already in sync" in capsys.readouterr().out
-        assert mock_state.call_args.kwargs["command_version"] == 12
-        assert mock_state.call_args.kwargs["command"] == "write"
-
-    @patch("gdoc.api.drive.export_doc", return_value="content")
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_tab_conflict_not_rescued_by_content_match(
-        self, mock_pf, mock_insert, mock_export, tmp_path,
-    ):
-        """Tab writes never compare content — a tab body isn't the full doc."""
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        mock_pf.return_value = ChangeInfo(current_version=12, last_read_version=5)
-        args = _make_args(file=str(f), tab="Notes")
-        with pytest.raises(GdocError, match="doc changed since last read"):
-            cmd_write(args)
-        mock_export.assert_not_called()
-        mock_insert.assert_not_called()
+@pytest.mark.parametrize(
+    "failure", [GdocError("synthetic API failure"), AuthError("synthetic auth failure")]
+)
+def test_write_failure_preserves_read_baseline(native_write, failure):
+    native_write.write.side_effect = failure
+    before = state.load_state("abc123")
+    with pytest.raises(type(failure), match=str(failure)):
+        cmd_write(_make_args(file=str(native_write.path)))
+    assert state.load_state("abc123") == before
 
 
-class TestWriteConflictForce:
-    """Not quiet, force."""
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_force_ignores_conflict(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=5,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f), force=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_update_doc.assert_called_once()
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_force_preflight_still_runs(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=5,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f), force=True)
-        cmd_write(args)
-        mock_pf.assert_called_once_with("abc123", quiet=False)
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_force_no_prior_read(
-        self, mock_pf, mock_update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=None,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f), force=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_update_doc.assert_called_once()
-
-
-class TestWriteQuietNoForce:
-    """Quiet, not force — lightweight version check."""
-
-    @patch("gdoc.api.drive.get_file_version")
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_skips_full_preflight(
-        self, mock_pf, mock_update_doc, _drv, _update,
-        mock_load, mock_ver, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        mock_load.return_value = DocState(last_read_version=10)
-        mock_ver.return_value = {"version": 10}
-        args = _make_args(file=str(f), quiet=True)
-        cmd_write(args)
-        mock_pf.assert_not_called()
-
-    @patch("gdoc.api.drive.get_file_version")
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_does_version_check(
-        self, mock_pf, mock_update_doc, _drv, _update,
-        mock_load, mock_ver, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        mock_load.return_value = DocState(last_read_version=10)
-        mock_ver.return_value = {"version": 10}
-        args = _make_args(file=str(f), quiet=True)
-        cmd_write(args)
-        mock_ver.assert_called_once_with("abc123")
-
-    @patch("gdoc.api.drive.get_file_version")
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_blocks_on_version_mismatch(
-        self, _pf, mock_update_doc, mock_load, mock_ver, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        mock_load.return_value = DocState(last_read_version=5)
-        mock_ver.return_value = {"version": 10}
-        args = _make_args(file=str(f), quiet=True)
-        with pytest.raises(GdocError) as exc:
-            cmd_write(args)
-        assert exc.value.exit_code == 3
-        mock_update_doc.assert_not_called()
-
-    @patch("gdoc.api.drive.get_file_version")
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_proceeds_version_match(
-        self, _pf, mock_update_doc, _drv, _update,
-        mock_load, mock_ver, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        mock_load.return_value = DocState(last_read_version=5)
-        mock_ver.return_value = {"version": 5}
-        args = _make_args(file=str(f), quiet=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_update_doc.assert_called_once()
-
-    @patch("gdoc.state.load_state", return_value=None)
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_blocks_no_state(
-        self, _pf, mock_update_doc, mock_load, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        args = _make_args(file=str(f), quiet=True)
-        with pytest.raises(GdocError, match="no read baseline") as exc:
-            cmd_write(args)
-        assert exc.value.exit_code == 3
-        mock_update_doc.assert_not_called()
-
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_blocks_no_read_version(
-        self, _pf, mock_update_doc, mock_load, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        mock_load.return_value = DocState(
-            last_version=10, last_read_version=None,
-        )
-        args = _make_args(file=str(f), quiet=True)
-        with pytest.raises(GdocError, match="no read baseline") as exc:
-            cmd_write(args)
-        assert exc.value.exit_code == 3
-        mock_update_doc.assert_not_called()
-
-
-class TestWriteQuietForce:
-    """Quiet + force → skip everything."""
-
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.api.drive.get_file_version")
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_force_skips_everything(
-        self, mock_pf, mock_update_doc, _drv, _update,
-        mock_ver, mock_load, tmp_path, capsys,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        args = _make_args(file=str(f), quiet=True, force=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_pf.assert_not_called()
-        mock_ver.assert_not_called()
-        mock_load.assert_not_called()
-        mock_update_doc.assert_called_once()
-
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.api.drive.get_file_version")
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_quiet_force_full_savings(
-        self, mock_pf, mock_update_doc, _drv, _update,
-        mock_ver, mock_load, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        args = _make_args(file=str(f), quiet=True, force=True)
-        cmd_write(args)
-        # Only update_doc_content should be called (no pre-flight calls)
-        mock_pf.assert_not_called()
-        mock_ver.assert_not_called()
-        mock_load.assert_not_called()
-
-
-class TestWriteAwareness:
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_preflight_called_normal(
-        self, mock_pf, _update_doc, _drv, _update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        cmd_write(args)
-        mock_pf.assert_called_once_with("abc123", quiet=False)
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_state_updated_with_version(
-        self, mock_pf, _update_doc, _drv, mock_update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        cmd_write(args)
-        mock_update.assert_called_once_with(
-            "abc123", change_info, command="write",
-            quiet=False, command_version=42, full_doc_write=True,
-        )
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_state_not_updated_on_conflict_block(
-        self, mock_pf, mock_update_doc, mock_update, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=5,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
+@pytest.mark.parametrize("kind", ["missing", "unreadable", "invalid-id"])
+def test_write_local_errors_precede_api_and_state(native_write, kind):
+    env = native_write
+    args = _make_args(file=str(env.path))
+    if kind == "missing":
+        args.file = str(env.path.with_name("missing.md"))
+    elif kind == "unreadable":
+        env.path.chmod(0o000)
+    else:
+        args.doc = "!!invalid!!"
+    before = state.load_state("abc123")
+    try:
         with pytest.raises(GdocError):
             cmd_write(args)
-        mock_update.assert_not_called()
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.notify.pre_flight")
-    def test_state_not_updated_on_file_error(
-        self, _pf, mock_update_doc, mock_update,
-    ):
-        args = _make_args(file="/nonexistent/path.md")
-        with pytest.raises(GdocError):
-            cmd_write(args)
-        mock_update.assert_not_called()
-
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.api.drive.get_file_version")
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_state_updated_quiet_force(
-        self, mock_pf, _update_doc, _drv, mock_update,
-        mock_ver, mock_load, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        args = _make_args(file=str(f), quiet=True, force=True)
-        cmd_write(args)
-        mock_update.assert_called_once_with(
-            "abc123", None, command="write",
-            quiet=True, command_version=42, full_doc_write=True,
-        )
+    finally:
+        env.path.chmod(0o644)
+    env.preflight.assert_not_called()
+    env.read.assert_not_called()
+    env.write.assert_not_called()
+    assert state.load_state("abc123") == before
 
 
-class TestWriteErrors:
-    def test_write_invalid_doc_id(self, tmp_path):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        args = _make_args(doc="!!invalid!!", file=str(f))
-        with pytest.raises(GdocError) as exc:
-            cmd_write(args)
-        assert exc.value.exit_code == 3
-
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch(
-        "gdoc.api.drive.update_doc_content",
-        side_effect=GdocError("API error"),
-    )
-    @patch("gdoc.notify.pre_flight")
-    def test_write_api_error(
-        self, mock_pf, _update_doc, _drv, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        with pytest.raises(GdocError, match="API error"):
-            cmd_write(args)
-
-    @patch("gdoc.api.drive.get_drive_service")
-    @patch(
-        "gdoc.api.drive.update_doc_content",
-        side_effect=AuthError("Authentication expired"),
-    )
-    @patch("gdoc.notify.pre_flight")
-    def test_write_auth_error(
-        self, mock_pf, _update_doc, _drv, tmp_path,
-    ):
-        f = tmp_path / "test.md"
-        f.write_text("content")
-        change_info = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f))
-        with pytest.raises(AuthError, match="Authentication expired"):
-            cmd_write(args)
+def test_single_tab_inspection_header_refused(native_write):
+    native_write.path.write_text('=== Tab: Draft ===\nRemote notes\n')
+    with pytest.raises(GdocError, match='inspection view'):
+        cmd_write(_make_args(file=str(native_write.path)))
+    native_write.write.assert_not_called()
 
 
-class TestWritePlain:
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_write_plain_output(self, mock_pf, _update_doc, _update, capsys, tmp_path):
-        f = tmp_path / "doc.md"
-        f.write_text("content")
-        change_info = ChangeInfo(current_version=10, last_read_version=10)
-        mock_pf.return_value = change_info
-        args = _make_args(file=str(f), force=True, quiet=True, plain=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "id\tabc123" in out
-        assert "status\tupdated" in out
-
-
-class TestWriteFrontmatterStrip:
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.notify.pre_flight")
-    def test_frontmatter_stripped_from_upload(
-        self, mock_pf, mock_update, _update_state, tmp_path,
-    ):
-        f = tmp_path / "doc.md"
-        f.write_text(
-            "---\ngdoc: abc123\ntitle: Demo\n---\n# Real body\n",
-        )
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        args = _make_args(file=str(f))
-        cmd_write(args)
-        uploaded = mock_update.call_args.args[1]
-        assert "---" not in uploaded
-        assert "gdoc:" not in uploaded
-        assert uploaded.startswith("# Real body")
-
-
-class TestWriteCollapseSafety:
-    """Writes against multi-tab docs without --force-collapse-tabs fail."""
-
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.api.docs.count_document_tabs", return_value=2)
-    @patch("gdoc.notify.pre_flight")
-    def test_refuses_multi_tab_without_flag(
-        self, mock_pf, _mock_count, mock_update, tmp_path,
-    ):
-        f = tmp_path / "doc.md"
-        f.write_text("content")
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        args = _make_args(file=str(f), force_collapse_tabs=False)
-        with pytest.raises(GdocError, match="collapse 2 tabs") as exc:
-            cmd_write(args)
-        msg = str(exc.value)
-        assert "--force-collapse-tabs" in msg
-        assert "--tab" in msg
-        assert "insert" in msg
-        mock_update.assert_not_called()
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.api.docs.count_document_tabs", return_value=1)
-    @patch("gdoc.notify.pre_flight")
-    def test_single_tab_passes_through(
-        self, mock_pf, _mock_count, mock_update, _u, tmp_path,
-    ):
-        f = tmp_path / "doc.md"
-        f.write_text("content")
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        args = _make_args(file=str(f), force_collapse_tabs=False)
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_update.assert_called_once()
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.update_doc_content", return_value=42)
-    @patch("gdoc.api.docs.count_document_tabs")
-    @patch("gdoc.notify.pre_flight")
-    def test_force_collapse_bypasses_check(
-        self, mock_pf, mock_count, mock_update, _u, tmp_path,
-    ):
-        f = tmp_path / "doc.md"
-        f.write_text("content")
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        args = _make_args(file=str(f), force_collapse_tabs=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        # With the opt-in flag, no count lookup happens at all.
-        mock_count.assert_not_called()
-        mock_update.assert_called_once()
-
-
-class TestWriteTabScoped:
-    """--tab NAME writes only to that tab via Docs API."""
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.notify.pre_flight")
-    def test_forced_tab_write_does_not_claim_full_read(
-        self, mock_pf, mock_insert, _ver, mock_state, tmp_path,
-    ):
-        """A forced tab write bypasses the conflict check and touches one
-        tab — it must not advance the whole-doc read baseline."""
-        f = tmp_path / "doc.md"
-        f.write_text("body")
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=5,
-        )
-        mock_insert.return_value = {
-            "tab_id": "t.a", "tab_title": "A", "insert_index": 1,
-        }
-        args = _make_args(file=str(f), tab="A", force=True)
-        rc = cmd_write(args)
-        assert rc == 0
-        assert mock_state.call_args.kwargs["full_doc_write"] is False
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.notify.pre_flight")
-    def test_tab_scoped_uses_docs_api(
-        self, mock_pf, mock_insert, _ver, _update, tmp_path,
-    ):
-        f = tmp_path / "doc.md"
-        f.write_text("# New body\n")
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_insert.return_value = {
-            "tab_id": "t.todo",
-            "tab_title": "TODO for Mark",
-            "insert_index": 1,
-        }
-        args = _make_args(file=str(f), tab="TODO for Mark")
-        rc = cmd_write(args)
-        assert rc == 0
-        mock_insert.assert_called_once_with(
-            "abc123", "TODO for Mark", "# New body\n", replace=True,
-        )
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
-    @patch("gdoc.api.drive.update_doc_content")
-    @patch("gdoc.api.docs.count_document_tabs")
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.notify.pre_flight")
-    def test_tab_scoped_does_not_touch_drive(
-        self, mock_pf, mock_insert, mock_tabs, mock_update_doc, _ver,
-        _update, tmp_path,
-    ):
-        f = tmp_path / "doc.md"
-        f.write_text("body")
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_insert.return_value = {
-            "tab_id": "t.todo", "tab_title": "TODO", "insert_index": 1,
-        }
-        args = _make_args(file=str(f), tab="TODO")
-        cmd_write(args)
-        mock_update_doc.assert_not_called()
-        # The tab-count safety check runs only on the full-doc path;
-        # --tab writes must not invoke it.
-        mock_tabs.assert_not_called()
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 11})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.notify.pre_flight")
-    def test_tab_scoped_strips_frontmatter(
-        self, mock_pf, mock_insert, _ver, _update, tmp_path,
-    ):
-        f = tmp_path / "doc.md"
-        f.write_text(
-            "---\ngdoc: abc123\n---\n# Real body\n",
-        )
-        mock_pf.return_value = ChangeInfo(
-            current_version=10, last_read_version=10,
-        )
-        mock_insert.return_value = {
-            "tab_id": "t.a", "tab_title": "A", "insert_index": 1,
-        }
-        args = _make_args(file=str(f), tab="A")
-        cmd_write(args)
-        uploaded = mock_insert.call_args.args[2]
-        assert "---" not in uploaded
-        assert uploaded.startswith("# Real body")
+def test_inspection_header_inside_code_is_supported_text(native_write):
+    native_write.path.write_text('```\n=== Tab: Draft ===\n```\n')
+    assert cmd_write(_make_args(file=str(native_write.path))) == 0
+    native_write.write.assert_called_once()

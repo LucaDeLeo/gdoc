@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -31,7 +31,7 @@ class TestPullBasic:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_pull_success(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -53,7 +53,7 @@ class TestPullBasic:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_pull_writes_frontmatter(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -76,7 +76,7 @@ class TestPullBasic:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_pull_exports_markdown(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -87,7 +87,7 @@ class TestPullBasic:
         mock_pf.return_value = change_info
         args = _make_args(file=str(f))
         cmd_pull(args)
-        mock_export.assert_called_once_with("abc123", mime_type="text/markdown")
+        mock_export.assert_called_once_with(ANY, markdown=True)
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_drive_service")
@@ -95,7 +95,7 @@ class TestPullBasic:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_pull_url_input(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -109,7 +109,7 @@ class TestPullBasic:
             file=str(f),
         )
         cmd_pull(args)
-        mock_export.assert_called_once_with("abc123", mime_type="text/markdown")
+        mock_export.assert_called_once_with(ANY, markdown=True)
 
 
 class TestPullOutput:
@@ -119,7 +119,7 @@ class TestPullOutput:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_pull_json_output(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -142,7 +142,7 @@ class TestPullOutput:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_pull_verbose_output(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -166,7 +166,7 @@ class TestPullAwareness:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_preflight_called(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -185,7 +185,7 @@ class TestPullAwareness:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_state_updated_as_read(
         self, mock_pf, mock_export, mock_info, _drv, mock_update,
@@ -197,7 +197,7 @@ class TestPullAwareness:
         args = _make_args(file=str(f))
         cmd_pull(args)
         mock_update.assert_called_once_with(
-            "abc123", change_info, command="pull",
+            "abc123", change_info, command="pull-content",
             quiet=False, command_version=42,
         )
 
@@ -207,7 +207,7 @@ class TestPullAwareness:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_quiet_skips_preflight(
         self, mock_pf, mock_export, mock_info, _drv, _update,
@@ -234,7 +234,7 @@ class TestPullErrors:
         "gdoc.api.drive.get_file_info",
         return_value={"name": "My Doc", "version": 42},
     )
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight")
     def test_unwritable_path(
         self, mock_pf, mock_export, mock_info, _drv,
@@ -251,7 +251,7 @@ class TestPullPlain:
     @patch("gdoc.api.drive.get_file_info", return_value={
         "name": "My Doc", "version": "5",
     })
-    @patch("gdoc.api.drive.export_doc", return_value="# Hello\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Hello\n")
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.drive.get_drive_service")
     def test_pull_plain_output(
@@ -263,3 +263,13 @@ class TestPullPlain:
         assert rc == 0
         out = capsys.readouterr().out
         assert f"path\t{f}" in out
+
+
+@pytest.fixture(autouse=True)
+def _native_snapshot(mocker):
+    mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
+        "revisionId": "r1", "tabs": [{
+            "tabProperties": {"tabId": "main", "title": "Main"},
+            "documentTab": {"body": {"content": []}},
+        }],
+    })

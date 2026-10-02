@@ -52,7 +52,7 @@ class TestEditBasic:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_single_match(self, _pf, _doc, _find, _replace, _ver, _update, capsys):
         args = _make_args()
@@ -65,22 +65,34 @@ class TestEditBasic:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_calls_replace_formatted(
-        self, _pf, _doc, _find, mock_replace, _ver, _update,
+        self,
+        _pf,
+        _doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
     ):
         args = _make_args()
         cmd_edit(args)
         mock_replace.assert_called_once_with(
-            "abc123", _single_match(), "world", "rev123", tab_id=None,
+            "abc123",
+            _single_match(),
+            "world",
+            "rev123",
+            tab_id=None,
+            body=_mock_doc()["body"],
+            result_details={},
         )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_case_sensitive(self, _pf, _doc, mock_find, _replace, _ver, _update):
         args = _make_args(old_text="Hello", case_sensitive=True)
@@ -94,7 +106,7 @@ class TestEditBasic:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_url_input(self, _pf, mock_doc, _find, mock_replace, _ver, _update):
         args = _make_args(doc="https://docs.google.com/document/d/abc123/edit")
@@ -108,10 +120,17 @@ class TestEditAll:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=5)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_multi_match(5))
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_all_multiple_matches(
-        self, _pf, _doc, _find, _replace, _ver, _update, capsys,
+        self,
+        _pf,
+        _doc,
+        _find,
+        _replace,
+        _ver,
+        _update,
+        capsys,
     ):
         args = _make_args(all=True)
         rc = cmd_edit(args)
@@ -121,7 +140,7 @@ class TestEditAll:
 
     @patch("gdoc.api.docs.replace_formatted")
     @patch("gdoc.api.docs.find_text_in_document", return_value=[])
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_all_zero_matches(self, _pf, _doc, _find, mock_replace):
         args = _make_args(all=True)
@@ -134,7 +153,7 @@ class TestEditAll:
 class TestEditPrecheck:
     @patch("gdoc.api.docs.replace_formatted")
     @patch("gdoc.api.docs.find_text_in_document", return_value=[])
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_no_match(self, _pf, _doc, _find, mock_replace):
         args = _make_args(old_text="zzz")
@@ -145,7 +164,7 @@ class TestEditPrecheck:
 
     @patch("gdoc.api.docs.replace_formatted")
     @patch("gdoc.api.docs.find_text_in_document", return_value=_multi_match(3))
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_multiple_matches_without_all(self, _pf, _doc, _find, mock_replace):
         args = _make_args(old_text="hello")
@@ -159,10 +178,16 @@ class TestEditPrecheck:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_case_insensitive_single_match(
-        self, _pf, _doc, _find, _replace, _ver, _update,
+        self,
+        _pf,
+        _doc,
+        _find,
+        _replace,
+        _ver,
+        _update,
     ):
         """Single match found case-insensitively → success."""
         args = _make_args(old_text="hello")
@@ -174,12 +199,20 @@ def _doc_with(text, revision_id="rev123"):
     """A document whose single paragraph contains `text`."""
     return {
         "revisionId": revision_id,
-        "body": {"content": [{
-            "paragraph": {"elements": [{
-                "startIndex": 1,
-                "textRun": {"content": text},
-            }]},
-        }]},
+        "body": {
+            "content": [
+                {
+                    "paragraph": {
+                        "elements": [
+                            {
+                                "startIndex": 1,
+                                "textRun": {"content": text},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
     }
 
 
@@ -188,16 +221,25 @@ class TestEditNormalize:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_normalize_threaded_into_find(
-        self, _pf, _doc, mock_find, _replace, _ver, _update,
+        self,
+        _pf,
+        _doc,
+        mock_find,
+        _replace,
+        _ver,
+        _update,
     ):
         cmd_edit(_make_args(normalize=True))
         assert mock_find.call_args[1]["normalize"] is True
 
     @patch("gdoc.api.docs.replace_formatted")
-    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP\u2019s job\n"))
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs",
+        return_value=_doc_with("JP\u2019s job\n"),
+    )
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_miss_suggests_normalize(self, _pf, _doc, mock_replace):
         """Exact search with an ASCII apostrophe misses smart-quote text."""
@@ -210,10 +252,19 @@ class TestEditNormalize:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
-    @patch("gdoc.api.docs.get_document", return_value=_doc_with("JP\u2019s job\n"))
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs",
+        return_value=_doc_with("JP\u2019s job\n"),
+    )
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_normalize_matches_smart_quotes(
-        self, _pf, _doc, mock_replace, _ver, _update, capsys,
+        self,
+        _pf,
+        _doc,
+        mock_replace,
+        _ver,
+        _update,
+        capsys,
     ):
         """With --normalize, the ASCII anchor matches the smart-quote text."""
         args = _make_args(old_text="JP's job", new_text="x", normalize=True)
@@ -223,7 +274,10 @@ class TestEditNormalize:
         mock_replace.assert_called_once()
 
     @patch("gdoc.api.docs.replace_formatted")
-    @patch("gdoc.api.docs.get_document", return_value=_doc_with("line one\nline two\n"))
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs",
+        return_value=_doc_with("line one\nline two\n"),
+    )
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_miss_reports_whitespace_difference(self, _pf, _doc, mock_replace):
         """A space where the doc has a newline → whitespace diagnostic."""
@@ -239,7 +293,7 @@ class TestEditJson:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_json_output(self, _pf, _doc, _find, _replace, _ver, _update, capsys):
         args = _make_args(json=True)
@@ -252,10 +306,17 @@ class TestEditJson:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=3)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_multi_match(3))
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_all_json_output(
-        self, _pf, _doc, _find, _replace, _ver, _update, capsys,
+        self,
+        _pf,
+        _doc,
+        _find,
+        _replace,
+        _ver,
+        _update,
+        capsys,
     ):
         args = _make_args(all=True, json=True)
         rc = cmd_edit(args)
@@ -269,27 +330,43 @@ class TestEditConflict:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight")
     def test_edit_conflict_warns_but_proceeds(
-        self, mock_pf, _doc, _find, _replace, _ver, _update, capsys,
+        self,
+        mock_pf,
+        _doc,
+        _find,
+        _replace,
+        _ver,
+        _update,
+        capsys,
     ):
-        change_info = ChangeInfo(current_version=10, last_read_version=5)
+        change_info = ChangeInfo(
+            current_version=10, last_read_version=5, doc_edited=True,
+        )
         mock_pf.return_value = change_info
         args = _make_args()
         rc = cmd_edit(args)
         assert rc == 0
         err = capsys.readouterr().err
-        assert "WARN: doc changed since last read" in err
+        assert "WARN: doc changed since last interaction" in err
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight")
     def test_edit_no_conflict_no_warning(
-        self, mock_pf, _doc, _find, _replace, _ver, _update, capsys,
+        self,
+        mock_pf,
+        _doc,
+        _find,
+        _replace,
+        _ver,
+        _update,
+        capsys,
     ):
         change_info = ChangeInfo(current_version=10, last_read_version=10)
         mock_pf.return_value = change_info
@@ -297,7 +374,7 @@ class TestEditConflict:
         rc = cmd_edit(args)
         assert rc == 0
         err = capsys.readouterr().err
-        assert "WARN: doc changed since last read" not in err
+        assert "WARN: doc changed since last interaction" not in err
 
 
 class TestEditAwareness:
@@ -305,7 +382,7 @@ class TestEditAwareness:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_preflight_called(self, mock_pf, _doc, _find, _replace, _ver, _update):
         args = _make_args()
@@ -316,7 +393,7 @@ class TestEditAwareness:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_quiet_skips_preflight(self, mock_pf, _doc, _find, _replace, _ver, _update):
         args = _make_args(quiet=True)
@@ -327,22 +404,31 @@ class TestEditAwareness:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data(42))
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_state_updated_with_version(
-        self, _pf, _doc, _find, _replace, _ver, mock_update,
+        self,
+        _pf,
+        _doc,
+        _find,
+        _replace,
+        _ver,
+        mock_update,
     ):
         args = _make_args()
         cmd_edit(args)
         mock_update.assert_called_once_with(
-            "abc123", None, command="edit",
-            quiet=False, command_version=42,
+            "abc123",
+            None,
+            command="edit",
+            quiet=False,
+            command_version=42,
         )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.docs.replace_formatted")
     @patch("gdoc.api.docs.find_text_in_document", return_value=[])
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_no_state_update_on_no_match(self, _pf, _doc, _find, _replace, mock_update):
         args = _make_args(old_text="zzz")
@@ -353,10 +439,15 @@ class TestEditAwareness:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.docs.replace_formatted", side_effect=GdocError("API error"))
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_no_state_update_on_api_error(
-        self, _pf, _doc, _find, _replace, mock_update,
+        self,
+        _pf,
+        _doc,
+        _find,
+        _replace,
+        mock_update,
     ):
         args = _make_args()
         with pytest.raises(GdocError):
@@ -371,28 +462,34 @@ class TestEditErrors:
             cmd_edit(args)
         assert exc_info.value.exit_code == 3
 
-    @patch("gdoc.api.docs.replace_formatted",
-           side_effect=GdocError("Permission denied: abc123"))
+    @patch(
+        "gdoc.api.docs.replace_formatted",
+        side_effect=GdocError("Permission denied: abc123"),
+    )
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_api_permission_denied(self, _pf, _doc, _find, _replace):
         args = _make_args()
         with pytest.raises(GdocError, match="Permission denied"):
             cmd_edit(args)
 
-    @patch("gdoc.api.docs.replace_formatted",
-           side_effect=AuthError("Authentication expired"))
+    @patch(
+        "gdoc.api.docs.replace_formatted",
+        side_effect=AuthError("Authentication expired"),
+    )
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_api_auth_error(self, _pf, _doc, _find, _replace):
         args = _make_args()
         with pytest.raises(AuthError, match="Authentication expired"):
             cmd_edit(args)
 
-    @patch("gdoc.api.docs.get_document",
-           side_effect=GdocError("Document not found: abc123"))
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs",
+        side_effect=GdocError("Document not found: abc123"),
+    )
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_doc_not_found(self, _pf, _doc):
         args = _make_args()
@@ -405,55 +502,92 @@ class TestEditFileInput:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_file_flags_read_content(
-        self, _pf, _doc, _find, mock_replace, _ver, _update, tmp_path,
+        self,
+        _pf,
+        _doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
+        tmp_path,
     ):
         old_f = tmp_path / "old.txt"
         new_f = tmp_path / "new.txt"
         old_f.write_text("hello")
         new_f.write_text("world")
         args = _make_args(
-            old_text=None, new_text=None,
-            old_file=str(old_f), new_file=str(new_f),
+            old_text=None,
+            new_text=None,
+            old_file=str(old_f),
+            new_file=str(new_f),
         )
         rc = cmd_edit(args)
         assert rc == 0
         mock_replace.assert_called_once_with(
-            "abc123", _single_match(), "world", "rev123", tab_id=None,
+            "abc123",
+            _single_match(),
+            "world",
+            "rev123",
+            tab_id=None,
+            body=_mock_doc()["body"],
+            result_details={},
         )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_file_flags_strip_trailing_newline(
-        self, _pf, _doc, _find, mock_replace, _ver, _update, tmp_path,
+        self,
+        _pf,
+        _doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
+        tmp_path,
     ):
         old_f = tmp_path / "old.txt"
         new_f = tmp_path / "new.txt"
         old_f.write_text("hello\n")
         new_f.write_text("world\n")
         args = _make_args(
-            old_text=None, new_text=None,
-            old_file=str(old_f), new_file=str(new_f),
+            old_text=None,
+            new_text=None,
+            old_file=str(old_f),
+            new_file=str(new_f),
         )
         cmd_edit(args)
         mock_replace.assert_called_once_with(
-            "abc123", _single_match(), "world", "rev123", tab_id=None,
+            "abc123",
+            _single_match(),
+            "world",
+            "rev123",
+            tab_id=None,
+            body=_mock_doc()["body"],
+            result_details={},
         )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_file_flags_override_positional(
-        self, _pf, _doc, _find, mock_replace, _ver, _update, tmp_path,
+        self,
+        _pf,
+        _doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
+        tmp_path,
     ):
         old_f = tmp_path / "old.txt"
         new_f = tmp_path / "new.txt"
@@ -461,45 +595,71 @@ class TestEditFileInput:
         new_f.write_text("world")
         # Positional args set but file flags take precedence
         args = _make_args(
-            old_text="ignored", new_text="ignored",
-            old_file=str(old_f), new_file=str(new_f),
+            old_text="ignored",
+            new_text="ignored",
+            old_file=str(old_f),
+            new_file=str(new_f),
         )
         cmd_edit(args)
         mock_replace.assert_called_once_with(
-            "abc123", _single_match(), "world", "rev123", tab_id=None,
+            "abc123",
+            _single_match(),
+            "world",
+            "rev123",
+            tab_id=None,
+            body=_mock_doc()["body"],
+            result_details={},
         )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_old_file_alone_deletes(
-        self, _pf, _doc, _find, mock_replace, _ver, _update, tmp_path,
+        self,
+        _pf,
+        _doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
+        tmp_path,
     ):
         """--old-file alone → delete the matched range."""
         old_f = tmp_path / "old.txt"
         old_f.write_text("hello")
         args = _make_args(
-            old_text=None, new_text=None,
-            old_file=str(old_f), new_file=None,
+            old_text=None,
+            new_text=None,
+            old_file=str(old_f),
+            new_file=None,
         )
         cmd_edit(args)
         # new_text defaults to empty string for a pure delete.
         mock_replace.assert_called_once_with(
-            "abc123", _single_match(), "", "rev123", tab_id=None,
+            "abc123",
+            _single_match(),
+            "",
+            "rev123",
+            tab_id=None,
+            body=_mock_doc()["body"],
+            result_details={},
         )
 
     def test_missing_old_file_flag(self, tmp_path):
         new_f = tmp_path / "new.txt"
         new_f.write_text("world")
         args = _make_args(
-            old_text=None, new_text=None,
-            old_file=None, new_file=str(new_f),
+            old_text=None,
+            new_text=None,
+            old_file=None,
+            new_file=str(new_f),
         )
         with pytest.raises(
-            GdocError, match="--new-file requires --old-file",
+            GdocError,
+            match="--new-file requires --old-file",
         ) as exc_info:
             cmd_edit(args)
         assert exc_info.value.exit_code == 3
@@ -508,8 +668,10 @@ class TestEditFileInput:
     def test_file_not_found(self, tmp_path):
         missing = str(tmp_path / "nope.txt")
         args = _make_args(
-            old_text=None, new_text=None,
-            old_file=missing, new_file=missing,
+            old_text=None,
+            new_text=None,
+            old_file=missing,
+            new_file=missing,
         )
         with pytest.raises(GdocError, match="file not found"):
             cmd_edit(args)
@@ -518,7 +680,8 @@ class TestEditFileInput:
     @patch("os.path.isfile", return_value=True)
     def test_file_read_error(self, _isfile, _open):
         args = _make_args(
-            old_text=None, new_text=None,
+            old_text=None,
+            new_text=None,
             old_file="/tmp/old.txt",
             new_file="/tmp/new.txt",
         )
@@ -529,8 +692,10 @@ class TestEditFileInput:
 class TestEditValidation:
     def test_missing_positional_args_without_files(self):
         args = _make_args(
-            old_text=None, new_text=None,
-            old_file=None, new_file=None,
+            old_text=None,
+            new_text=None,
+            old_file=None,
+            new_file=None,
         )
         msg = "old_text and new_text required"
         with pytest.raises(GdocError, match=msg) as exc_info:
@@ -539,8 +704,10 @@ class TestEditValidation:
 
     def test_missing_new_text_positional(self):
         args = _make_args(
-            old_text="hello", new_text=None,
-            old_file=None, new_file=None,
+            old_text="hello",
+            new_text=None,
+            old_file=None,
+            new_file=None,
         )
         msg = "old_text and new_text required"
         with pytest.raises(GdocError, match=msg) as exc_info:
@@ -569,25 +736,43 @@ class TestEditFormatted:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_markdown_new_text_passed_to_replace(
-        self, _pf, _doc, _find, mock_replace, _ver, _update,
+        self,
+        _pf,
+        _doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
     ):
         args = _make_args(new_text="**bold** replacement")
         cmd_edit(args)
         mock_replace.assert_called_once_with(
-            "abc123", _single_match(), "**bold** replacement", "rev123", tab_id=None,
+            "abc123",
+            _single_match(),
+            "**bold** replacement",
+            "rev123",
+            tab_id=None,
+            body=_mock_doc()["body"],
+            result_details={},
         )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_revision_id_from_document(
-        self, _pf, mock_doc, _find, mock_replace, _ver, _update,
+        self,
+        _pf,
+        mock_doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
     ):
         """Revision ID from get_document is passed to replace_formatted."""
         mock_doc.return_value = _mock_doc(revision_id="custom_rev")
@@ -601,7 +786,7 @@ class TestEditPlain:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_plain_output(self, _pf, _doc, _find, _replace, _ver, _update, capsys):
         args = _make_args(plain=True)
@@ -615,10 +800,17 @@ class TestEditPlain:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=3)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_multi_match(3))
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_edit_all_plain_output(
-        self, _pf, _doc, _find, _replace, _ver, _update, capsys,
+        self,
+        _pf,
+        _doc,
+        _find,
+        _replace,
+        _ver,
+        _update,
+        capsys,
     ):
         args = _make_args(all=True, plain=True)
         rc = cmd_edit(args)
@@ -632,21 +824,27 @@ def _mock_tabs_doc(revision_id="rev_tab"):
     """Build a tabs-aware document dict with one tab."""
     return {
         "revisionId": revision_id,
-        "tabs": [{
-            "tabProperties": {"tabId": "t1", "title": "Notes", "index": 0},
-            "documentTab": {
-                "body": {
-                    "content": [{
-                        "paragraph": {
-                            "elements": [{
-                                "startIndex": 1,
-                                "textRun": {"content": "hello world\n"},
-                            }],
-                        },
-                    }],
+        "tabs": [
+            {
+                "tabProperties": {"tabId": "t1", "title": "Notes", "index": 0},
+                "documentTab": {
+                    "body": {
+                        "content": [
+                            {
+                                "paragraph": {
+                                    "elements": [
+                                        {
+                                            "startIndex": 1,
+                                            "textRun": {"content": "hello world\n"},
+                                        }
+                                    ],
+                                },
+                            }
+                        ],
+                    },
                 },
-            },
-        }],
+            }
+        ],
     }
 
 
@@ -657,7 +855,13 @@ class TestEditTab:
     @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_tabs_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_tab_passes_tab_id(
-        self, _pf, mock_get_tabs, mock_replace, _ver, _update, capsys,
+        self,
+        _pf,
+        mock_get_tabs,
+        mock_replace,
+        _ver,
+        _update,
+        capsys,
     ):
         args = _make_args(tab="Notes")
         rc = cmd_edit(args)
@@ -672,7 +876,12 @@ class TestEditTab:
     @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_tabs_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_tab_searches_tab_body(
-        self, _pf, mock_get_tabs, mock_replace, _ver, _update,
+        self,
+        _pf,
+        mock_get_tabs,
+        mock_replace,
+        _ver,
+        _update,
     ):
         """find_text_in_document is called with the tab body, finding 'hello'."""
         args = _make_args(tab="Notes", old_text="hello")
@@ -691,8 +900,10 @@ class TestEditTab:
         with pytest.raises(GdocError, match="tab not found"):
             cmd_edit(args)
 
-    @patch("gdoc.api.docs.get_document_with_tabs",
-           side_effect=GdocError("Document not found: abc123"))
+    @patch(
+        "gdoc.api.docs.get_document_with_tabs",
+        side_effect=GdocError("Document not found: abc123"),
+    )
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_tab_http_error_translated(self, _pf, _get_tabs):
         args = _make_args(tab="Notes")
@@ -705,10 +916,16 @@ class TestEditStdin:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_new_text_dash_reads_stdin(
-        self, _pf, _doc, _find, mock_replace, _ver, _update,
+        self,
+        _pf,
+        _doc,
+        _find,
+        mock_replace,
+        _ver,
+        _update,
     ):
         args = _make_args(old_text="hello", new_text="-")
         with patch("sys.stdin") as mock_stdin:
@@ -720,10 +937,16 @@ class TestEditStdin:
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.docs.replace_formatted", return_value=1)
     @patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
-    @patch("gdoc.api.docs.get_document", return_value=_mock_doc())
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc())
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_old_text_dash_reads_stdin(
-        self, _pf, _doc, mock_find, _replace, _ver, _update,
+        self,
+        _pf,
+        _doc,
+        mock_find,
+        _replace,
+        _ver,
+        _update,
     ):
         args = _make_args(old_text="-", new_text="world")
         with patch("sys.stdin") as mock_stdin:
@@ -738,3 +961,338 @@ class TestEditStdin:
         with pytest.raises(GdocError, match="only one argument") as exc:
             cmd_edit(args)
         assert exc.value.exit_code == 3
+
+
+def test_edit_passes_body_context(mocker, capsys):
+    body = {
+        "content": [
+            {
+                "paragraph": {
+                    "elements": [
+                        {
+                            "startIndex": 1,
+                            "endIndex": 7,
+                            "textRun": {
+                                "content": "hello\n",
+                                "textStyle": {"bold": True},
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    mocker.patch("gdoc.notify.pre_flight", return_value=None)
+    mocker.patch(
+        "gdoc.api.docs.get_document_with_tabs",
+        return_value={
+            "revisionId": "rev-a",
+            "body": body,
+        },
+    )
+    replace = mocker.patch("gdoc.api.docs.replace_formatted", return_value=1)
+    mocker.patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    mocker.patch("gdoc.state.update_state_after_command")
+    assert cmd_edit(_make_args()) == 0
+    replace.assert_called_once_with(
+        "abc123",
+        _single_match(),
+        "world",
+        "rev-a",
+        tab_id=None,
+        body=body,
+        result_details={},
+    )
+    assert capsys.readouterr().out == "OK replaced 1 occurrence\n"
+
+
+@pytest.mark.parametrize("route", ["all", "tab", "cell"])
+def test_edit_routes_context_and_keeps_conflict_warning(mocker, capsys, route):
+    # Distinct root and tab bodies so the assertion catches root-body forwarding.
+    root_body = {
+        "content": [
+            {
+                "paragraph": {
+                    "elements": [
+                        {
+                            "startIndex": 1,
+                            "endIndex": 7,
+                            "textRun": {
+                                "content": "hello\n",
+                                "textStyle": {"bold": True},
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    tab_body = {
+        "content": [
+            {
+                "paragraph": {
+                    "elements": [
+                        {
+                            "startIndex": 1,
+                            "endIndex": 7,
+                            "textRun": {
+                                "content": "hello\n",
+                                "textStyle": {"italic": True},
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    body = root_body if route == "cell" else tab_body
+    matches = _multi_match(2) if route == "all" else _single_match()
+    change = ChangeInfo(current_version=2, last_read_version=1, doc_edited=True)
+    mocker.patch("gdoc.notify.pre_flight", return_value=change)
+    mocker.patch(
+        "gdoc.api.docs.get_document",
+        return_value={
+            "revisionId": "rev-a",
+            "body": root_body,
+        },
+    )
+    mocker.patch(
+        "gdoc.api.docs.get_document_with_tabs",
+        return_value={
+            "revisionId": "rev-a",
+            "tabs": [
+                {
+                    "tabProperties": {"tabId": "tab-a", "title": "Notes", "index": 0},
+                    "documentTab": {"body": tab_body},
+                }
+            ],
+        },
+    )
+    mocker.patch("gdoc.api.docs.find_text_in_document", return_value=matches)
+    cell = mocker.patch("gdoc.api.docs.resolve_cell_range", return_value=matches[0])
+    replace = mocker.patch("gdoc.api.docs.replace_formatted", return_value=len(matches))
+    mocker.patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    mocker.patch("gdoc.state.update_state_after_command")
+    args = _make_args(all=route == "all", tab="Notes" if route == "tab" else None)
+    if route == "cell":
+        args.cell, args.col, args.table = "0,1", 1, 0
+    assert cmd_edit(args) == 0
+    replace.assert_called_once_with(
+        "abc123",
+        matches,
+        "world",
+        "rev-a",
+        tab_id="tab-a" if route == "tab" else None,
+        body=body,
+        **({"replace_paragraphs": True} if route == "cell" else {}),
+        result_details={},
+    )
+    if route == "cell":
+        cell.assert_called_once_with(body, "0,1", col=1, table_index=0, normalize=False)
+    captured = capsys.readouterr()
+    assert "WARN: doc changed since last interaction" in captured.err
+    assert captured.out == (
+        "OK replaced 2 occurrences\n"
+        if route == "all"
+        else "OK replaced 1 occurrence\n"
+    )
+
+
+@pytest.fixture
+def segment_edit(mocker):
+    def content(text):
+        return {
+            "content": [
+                {
+                    "paragraph": {
+                        "elements": [
+                            {"startIndex": 1, "textRun": {"content": text}},
+                        ]
+                    }
+                }
+            ]
+        }
+
+    selected = {
+        "tabProperties": {"tabId": "tab-one", "title": "First"},
+        "documentTab": {
+            "body": content("Body TOKEN\n"),
+            "headers": {"header-one": content("Header TOKEN\n")},
+            "footnotes": {"note-one": content("Footnote TOKEN\n")},
+        },
+    }
+    document = {
+        "revisionId": "revision-one",
+        "tabs": [
+            selected,
+            {
+                "tabProperties": {"tabId": "tab-two", "title": "Second"},
+                "documentTab": {
+                    "body": content("Sibling TOKEN\n"),
+                    "footnotes": {"note-two": content("Only sibling\n")},
+                },
+            },
+        ],
+    }
+    mocker.patch("gdoc.notify.pre_flight", return_value=None)
+    mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=document)
+    mocker.patch(
+        "gdoc.api.docs.get_document",
+        return_value={
+            "revisionId": "revision-one",
+            **selected["documentTab"],
+        },
+    )
+    mocker.patch("gdoc.api.drive.get_file_version", return_value=_version_data())
+    mocker.patch("gdoc.state.update_state_after_command")
+    replacement = mocker.patch("gdoc.api.docs.replace_formatted", return_value=3)
+    replacement.source_document = document
+    return replacement
+
+
+def test_edit_all_includes_selected_segments(segment_edit, capsys):
+    from gdoc.api.docs import flatten_tabs
+
+    assert (
+        cmd_edit(
+            _make_args(
+                tab="First",
+                old_text="TOKEN",
+                new_text="REPLACED",
+                **{"all": True},
+            )
+        )
+        == 0
+    )
+    segment_edit.assert_called_once_with(
+        "abc123",
+        [
+            {"startIndex": 6, "endIndex": 11, "tabId": "tab-one", "container": "body"},
+            {
+                "startIndex": 8,
+                "endIndex": 13,
+                "tabId": "tab-one",
+                "container": "header",
+                "segmentId": "header-one",
+            },
+            {
+                "startIndex": 10,
+                "endIndex": 15,
+                "tabId": "tab-one",
+                "container": "footnote",
+                "segmentId": "note-one",
+            },
+        ],
+        "REPLACED",
+        "revision-one",
+        tab_id="tab-one",
+        body=flatten_tabs(segment_edit.source_document["tabs"])[0],
+        result_details={},
+    )
+    assert "OK replaced 3 occurrences" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("tab", [None, "First"])
+def test_edit_cross_container_ambiguity_never_writes(segment_edit, tab):
+    with pytest.raises(GdocError, match="multiple matches") as error:
+        cmd_edit(_make_args(tab=tab, old_text="TOKEN"))
+    assert error.value.exit_code == 3
+    segment_edit.assert_not_called()
+
+
+@pytest.mark.parametrize("markdown", ["```\ncode\n```", "| A |\n| --- |\n| B |"])
+def test_edit_segment_structure_never_calls_replacement(segment_edit, markdown):
+    with pytest.raises(GdocError) as error:
+        cmd_edit(
+            _make_args(
+                tab="First", old_text="TOKEN", new_text=markdown, **{"all": True}
+            )
+        )
+    assert error.value.exit_code == 3
+    segment_edit.assert_not_called()
+
+
+def test_edit_does_not_search_sibling_footnotes(segment_edit):
+    with pytest.raises(GdocError, match="no match found"):
+        cmd_edit(_make_args(tab="First", old_text="Only sibling"))
+    segment_edit.assert_not_called()
+
+
+def test_default_tab_segment_edit_carries_explicit_tab_and_fresh_revision(
+    segment_edit,
+    mocker,
+):
+    mocker.patch(
+        "gdoc.api.docs.get_document",
+        return_value={
+            "revisionId": "older-revision",
+            "body": {},
+            "headers": {"header-one": {"content": []}},
+        },
+    )
+    assert (
+        cmd_edit(_make_args(old_text="TOKEN", new_text="REPLACED", **{"all": True}))
+        == 0
+    )
+    call = segment_edit.call_args
+    assert len(call.args[1]) == 4
+    assert {m["tabId"] for m in call.args[1]} == {"tab-one", "tab-two"}
+    assert call.args[3] == "revision-one"
+    assert call.kwargs == {
+        "tab_id": None,
+        "body": segment_edit.source_document,
+        "result_details": {},
+    }
+
+
+@pytest.mark.parametrize(
+    "acknowledged,rebased", [("r11", False), ("r11", True), ("", False)]
+)
+def test_edit_advances_only_acknowledged_previously_read_revisions(
+    mocker, acknowledged, rebased
+):
+    from gdoc import state
+
+    state.record_content_read("abc123", ["first", "sibling"], "r10")
+    state.record_content_read("abc123", ["older"], "r9")
+    mocker.patch("gdoc.notify.pre_flight", return_value=None)
+    mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=_mock_doc("r10"))
+    mocker.patch("gdoc.api.docs.find_text_in_document", return_value=_single_match())
+    mocker.patch("gdoc.api.drive.get_file_version", return_value={"version": 999})
+
+    def replace(*args, result_details, **kwargs):
+        result_details.update(
+            input_revision_id="r10",
+            acknowledged_revision_id=acknowledged,
+            rebased=rebased,
+        )
+        return 1
+
+    mocker.patch("gdoc.api.docs.replace_formatted", side_effect=replace)
+    assert cmd_edit(_make_args()) == 0
+    expected = "r11" if acknowledged and not rebased else "r10"
+    assert state.load_state("abc123").read_revision_ids == {
+        "first": expected,
+        "sibling": expected,
+        "older": "r9",
+    }
+
+
+@pytest.mark.parametrize(
+    "markdown", ["# Literal heading marker", "- Literal list marker"]
+)
+def test_edit_partial_segment_markers_use_inline_context(segment_edit, markdown):
+    assert (
+        cmd_edit(
+            _make_args(
+                tab="First", old_text="TOKEN", new_text=markdown, **{"all": True}
+            )
+        )
+        == 0
+    )
+    assert segment_edit.call_args.args[2] == markdown
+    assert {m.get("segmentId") for m in segment_edit.call_args.args[1]} == {
+        None,
+        "header-one",
+        "note-one",
+    }

@@ -25,6 +25,20 @@ def _make_args(**overrides):
     return SimpleNamespace(**defaults)
 
 
+def _doc(text, bold=False):
+    """A one-tab native snapshot whose body is one paragraph of ``text``."""
+    style = {"bold": True} if bold else {}
+    return {"revisionId": "r1", "tabs": [{
+        "tabProperties": {"tabId": "t1", "title": "Tab"},
+        "documentTab": {"body": {"content": [{"paragraph": {
+            "elements": [{"textRun": {"content": text.rstrip("\n"),
+                                      "textStyle": style}},
+                         {"textRun": {"content": "\n"}}],
+            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"},
+        }}]}},
+    }]}
+
+
 def _version_data(version=42):
     return {"version": version, "modifiedTime": "2026-01-01T00:00:00Z"}
 
@@ -33,7 +47,7 @@ class TestDiffIdentical:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello world\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello world\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_identical_returns_zero(
         self, _pf, _export, _drv, _ver, _update, capsys, tmp_path,
@@ -49,7 +63,7 @@ class TestDiffIdentical:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello world\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello world\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_identical_json(self, _pf, _export, _drv, _ver, _update, capsys, tmp_path):
         local = tmp_path / "doc.md"
@@ -67,7 +81,7 @@ class TestDiffDifferent:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello world\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello world\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_different_returns_one(
         self, _pf, _export, _drv, _ver, _update, capsys, tmp_path,
@@ -86,7 +100,7 @@ class TestDiffDifferent:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello world\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello world\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_different_json(self, _pf, _export, _drv, _ver, _update, capsys, tmp_path):
         local = tmp_path / "doc.md"
@@ -105,34 +119,32 @@ class TestDiffPlainText:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello world\n")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc("Hello world\n", bold=True))
     @patch("gdoc.notify.pre_flight", return_value=None)
-    def test_plain_uses_text_mime(
-        self, _pf, mock_export, _drv, _ver, _update, tmp_path,
+    def test_plain_compares_plain_text(
+        self, _pf, _doc_get, _drv, _ver, _update, tmp_path,
     ):
         local = tmp_path / "doc.txt"
         local.write_text("Hello world\n")
-        args = _make_args(file=str(local), plain=True)
-        cmd_diff(args)
-        mock_export.assert_called_once_with("abc123", mime_type="text/plain")
+        assert cmd_diff(_make_args(file=str(local), plain=True)) == 0
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello world\n")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc("Hello world\n", bold=True))
     @patch("gdoc.notify.pre_flight", return_value=None)
-    def test_default_uses_markdown_mime(
-        self, _pf, mock_export, _drv, _ver, _update, tmp_path,
+    def test_default_compares_native_markdown(
+        self, _pf, _doc_get, _drv, _ver, _update, tmp_path,
     ):
         local = tmp_path / "doc.md"
-        local.write_text("Hello world\n")
-        args = _make_args(file=str(local))
-        cmd_diff(args)
-        mock_export.assert_called_once_with("abc123", mime_type="text/markdown")
+        local.write_text("**Hello world**\n")
+        assert cmd_diff(_make_args(file=str(local))) == 0
 
 
 class TestDiffErrors:
-    @patch("gdoc.api.drive.export_doc", return_value="Hello\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_missing_local_file(self, _pf, _export):
         args = _make_args(file="/nonexistent/path.md")
@@ -151,7 +163,7 @@ class TestDiffAwareness:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_preflight_called(self, mock_pf, _export, _drv, _ver, _update, tmp_path):
         local = tmp_path / "doc.md"
@@ -163,7 +175,7 @@ class TestDiffAwareness:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data())
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_quiet_passed_to_preflight(
         self, mock_pf, _export, _drv, _ver, _update, tmp_path,
@@ -177,7 +189,7 @@ class TestDiffAwareness:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_version_data(99))
     @patch("gdoc.api.drive.get_drive_service")
-    @patch("gdoc.api.drive.export_doc", return_value="Hello\n")
+    @patch("gdoc.api.docs.get_document_with_tabs", return_value=_doc("Hello\n"))
     @patch("gdoc.notify.pre_flight", return_value=None)
     def test_state_updated_with_version(
         self, _pf, _export, _drv, _ver, mock_update, tmp_path,

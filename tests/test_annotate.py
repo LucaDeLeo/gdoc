@@ -235,3 +235,21 @@ class TestAnchorTextTruncation:
         result = annotate_markdown(md, [comment])
         # Anchor in display should be truncated to 40 chars
         assert '..."' in result
+
+
+@pytest.mark.parametrize("space", ["\u00a0", "\u2009", "\u202f"])
+def test_unicode_space_quote_is_annotated_on_original_line(space):
+    markdown = f"First line\nA small{space}example here.\nLast line\n"
+    result = annotate_markdown(markdown, [_make_comment(anchor="small example")])
+    assert "[UNANCHORED]" not in result
+    assert f"     2\tA small{space}example here." in result
+    assert result.index("[#c1 open]") < result.index("     3\tLast line")
+
+
+def test_unicode_space_fallback_retains_ambiguity():
+    result = annotate_markdown(
+        "small\u00a0example\nsmall\u202fexample\n",
+        [_make_comment(anchor="small example")],
+    )
+    # Placement is by line: two lines holding the quote are ambiguous.
+    assert "[quoted text ambiguous]" in result

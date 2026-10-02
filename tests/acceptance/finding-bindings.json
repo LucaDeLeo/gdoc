@@ -1,0 +1,1155 @@
+[
+  {
+    "id": "D01",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d01_code_crlf_normalization"
+    ],
+    "verifies": "Fenced CRLF produces normalized code text.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d01_code_crlf_normalization": {
+        "passed": 0,
+        "failed": 1
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d01_code_crlf_normalization": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D02",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d02_positional_crlf_matches_file_normalization"
+    ],
+    "verifies": "Positional CRLF is normalized consistently.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d02_positional_crlf_matches_file_normalization": {
+        "passed": 0,
+        "failed": 1
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d02_positional_crlf_matches_file_normalization": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D03",
+    "assertions": [],
+    "verifies": "Parser comment now correctly states that strikethrough uses two tildes.",
+    "gap": "Documentation-only correction verified by source inspection.",
+    "evidence": "source inspection",
+    "baseline_results": {},
+    "integration_results": {}
+  },
+  {
+    "id": "D04",
+    "assertions": [],
+    "verifies": "Mock-library style is not a functional release requirement.",
+    "gap": "No stylistic rewrite requested.",
+    "evidence": "outside release blockers",
+    "baseline_results": {},
+    "integration_results": {}
+  },
+  {
+    "id": "D05",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d05_inline_header_replacement_uses_inline_context"
+    ],
+    "verifies": "Literal markers and closed code spans work inside headers.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d05_inline_header_replacement_uses_inline_context": {
+        "passed": 2,
+        "failed": 2
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d05_inline_header_replacement_uses_inline_context": {
+        "passed": 4,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D06",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_t02_split_and_merge_general_route"
+    ],
+    "verifies": "General rewrite splits then merges with exact text replay.",
+    "gap": "Live combined rewrite verified a split; merge has offline replay coverage.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_t02_split_and_merge_general_route": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_t02_split_and_merge_general_route": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D07",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d07_heading_list_semantics_survive_roundtrip"
+    ],
+    "verifies": "Heading and bullet semantics coexist after export/parse.",
+    "gap": "Combined live readback retained headings and nested list semantics.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d07_heading_list_semantics_survive_roundtrip": {
+        "passed": 0,
+        "failed": 1
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d07_heading_list_semantics_survive_roundtrip": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D08",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d08_literal_list_whitespace_survives_export"
+    ],
+    "verifies": "Literal leading list whitespace survives export/parse.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d08_literal_list_whitespace_survives_export": {
+        "passed": 0,
+        "failed": 1
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d08_literal_list_whitespace_survives_export": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D09",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_t15_unicode_space_fallback_visible_in_read"
+    ],
+    "verifies": "Normalized fallback quote appears at its matching text.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_t15_unicode_space_fallback_visible_in_read": {
+        "passed": 0,
+        "failed": 2
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_t15_unicode_space_fallback_visible_in_read": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D10",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_t15_invalid_occurrence_is_local"
+    ],
+    "verifies": "Invalid occurrence makes no document request.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_t15_invalid_occurrence_is_local": {
+        "passed": 0,
+        "failed": 2
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_t15_invalid_occurrence_is_local": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D11",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_t10_successive_writes_use_acknowledged_revision"
+    ],
+    "verifies": "Acknowledged revision permits second different write without reread.",
+    "gap": "Live successive MCP and CLI writes passed without an intervening reread.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_t10_successive_writes_use_acknowledged_revision": {
+        "passed": 0,
+        "failed": 2
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_t10_successive_writes_use_acknowledged_revision": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D12",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d12_closed_span_inside_fence_stays_literal"
+    ],
+    "verifies": "Closed inline span cannot close enclosing fence.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d12_closed_span_inside_fence_stays_literal": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d12_closed_span_inside_fence_stays_literal": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D13",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d13_image_after_backslash_code_span_is_not_literal"
+    ],
+    "verifies": "Image after closed code span is parsed as image.",
+    "gap": "Combined live readback verified supported neighbors; exact API exceptions remain documented in README.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d13_image_after_backslash_code_span_is_not_literal": {
+        "passed": 0,
+        "failed": 1
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d13_image_after_backslash_code_span_is_not_literal": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D14",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_t06_mixed_lists_empty_item_and_number_start"
+    ],
+    "verifies": "Non-1 starts/restarts produce explicit native-1 best-effort warnings and successful native-list requests.",
+    "gap": "Accepted API best effort; a passing assertion is not full non-1 numbering support.",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_t06_mixed_lists_empty_item_and_number_start": {
+        "passed": 0,
+        "failed": 2
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_t06_mixed_lists_empty_item_and_number_start": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D15",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_d15_unmatched_link_openers_have_bounded_parse_time"
+    ],
+    "verifies": "4000 unmatched openers retain literal text within two offline seconds.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_d15_unmatched_link_openers_have_bounded_parse_time": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_d15_unmatched_link_openers_have_bounded_parse_time": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "D16",
+    "assertions": [
+      "tests/test_api_docs.py::TestDiagnoseNoMatch::test_suggests_normalize_on_quote_mismatch"
+    ],
+    "verifies": "No-match diagnostic offers normalization for typographic quotes.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_api_docs.py::TestDiagnoseNoMatch::test_suggests_normalize_on_quote_mismatch": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_api_docs.py::TestDiagnoseNoMatch::test_suggests_normalize_on_quote_mismatch": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F1",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_multiline_wording_preserves_each_paragraph_mark",
+      "tests/acceptance/test_workflows.py::test_t02_split_and_merge_general_route"
+    ],
+    "verifies": "Only matched run ranges change; paragraph marks retain styles.",
+    "gap": "Structural general route checked separately.",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_multiline_wording_preserves_each_paragraph_mark": {
+        "passed": 6,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t02_split_and_merge_general_route": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_multiline_wording_preserves_each_paragraph_mark": {
+        "passed": 6,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t02_split_and_merge_general_route": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F2",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_block_marker_inside_paragraph_is_literal_in_edit_and_suggest"
+    ],
+    "verifies": "Partial paragraph replacement preserves literal markers.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_block_marker_inside_paragraph_is_literal_in_edit_and_suggest": {
+        "passed": 6,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_block_marker_inside_paragraph_is_literal_in_edit_and_suggest": {
+        "passed": 6,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F3",
+    "assertions": [
+      "tests/test_replacement_scope.py::test_edit_all_reaches_every_container_and_reports_tab_counts"
+    ],
+    "verifies": "All tabs and non-body segments receive addressed requests.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_replacement_scope.py::test_edit_all_reaches_every_container_and_reports_tab_counts": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_replacement_scope.py::test_edit_all_reaches_every_container_and_reports_tab_counts": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F4",
+    "assertions": [
+      "tests/test_replacement_styles.py::test_suggestion_projection_contract_preserves_target_and_neighbours"
+    ],
+    "verifies": "Suggestion projection preserves target and neighboring styles.",
+    "gap": "Projection helper is not backend suggestion evidence.",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_replacement_styles.py::test_suggestion_projection_contract_preserves_target_and_neighbours": {
+        "passed": 6,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_replacement_styles.py::test_suggestion_projection_contract_preserves_target_and_neighbours": {
+        "passed": 6,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F5",
+    "assertions": [
+      "tests/test_api_docs.py::test_document_read_google_client_disconnect_retries"
+    ],
+    "verifies": "Read retries are bounded; mutation policy tested separately.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_api_docs.py::test_document_read_google_client_disconnect_retries": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_api_docs.py::test_document_read_google_client_disconnect_retries": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F6",
+    "assertions": [
+      "tests/test_staged_writes.py::test_single_tab_whole_write_uses_guard_snapshot_and_never_uploads",
+      "tests/acceptance/test_readback.py::test_t03_move_table_section_and_insert_section_with_readback"
+    ],
+    "verifies": "Single-tab route preserves native topology through guarded Docs write.",
+    "gap": "Live section movement and table-row expansion passed; arbitrary table layouts are not exhaustively verified.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/test_staged_writes.py::test_single_tab_whole_write_uses_guard_snapshot_and_never_uploads": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_staged_writes.py::test_single_tab_whole_write_uses_guard_snapshot_and_never_uploads": {
+        "passed": 1,
+        "failed": 0
+      },
+      "tests/acceptance/test_readback.py::test_t03_move_table_section_and_insert_section_with_readback": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F7",
+    "assertions": [
+      "tests/test_bounded_reconstruction.py::test_f7_reset_retained_paragraph_before_inserting_new_content"
+    ],
+    "verifies": "Reset retained mark before inserting and applying requested styles.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_bounded_reconstruction.py::test_f7_reset_retained_paragraph_before_inserting_new_content": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_bounded_reconstruction.py::test_f7_reset_retained_paragraph_before_inserting_new_content": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "F8",
+    "assertions": [],
+    "verifies": "Observation only: moved numeric anchors do not prove detached comments.",
+    "gap": "No product-fix assertion is warranted.",
+    "evidence": "not a bug-fix claim",
+    "baseline_results": {},
+    "integration_results": {}
+  },
+  {
+    "id": "R3-F001",
+    "assertions": [
+      "tests/test_mdparse.py::TestBalancedLinkDestinations::test_destination_and_adjacent_punctuation"
+    ],
+    "verifies": "Balanced destination and adjacent punctuation remain distinct.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_mdparse.py::TestBalancedLinkDestinations::test_destination_and_adjacent_punctuation": {
+        "passed": 18,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_mdparse.py::TestBalancedLinkDestinations::test_destination_and_adjacent_punctuation": {
+        "passed": 18,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F002",
+    "assertions": [
+      "tests/test_replacement_scope.py::test_unique_match_in_later_tab_does_not_require_all"
+    ],
+    "verifies": "Later-tab unique match succeeds without blanket all flag.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_replacement_scope.py::test_unique_match_in_later_tab_does_not_require_all": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_replacement_scope.py::test_unique_match_in_later_tab_does_not_require_all": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F003",
+    "assertions": [
+      "tests/test_anchored_comment.py::test_unicode_spaces_fold_on_both_sides",
+      "tests/acceptance/test_workflows.py::test_t15_unicode_space_fallback_visible_in_read"
+    ],
+    "verifies": "Unicode-space quote matching resolves native target.",
+    "gap": "No live backend claim; both interface regressions now pass.",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_anchored_comment.py::test_unicode_spaces_fold_on_both_sides": {
+        "passed": 8,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t15_unicode_space_fallback_visible_in_read": {
+        "passed": 0,
+        "failed": 2
+      }
+    },
+    "integration_results": {
+      "tests/test_anchored_comment.py::test_unicode_spaces_fold_on_both_sides": {
+        "passed": 8,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t15_unicode_space_fallback_visible_in_read": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F004",
+    "assertions": [
+      "tests/test_replacement_styles.py::test_mixed_retained_phrase_preserves_colour_and_plain_suffix"
+    ],
+    "verifies": "Retained run mapping preserves explicit custom color and plain suffix.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_replacement_styles.py::test_mixed_retained_phrase_preserves_colour_and_plain_suffix": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_replacement_styles.py::test_mixed_retained_phrase_preserves_colour_and_plain_suffix": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F005",
+    "assertions": [
+      "tests/test_native_targets.py::test_unicode_edit_does_not_delete_paragraph_mark"
+    ],
+    "verifies": "Case expansion maps to native UTF-16 range without adjacent deletion.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_native_targets.py::test_unicode_edit_does_not_delete_paragraph_mark": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_native_targets.py::test_unicode_edit_does_not_delete_paragraph_mark": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F006",
+    "assertions": [
+      "tests/test_replacement_styles.py::test_unrelated_plain_replacement_removes_stale_link",
+      "tests/acceptance/test_workflows.py::test_t05_restyle_retarget_and_remove_stale_link"
+    ],
+    "verifies": "Link field reset removes unrelated old destination.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_replacement_styles.py::test_unrelated_plain_replacement_removes_stale_link": {
+        "passed": 4,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t05_restyle_retarget_and_remove_stale_link": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_replacement_styles.py::test_unrelated_plain_replacement_removes_stale_link": {
+        "passed": 4,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t05_restyle_retarget_and_remove_stale_link": {
+        "passed": 4,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F007",
+    "assertions": [
+      "tests/test_anchored_comment.py::test_all_equivalent_matches_count_before_writing",
+      "tests/acceptance/test_workflows.py::test_t15_duplicate_quote_refuses_without_comment"
+    ],
+    "verifies": "Ambiguous normalized matches refuse before any comment write.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_anchored_comment.py::test_all_equivalent_matches_count_before_writing": {
+        "passed": 4,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t15_duplicate_quote_refuses_without_comment": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_anchored_comment.py::test_all_equivalent_matches_count_before_writing": {
+        "passed": 4,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t15_duplicate_quote_refuses_without_comment": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F008",
+    "assertions": [
+      "tests/test_anchored_comment.py::test_segment_quote_keeps_segment_id_and_zero_start"
+    ],
+    "verifies": "Header/footer/note targets retain segment addressing.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_anchored_comment.py::test_segment_quote_keeps_segment_id_and_zero_start": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_anchored_comment.py::test_segment_quote_keeps_segment_id_and_zero_start": {
+        "passed": 3,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F009",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_cell_replacement_keeps_its_list_unless_restyled_or_emptied"
+    ],
+    "verifies": "Cell wording keeps a list item's bullet; bullet deletion precedes a requested heading/list cell style or an emptied cell.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_cell_replacement_keeps_its_list_unless_restyled_or_emptied": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_cell_replacement_keeps_its_list_unless_restyled_or_emptied": {
+        "passed": 4,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R3-F010",
+    "assertions": [
+      "tests/test_replacement_scope.py::test_suggest_implicit_zero_segments_keep_addresses_in_suggest_batch"
+    ],
+    "verifies": "Implicit-zero segment suggestions keep correct segment and tab IDs.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_replacement_scope.py::test_suggest_implicit_zero_segments_keep_addresses_in_suggest_batch": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_replacement_scope.py::test_suggest_implicit_zero_segments_keep_addresses_in_suggest_batch": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F001",
+    "assertions": [
+      "tests/test_bounded_reconstruction.py::test_r4_f001_uses_native_terminal_mark_once"
+    ],
+    "verifies": "Inserted text plus native final mark yields exactly expected paragraphs.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_bounded_reconstruction.py::test_r4_f001_uses_native_terminal_mark_once": {
+        "passed": 7,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_bounded_reconstruction.py::test_r4_f001_uses_native_terminal_mark_once": {
+        "passed": 7,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F002",
+    "assertions": [
+      "tests/test_native_targets.py::test_tab_identity_precedes_title_and_case_fallback",
+      "tests/acceptance/test_workflows.py::test_t09_tab_id_precedes_title_for_read_and_edit"
+    ],
+    "verifies": "Exact ID wins and case fallback is deterministic.",
+    "gap": "No live backend claim; both interface regressions now pass.",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_native_targets.py::test_tab_identity_precedes_title_and_case_fallback": {
+        "passed": 8,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t09_tab_id_precedes_title_for_read_and_edit": {
+        "passed": 0,
+        "failed": 2
+      }
+    },
+    "integration_results": {
+      "tests/test_native_targets.py::test_tab_identity_precedes_title_and_case_fallback": {
+        "passed": 8,
+        "failed": 0
+      },
+      "tests/acceptance/test_workflows.py::test_t09_tab_id_precedes_title_for_read_and_edit": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F003",
+    "assertions": [
+      "tests/test_native_targets.py::test_cell_native_object_refuses_before_mutation"
+    ],
+    "verifies": "Whole-cell edits cannot delete object gaps.",
+    "gap": "Live insertion, movement and repeated image reconstruction passed; replacement/removal have offline request coverage.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/test_native_targets.py::test_cell_native_object_refuses_before_mutation": {
+        "passed": 6,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_native_targets.py::test_cell_native_object_refuses_before_mutation": {
+        "passed": 6,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F004",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_insertion_styles_only_new_paragraphs"
+    ],
+    "verifies": "Style ranges exclude preexisting heading.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_insertion_styles_only_new_paragraphs": {
+        "passed": 12,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_insertion_styles_only_new_paragraphs": {
+        "passed": 12,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F005",
+    "assertions": [
+      "tests/test_bounded_reconstruction.py::test_r4_f005_three_levels_share_range_and_keep_later_offsets"
+    ],
+    "verifies": "Grouped bullet request keeps nesting and post-list offsets.",
+    "gap": "Mixed nesting, root and child restarts at 1, and literal tabs passed combined live readback. Non-1 starts retain the explicit API shortfall.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/test_bounded_reconstruction.py::test_r4_f005_three_levels_share_range_and_keep_later_offsets": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_bounded_reconstruction.py::test_r4_f005_three_levels_share_range_and_keep_later_offsets": {
+        "passed": 4,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F006",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_empty_heading_does_not_mutate_neighbor"
+    ],
+    "verifies": "Final and nonfinal heading deletion protects neighboring elements.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_empty_heading_does_not_mutate_neighbor": {
+        "passed": 8,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_empty_heading_does_not_mutate_neighbor": {
+        "passed": 8,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F007",
+    "assertions": [
+      "tests/acceptance/test_workflows.py::test_t04_combined_roundtrip_preserves_link_heading_list",
+      "tests/acceptance/test_readback.py::test_t04_changed_combination_has_request_applied_native_readback"
+    ],
+    "verifies": "Changed and unchanged rewrites emit heading, link, emphasis and bullet requests.",
+    "gap": "Combined live table/image/list/code/quote/rule readback passed after a changed write.",
+    "evidence": "Offline assertions below; bounded live evidence reported in https://github.com/LucaDeLeo/gdoc/pull/72",
+    "baseline_results": {
+      "tests/acceptance/test_workflows.py::test_t04_combined_roundtrip_preserves_link_heading_list": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/acceptance/test_workflows.py::test_t04_combined_roundtrip_preserves_link_heading_list": {
+        "passed": 4,
+        "failed": 0
+      },
+      "tests/acceptance/test_readback.py::test_t04_changed_combination_has_request_applied_native_readback": {
+        "passed": 2,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F008",
+    "assertions": [
+      "tests/test_native_targets.py::test_ambiguous_cell_edit_refuses_before_mutation"
+    ],
+    "verifies": "Duplicate cell labels require coordinates before any mutation.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_native_targets.py::test_ambiguous_cell_edit_refuses_before_mutation": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_native_targets.py::test_ambiguous_cell_edit_refuses_before_mutation": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F009",
+    "assertions": [
+      "tests/test_staged_writes.py::test_faults_do_not_replay_acknowledged_or_uncertain_mutations"
+    ],
+    "verifies": "Fault injection preserves partial/uncertain status and no replay.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_staged_writes.py::test_faults_do_not_replay_acknowledged_or_uncertain_mutations": {
+        "passed": 6,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_staged_writes.py::test_faults_do_not_replay_acknowledged_or_uncertain_mutations": {
+        "passed": 6,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F010",
+    "assertions": [
+      "tests/test_native_targets.py::test_cross_table_edit_refuses_before_mutation"
+    ],
+    "verifies": "Text matching cannot erase an intervening table.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_native_targets.py::test_cross_table_edit_refuses_before_mutation": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_native_targets.py::test_cross_table_edit_refuses_before_mutation": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F011",
+    "assertions": [
+      "tests/test_markdown_roundtrip.py::test_handwritten_literal_emphasis"
+    ],
+    "verifies": "Identifiers and spaced markers remain literal.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_markdown_roundtrip.py::test_handwritten_literal_emphasis": {
+        "passed": 10,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_markdown_roundtrip.py::test_handwritten_literal_emphasis": {
+        "passed": 10,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F012",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_empty_heading_does_not_mutate_neighbor"
+    ],
+    "verifies": "Final heading deletion uses one bounded request without cleanup stage.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_empty_heading_does_not_mutate_neighbor": {
+        "passed": 8,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_empty_heading_does_not_mutate_neighbor": {
+        "passed": 8,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F013",
+    "assertions": [
+      "tests/test_markdown_roundtrip.py::test_named_styles_and_linked_emphasis"
+    ],
+    "verifies": "Native link with emphasis yields equivalent parsed run styles.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_markdown_roundtrip.py::test_named_styles_and_linked_emphasis": {
+        "passed": 9,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_markdown_roundtrip.py::test_named_styles_and_linked_emphasis": {
+        "passed": 9,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F014",
+    "assertions": [
+      "tests/test_write_review_regressions.py::test_first_docs_snapshot_is_the_only_whole_write_authority"
+    ],
+    "verifies": "Original revision authorizes write; later sampled version cannot adopt editor.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_write_review_regressions.py::test_first_docs_snapshot_is_the_only_whole_write_authority": {
+        "passed": 16,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_write_review_regressions.py::test_first_docs_snapshot_is_the_only_whole_write_authority": {
+        "passed": 16,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F015",
+    "assertions": [
+      "tests/test_staged_writes.py::test_all_table_stages_use_their_own_revision"
+    ],
+    "verifies": "Each staged table batch pins its own acknowledged revision.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_staged_writes.py::test_all_table_stages_use_their_own_revision": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_staged_writes.py::test_all_table_stages_use_their_own_revision": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F016",
+    "assertions": [
+      "tests/test_markdown_roundtrip.py::test_literal_text_stays_normal_paragraph"
+    ],
+    "verifies": "Exported literal block markers remain text.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_markdown_roundtrip.py::test_literal_text_stays_normal_paragraph": {
+        "passed": 31,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_markdown_roundtrip.py::test_literal_text_stays_normal_paragraph": {
+        "passed": 31,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F017",
+    "assertions": [
+      "tests/test_markdown_roundtrip.py::test_touching_run_styles"
+    ],
+    "verifies": "Adjacent run style combinations retain per-character meaning.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_markdown_roundtrip.py::test_touching_run_styles": {
+        "passed": 256,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_markdown_roundtrip.py::test_touching_run_styles": {
+        "passed": 256,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F018",
+    "assertions": [
+      "tests/test_anchored_comment.py::test_second_conflict_refuses_without_fallback"
+    ],
+    "verifies": "Repeated revision conflict does not create unanchored fallback.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_anchored_comment.py::test_second_conflict_refuses_without_fallback": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_anchored_comment.py::test_second_conflict_refuses_without_fallback": {
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F019",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_transport_through_planner_retains_exact_boundaries"
+    ],
+    "verifies": "Transport newline handling preserves adjacent paragraph range.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_transport_through_planner_retains_exact_boundaries": {
+        "passed": 32,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_transport_through_planner_retains_exact_boundaries": {
+        "passed": 32,
+        "failed": 0
+      }
+    }
+  },
+  {
+    "id": "R4-F020",
+    "assertions": [
+      "tests/test_paragraph_edits.py::test_multiline_wording_preserves_each_paragraph_mark"
+    ],
+    "verifies": "Different native paragraph styles keep their marks.",
+    "gap": "",
+    "evidence": "offline assertion; no live native evidence",
+    "baseline_results": {
+      "tests/test_paragraph_edits.py::test_multiline_wording_preserves_each_paragraph_mark": {
+        "passed": 6,
+        "failed": 0
+      }
+    },
+    "integration_results": {
+      "tests/test_paragraph_edits.py::test_multiline_wording_preserves_each_paragraph_mark": {
+        "passed": 6,
+        "failed": 0
+      }
+    }
+  }
+]

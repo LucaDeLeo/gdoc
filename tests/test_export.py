@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import httplib2
 import pytest
@@ -109,13 +109,13 @@ class TestCmdExport:
         mock_export.assert_called_once_with("doc123", DOCX_MIME)
 
     @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Title\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Title\n")
     def test_text_format_prints_to_stdout(self, mock_export, _update, capsys):
         args = _make_args(format="md")
         rc = cmd_export(args)
         assert rc == 0
         assert capsys.readouterr().out == "# Title\n"
-        mock_export.assert_called_once_with("doc123", "text/markdown")
+        mock_export.assert_called_once_with(ANY, markdown=True)
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.export_doc_bytes", return_value=b"<html></html>")
@@ -161,7 +161,7 @@ class TestCmdExport:
         assert "Bytes: 5" in lines
 
     @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Title\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Title\n")
     def test_stdout_json_wraps_content(self, mock_export, _update, capsys):
         args = _make_args(format="md", json=True)
         rc = cmd_export(args)
@@ -186,4 +186,14 @@ class TestCmdExport:
     def test_state_updated(self, mock_export, mock_update, tmp_path):
         args = _make_args(out=str(tmp_path / "r.pdf"))
         cmd_export(args)
-        assert mock_update.call_args.kwargs["command"] == "export"
+        assert mock_update.call_args.kwargs["command"] == "export-content"
+
+
+@pytest.fixture(autouse=True)
+def _native_snapshot(mocker):
+    mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
+        "revisionId": "r1", "tabs": [{
+            "tabProperties": {"tabId": "main", "title": "Main"},
+            "documentTab": {"body": {"content": []}},
+        }],
+    })

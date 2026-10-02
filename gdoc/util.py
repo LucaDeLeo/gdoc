@@ -55,6 +55,11 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 _active_account: ContextVar[str | None] = ContextVar(
     "gdoc_active_account", default=None
 )
+# The temp file holding the current MCP call's inline `text`, if any; it is
+# the caller's text, not a file to keep, so a write never refreshes it.
+mcp_text_path: ContextVar[str | None] = ContextVar(
+    "gdoc_mcp_text_path", default=None
+)
 _VALID_ACCOUNT = re.compile(r'^[\w.\-@]+$')
 
 
@@ -235,6 +240,15 @@ _TYPOGRAPHY_FOLD = str.maketrans({
     "\u2013": "-",  # en dash
     "\u2014": "-",  # em dash
 })
+
+
+def fold_unicode_spaces(text: str) -> str:
+    """Fold Unicode space separators without changing character offsets."""
+    import unicodedata
+
+    return "".join(
+        " " if unicodedata.category(char) == "Zs" else char for char in text
+    )
 
 
 def fold_typography(s: str) -> str:

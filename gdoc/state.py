@@ -18,6 +18,12 @@ class DocState:
     last_comment_check: str = ""                 # ISO timestamp for comments.list
     known_comment_ids: list[str] = field(default_factory=list)
     known_resolved_ids: list[str] = field(default_factory=list)
+    # Only content actually exposed to the caller establishes these baselines.
+    read_revision_ids: dict[str, str] = field(default_factory=dict)
+    # Reads that named native content their Markdown leaves out: they pin the
+    # revision for targeted edits, but a replacement also needs loss consent.
+    limited_read_revision_ids: dict[str, str] = field(default_factory=dict)
+    image_reference_ids: dict[str, str] = field(default_factory=dict)
 
 
 def _state_path(doc_id: str) -> Path:
@@ -89,13 +95,12 @@ def update_state_after_command(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     state.last_seen = now
 
-    is_read = command in ("cat", "info", "pull", "export", "structure")
+    is_read = command in ("cat", "pull", "export", "structure")
 
     if quiet:
         # Decision #14: --quiet state update rules
         if command == "info" and command_version is not None:
             state.last_version = command_version
-            state.last_read_version = command_version
     elif change_info is not None:
         # Normal (non-quiet) run: update from pre-flight data
         if change_info.current_version is not None:
@@ -162,3 +167,103 @@ def update_state_after_command(
             state.known_resolved_ids = [x for x in state.known_resolved_ids if x != cid]
 
     save_state(doc_id, state)
+
+
+def record_content_read(
+    doc_id: str, tab_ids: list[str], revision_id: str, *,
+    limited_tab_ids: list[str] = (),
+) -> None:
+    """Record exposed tab content from one native snapshot.
+
+    Tabs in ``limited_tab_ids`` were read with named omissions (content the
+    Markdown cannot show); they get limited coverage, never complete coverage.
+    """
+    if not isinstance(revision_id, str) or not revision_id:
+        return
+    state = load_state(doc_id) or DocState()
+    for tab_id in tab_ids:
+        if isinstance(tab_id, str) and tab_id:
+            if tab_id in limited_tab_ids:
+                state.read_revision_ids.pop(tab_id, None)
+                state.limited_read_revision_ids[tab_id] = revision_id
+            else:
+                state.limited_read_revision_ids.pop(tab_id, None)
+                state.read_revision_ids[tab_id] = revision_id
+    save_state(doc_id, state)
+
+
+def record_content_write(
+    doc_id: str, *, input_revision_id: str, acknowledged_revision_id: str,
+    replaced_tab_ids: list[str] | None = None, rebased: bool = False,
+    image_reference_ids: dict[str, str] | None = None,
+) -> None:
+    """Carry known content through an acknowledged, revision-pinned write.
+
+    A non-rebased tab replacement exposes the content sent by the caller.
+    Rebased recovery may retain unseen foreign content and cannot advance reads.
+    An uncertain write or sampled Drive version supplies no acknowledgement.
+    """
+    if not isinstance(acknowledged_revision_id, str) or not acknowledged_revision_id:
+        return
+    state = load_state(doc_id) or DocState()
+    if not rebased and isinstance(input_revision_id, str) and input_revision_id:
+        state.read_revision_ids, state.limited_read_revision_ids = (
+            {tab_id: (acknowledged_revision_id if revision == input_revision_id
+                      else revision)
+             for tab_id, revision in known.items()}
+            for known in (state.read_revision_ids,
+                          state.limited_read_revision_ids))
+    if not rebased and image_reference_ids:
+        state.image_reference_ids = {
+            original: image_reference_ids.get(current, current)
+            for original, current in state.image_reference_ids.items()
+        }
+        state.image_reference_ids.update(image_reference_ids)
+    if not rebased:
+        # A replacement writes exactly the caller's Markdown: complete coverage.
+        for tab_id in replaced_tab_ids or []:
+            if isinstance(tab_id, str) and tab_id:
+                state.limited_read_revision_ids.pop(tab_id, None)
+                state.read_revision_ids[tab_id] = acknowledged_revision_id
+    save_state(doc_id, state)
+
+
+def require_content_baseline(
+    doc_id: str, tab_ids: list[str], revision_id: str, *, force: bool = False,
+    accept_limited: bool = False, omitted: str = "",
+) -> None:
+    """Require tab exposure at the exact revision about to be written.
+
+    A read that named omitted native content counts only when
+    ``accept_limited`` says the write keeps it (a targeted insertion) or the
+    caller consented to discard it (``--allow-lossy``).
+    """
+    from gdoc.util import GdocError
+
+    if not isinstance(revision_id, str) or not revision_id:
+        raise GdocError("missing document revision; refusing an unpinned write", 3)
+    if force:
+        return
+    state = load_state(doc_id) or DocState()
+    for tab_id in tab_ids:
+        complete = state.read_revision_ids.get(tab_id)
+        limited = state.limited_read_revision_ids.get(tab_id)
+        if complete == revision_id or (limited == revision_id and accept_limited):
+            continue
+        if limited == revision_id:
+            raise GdocError(
+                "the last read of the selected tab left out native content"
+                + (f" ({omitted})" if omitted else "")
+                + ". Pass --allow-lossy to discard it, or use targeted edits "
+                "to keep it.", exit_code=3,
+            )
+        if not (complete or limited):
+            raise GdocError(
+                "no complete read baseline for the selected tab. Run 'gdoc cat' "
+                "with the same --tab and without --max-bytes/--no-images, "
+                "or use --force to intentionally overwrite.", exit_code=3,
+            )
+        raise GdocError(
+            "doc changed since last read. Read the selected tab again, "
+            "or use --force to intentionally overwrite.", exit_code=3,
+        )

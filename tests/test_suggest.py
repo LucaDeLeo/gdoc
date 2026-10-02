@@ -143,26 +143,30 @@ class TestSuggestRequestShape:
     )
     @patch("gdoc.api.docs.get_docs_service")
     def test_write_control_has_revision_and_suggest_mode(self, mock_svc, _rb):
+        """Suggestion writes retain revision control and add no client retries."""
         service = _service(_ok_response())
         mock_svc.return_value = service
 
         result = suggest_replacement("doc1", MATCH, "world", "rev123", tab_id="t.0")
 
-        call = _batch_call(service)
-        assert call.kwargs["documentId"] == "doc1"
-        body = call.kwargs["body"]
-        assert body["writeControl"] == {
-            "requiredRevisionId": "rev123",
-            "writeMode": "SUGGEST",
-        }
-        assert body["requests"] == [
-            {"deleteContentRange": {"range": {
-                "startIndex": 1, "endIndex": 6, "tabId": "t.0",
-            }}},
-            {"insertText": {
-                "location": {"index": 1, "tabId": "t.0"}, "text": "world",
-            }},
-        ]
+        service.documents.return_value.batchUpdate.return_value.execute.assert_called_once_with()
+        service.documents.return_value.batchUpdate.assert_called_once_with(
+            documentId="doc1",
+            body={
+                "writeControl": {
+                    "requiredRevisionId": "rev123",
+                    "writeMode": "SUGGEST",
+                },
+                "requests": [
+                    {"deleteContentRange": {"range": {
+                        "startIndex": 1, "endIndex": 6, "tabId": "t.0",
+                    }}},
+                    {"insertText": {
+                        "location": {"index": 1, "tabId": "t.0"}, "text": "world",
+                    }},
+                ],
+            },
+        )
         assert result.occurrences == 1
         assert result.suggestion_ids == ["suggest.abc"]
 
@@ -748,8 +752,10 @@ class TestSuggestErrors:
         mock_svc.return_value = _service(batch_error=_http_error(
             400, b'{"error": {"message": "The revision ID is stale"}}',
         ))
-        with pytest.raises(GdocError, match="re-run it"):
+        with pytest.raises(GdocError, match="re-run it") as exc:
             suggest_replacement("doc1", MATCH, "x", "rev", tab_id="t.0")
+        # A refused revision applied nothing: a clean refusal, as for edits.
+        assert exc.value.exit_code == 3
 
     @patch("gdoc.api.docs.get_docs_service")
     def test_400_malformed_revision_is_not_reported_as_a_race(self, mock_svc):
@@ -1358,7 +1364,7 @@ class TestCmdSuggest:
     @patch("gdoc.api.docs.suggest_replacement", return_value=_result())
     @patch("gdoc.api.docs.get_document_structure", return_value=_structure())
     @patch("gdoc.notify.pre_flight", return_value=None)
-    def test_reads_inline_view_and_targets_first_tab(
+    def test_reads_inline_view_and_carries_match_tab(
         self, _pf, mock_doc, mock_sug, _ver, _state, _tid,
     ):
         cmd_suggest(_args(doc="https://docs.google.com/document/d/abc123/edit"))
@@ -1368,9 +1374,12 @@ class TestCmdSuggest:
         # The token identity captured before the read travels to the write,
         # so a re-auth anywhere between them aborts pre-send.
         mock_sug.assert_called_once_with(
-            "abc123", [{"startIndex": 1, "endIndex": 6}], "world", "rev123",
+            "abc123", [{"startIndex": 1, "endIndex": 6,
+                        "tabId": "t.first", "container": "body"}],
+            "world", "rev123",
             tab_id="t.first",
             expected_token_identity=("cid.apps", "rt1"),
+            body=_structure(),
         )
 
     @patch("gdoc.state.update_state_after_command")
@@ -1387,7 +1396,8 @@ class TestCmdSuggest:
         ])
         cmd_suggest(_args(tab="draft"))
         call = mock_sug.call_args
-        assert call.args[1] == [{"startIndex": 5, "endIndex": 10}]
+        assert call.args[1] == [{"startIndex": 5, "endIndex": 10,
+                                 "tabId": "t.draft", "container": "body"}]
         assert call.kwargs["tab_id"] == "t.draft"
 
     @patch("gdoc.api.docs.suggest_replacement")
@@ -1500,30 +1510,37 @@ class TestCmdSuggest:
             cmd_suggest(_args())
         mock_sug.assert_not_called()
 
-    @patch("gdoc.api.docs.suggest_replacement")
-    @patch("gdoc.api.docs.get_document_structure")
+    # Whether a block marker is structural depends on the match: inside a
+    # paragraph it is literal text (as in edit), so the rejection happens
+    # after the document read, once the match context is known, and always
+    # before any write.
+    @pytest.mark.parametrize("new_text", [
+        "# Heading", "- bullet", "1. item", "---", "> quote",
+        "| a |\n|---|\n| b |",
+    ])
+    @patch("gdoc.api.docs.check_suggest_preview_access")
+    @patch("gdoc.api.docs.get_docs_service")
+    @patch("gdoc.api.docs.get_document_structure", return_value=_structure())
     @patch("gdoc.notify.pre_flight", return_value=None)
-    def test_structural_markdown_rejected_before_any_api_call(
-        self, mock_pf, mock_doc, mock_sug,
+    def test_structural_whole_paragraph_replacement_rejected_before_write(
+        self, _pf, _doc, mock_svc, mock_gate, new_text,
     ):
         with pytest.raises(GdocError, match="not supported yet") as exc:
-            cmd_suggest(_args(new_text="# Heading"))
+            cmd_suggest(_args(old_text="hello world", new_text=new_text))
         assert exc.value.exit_code == 3
-        mock_pf.assert_not_called()
-        mock_doc.assert_not_called()
-        mock_sug.assert_not_called()
+        mock_gate.assert_not_called()
+        mock_svc.return_value.documents.return_value.batchUpdate.assert_not_called()
 
-    @pytest.mark.parametrize("new_text", [
-        "- bullet", "1. item", "---", "> quote", "| a |\n|---|\n| b |",
-    ])
-    @patch("gdoc.api.docs.suggest_replacement")
+    @patch("gdoc.api.docs.suggest_replacement", return_value=_result())
+    @patch("gdoc.api.docs.get_document_structure", return_value=_structure())
     @patch("gdoc.notify.pre_flight", return_value=None)
-    def test_each_structural_form_rejected(self, mock_pf, mock_sug, new_text):
-        with pytest.raises(GdocError) as exc:
-            cmd_suggest(_args(new_text=new_text))
-        assert exc.value.exit_code == 3
-        mock_pf.assert_not_called()
-        mock_sug.assert_not_called()
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value=_VERSION)
+    def test_block_marker_inside_paragraph_reaches_suggest(
+        self, _ver, _state, _pf, _doc, mock_sug,
+    ):
+        cmd_suggest(_args(old_text="hello", new_text="# Heading"))
+        assert mock_sug.call_args.args[2] == "# Heading"
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_VERSION)
@@ -1632,9 +1649,11 @@ class TestCmdSuggest:
     def test_conflict_warning_does_not_block(
         self, mock_pf, _doc, _sug, _ver, _state, capsys,
     ):
-        mock_pf.return_value = ChangeInfo(current_version=41, last_read_version=40)
+        mock_pf.return_value = ChangeInfo(
+            current_version=41, last_read_version=40, doc_edited=True,
+        )
         assert cmd_suggest(_args()) == 0
-        assert "WARN: doc changed since last read" in capsys.readouterr().err
+        assert "WARN: doc changed since last interaction" in capsys.readouterr().err
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.get_file_version", return_value=_VERSION)
@@ -1649,7 +1668,9 @@ class TestCmdSuggest:
         cmd_suggest(_args(
             old_text=None, new_text=None, old_file=str(old), new_file=str(new),
         ))
-        assert mock_sug.call_args.args[1] == [{"startIndex": 1, "endIndex": 6}]
+        assert mock_sug.call_args.args[1] == [{
+            "startIndex": 1, "endIndex": 6, "tabId": "t.first", "container": "body",
+        }]
         assert mock_sug.call_args.args[2] == "**world**"
 
     @patch("gdoc.state.update_state_after_command")
@@ -1708,3 +1729,189 @@ class TestMcpExposure:
             {"old_file", "new_file"},
         )
         assert "suggest" in mcp._DESCRIPTION_NOTES
+
+
+def test_multiline_suggestion_preserves_native_paragraph_marks(mocker):
+    """Suggested wording changes retain both native marks and count one match."""
+    body = _body(
+        _para(_run("Alpha\n", 1, 7),
+              paragraphStyle={"namedStyleType": "TITLE"}),
+        _para(_run("Beta\n", 7, 12),
+              paragraphStyle={"namedStyleType": "HEADING_2"},
+              bullet={"listId": "synthetic-list", "nestingLevel": 2}),
+    )
+    service = _service(_ok_response())
+    mocker.patch("gdoc.api.docs.get_docs_service", return_value=service)
+    mocker.patch("gdoc.api.docs.get_document_structure",
+                 return_value=_readback("suggest.abc"))
+    result = suggest_replacement(
+        "synthetic-doc", [{"startIndex": 1, "endIndex": 11}],
+        "Long alpha\nShort", "synthetic-rev", tab_id="t.0", body=body,
+    )
+    assert result.occurrences == 1
+    assert _batch_call(service).kwargs["body"] == {
+        "writeControl": {"requiredRevisionId": "synthetic-rev", "writeMode": "SUGGEST"},
+        "requests": [
+            {"deleteContentRange": {"range": {
+                "startIndex": 7, "endIndex": 11, "tabId": "t.0",
+            }}},
+            {"insertText": {"location": {"index": 7, "tabId": "t.0"},
+                            "text": "Short"}},
+            {"deleteContentRange": {"range": {
+                "startIndex": 1, "endIndex": 6, "tabId": "t.0",
+            }}},
+            {"insertText": {"location": {"index": 1, "tabId": "t.0"},
+                            "text": "Long alpha"}},
+        ],
+    }
+
+
+def test_multiline_suggestion_count_mismatch_refuses_before_preview(mocker):
+    """An ambiguous paragraph merge fails before even the preview gate."""
+    body = _body(_para(_run("Alpha\n", 1, 7)), _para(_run("Beta\n", 7, 12)))
+    gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+    service = mocker.patch("gdoc.api.docs.get_docs_service")
+    with pytest.raises(GdocError, match="paragraph count mismatch") as exc:
+        suggest_replacement("synthetic-doc", [{"startIndex": 1, "endIndex": 11}],
+                            "Merged", "synthetic-rev", body=body)
+    assert exc.value.exit_code == 3
+    gate.assert_not_called()
+    service.assert_not_called()
+
+
+def test_suggest_segments_exact_batch(mocker, _preview_gate_passes):
+    from test_docs_batch import _expected_mixed_requests, _mixed_matches
+
+    service = _service(_ok_response())
+    mocker.patch("gdoc.api.docs.get_docs_service", return_value=service)
+    readback = mocker.patch("gdoc.api.docs.get_document_structure",
+                            return_value=_readback("suggest.abc"))
+    result = suggest_replacement(
+        "doc-one", _mixed_matches(), "***REPLACED***", "revision-one",
+        tab_id="tab-one",
+    )
+    assert result.occurrences == 3
+    service.documents.return_value.batchUpdate.assert_called_once_with(
+        documentId="doc-one", body={
+            "requests": _expected_mixed_requests(),
+            "writeControl": {"requiredRevisionId": "revision-one",
+                             "writeMode": "SUGGEST"},
+        },
+    )
+    _preview_gate_passes.assert_called_once_with("doc-one")
+    readback.assert_called_once_with(
+        "doc-one", suggestions_view_mode=SUGGESTIONS_INLINE,
+    )
+
+
+@pytest.mark.parametrize("target", ["body", "headers", "footnotes"])
+@pytest.mark.parametrize("suggested_container", ["body", "headers", "footnotes"])
+def test_suggest_overlap_checks_only_the_matched_container(
+    mocker, target, suggested_container,
+):
+    def content(text, suggested=False):
+        run = _run(text, 1, 1 + len(text))
+        if suggested:
+            run["textRun"]["suggestedInsertionIds"] = ["suggest-existing"]
+        return _body(_para(run))
+
+    document_tab = {}
+    for key in ("body", "headers", "footnotes"):
+        value = content("TOKEN" if key == target else "Other",
+                        key == suggested_container)
+        document_tab[key] = value if key == "body" else {key + "-one": value}
+    document = {"revisionId": "revision-one", "tabs": [{
+        "tabProperties": {"tabId": "tab-one", "title": "First"},
+        "documentTab": document_tab,
+    }]}
+    mocker.patch("gdoc.notify.pre_flight", return_value=None)
+    mocker.patch("gdoc.api.docs.get_document_structure", return_value=document)
+    mocker.patch("gdoc.api.docs._token_identity", return_value=("client", "token"))
+    mocker.patch("gdoc.api.drive.get_file_version", return_value=_VERSION)
+    mocker.patch("gdoc.state.update_state_after_command")
+    suggest = mocker.patch("gdoc.api.docs.suggest_replacement", return_value=_result())
+    args = _args(old_text="TOKEN", new_text="REPLACED")
+    if target == suggested_container:
+        with pytest.raises(GdocError, match="overlaps existing") as error:
+            cmd_suggest(args)
+        assert error.value.exit_code == 3
+        suggest.assert_not_called()
+    else:
+        assert cmd_suggest(args) == 0
+        match = {"startIndex": 1, "endIndex": 6, "tabId": "tab-one",
+                 "container": "body" if target == "body" else target[:-1]}
+        if target != "body":
+            match["segmentId"] = target + "-one"
+        suggest.assert_called_once_with(
+            "abc123", [match], "REPLACED", "revision-one", tab_id="tab-one",
+            expected_token_identity=("client", "token"), body=document,
+        )
+
+
+def test_suggest_segment_readback_must_contain_reported_ids(mocker):
+    from test_docs_batch import _mixed_matches
+
+    service = _service(_ok_response())
+    mocker.patch("gdoc.api.docs.get_docs_service", return_value=service)
+    mocker.patch("gdoc.api.docs.get_document_structure", return_value=_readback())
+    with pytest.raises(GdocError, match="read-back"):
+        suggest_replacement("doc-one", _mixed_matches(), "REPLACED", "revision-one")
+    assert service.documents.return_value.batchUpdate.call_count == 1
+
+
+@pytest.mark.parametrize('acknowledged', ['', 'ack-revision'])
+def test_suggest_carries_only_response_revision_into_known_content(
+    mocker, acknowledged,
+):
+    from gdoc.state import load_state, record_content_read
+
+    mocker.patch('gdoc.notify.pre_flight', return_value=None)
+    mocker.patch('gdoc.api.docs.get_document_structure', return_value=_structure())
+    result = _result()
+    result.acknowledged_revision_id = acknowledged
+    mocker.patch('gdoc.api.docs.suggest_replacement', return_value=result)
+    mocker.patch('gdoc.api.drive.get_file_version', return_value=_VERSION)
+    record_content_read('abc123', ['t.first'], 'rev123')
+    assert cmd_suggest(_args()) == 0
+    assert load_state('abc123').read_revision_ids == {
+        't.first': acknowledged or 'rev123',
+    }
+
+
+def test_suggestion_provenance_comes_from_mutation_not_readback(mocker):
+    response = _ok_response()
+    response['writeControl'] = {'requiredRevisionId': 'ack-revision'}
+    mocker.patch('gdoc.api.docs.get_docs_service', return_value=_service(response))
+    mocker.patch('gdoc.api.docs.get_document_structure',
+                 return_value=_readback('suggest.abc'))
+    result = suggest_replacement('doc1', MATCH, 'world', 'rev123', tab_id='t.0')
+    assert result.acknowledged_revision_id == 'ack-revision'
+
+
+def test_lost_suggest_response_is_sent_once_and_reported_unknown(mocker):
+    """httplib2 would resend after a lost response; the resend could only be
+    refused as stale and misreported, so the batch leaves the wire once."""
+    from http.client import HTTPSConnection, RemoteDisconnected
+
+    import httplib2
+    from google.oauth2.credentials import Credentials
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+
+    from gdoc.api import comment_transport
+
+    connection = mocker.Mock(spec=HTTPSConnection)
+    connection.sock = mocker.sentinel.socket
+    connection.getresponse.side_effect = RemoteDisconnected("response lost")
+    single = comment_transport._SingleSendHttp()
+    single.connections["https:docs.googleapis.com"] = connection
+    mocker.patch.object(comment_transport, "_SingleSendHttp", return_value=single)
+    service = build("docs", "v1", static_discovery=True, http=AuthorizedHttp(
+        Credentials(token="synthetic-token"), http=httplib2.Http()))
+    mocker.patch("gdoc.api.docs.get_docs_service", return_value=service)
+
+    with pytest.raises(GdocError) as exc:
+        suggest_replacement("doc1", MATCH, "x", "rev", tab_id="t.0")
+    assert "outcome is unknown" in str(exc.value)
+    assert "re-run" not in str(exc.value)
+    assert connection.request.call_count == 1

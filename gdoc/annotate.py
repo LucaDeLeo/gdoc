@@ -5,7 +5,7 @@ import re
 from array import array
 from bisect import bisect_left, bisect_right
 
-from gdoc.util import find_overlapping
+from gdoc.util import find_overlapping, fold_unicode_spaces
 
 
 def _format_author(author_dict: dict) -> str:
@@ -77,8 +77,18 @@ def _find_all(text: str, key: str) -> list[int]:
 
 
 # Chars that never start markup; a run of them is kept in one step.
-_PLAIN = re.compile(r"[^\\&`!\[*~_\n]+")
-_FENCE = re.compile(r"( {0,3})(`{3,}|~{3,})([^\n]*)")
+_PLAIN = re.compile(r"[^\\&`!\[*~_<\n]+")
+# The empty HTML comment the exporter puts between touching emphasis or code
+# runs (`**a**<!-- -->*b*`) shows nothing.
+_RUN_SEPARATOR = "<!-- -->"
+# A fence may sit inside quotes and list items: quote markers, then the
+# indent (up to 3 spaces past the enclosing list item's content column).
+# Code inside such a fence is literal too.
+_FENCE = re.compile(r"((?:[ \t]*>)*)([ \t]*)(`{3,}|~{3,})([^\n]*)")
+_QUOTE_MARKER = re.compile(r"([ \t]*)>")
+# Lines that start a block rather than continue a paragraph: an ATX heading
+# or a thematic break (a list item is matched separately).
+_BLOCK_START = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|([-*_])(?:[ \t]*\1){2,}[ \t]*$)")
 _LIST_MARKER = re.compile(r"[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
 _ENTITY = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z]+);")
 _FOOTNOTE_DEF = re.compile(r"\[\^[^\]\n]+\]:")
@@ -143,22 +153,73 @@ def _visible_text(
     # follow a closing run.)
     fences: dict[int, tuple[int | None, int]] = {}  # line -> (closer, indent)
     fenced: list[tuple[int, int]] = []  # (start, end) of each block
-    opened: tuple[int, str, int, int] | None = None
+    opened: tuple[int, str, int, int, int] | None = None
+    # Content columns of the open list items, one stack per quote depth:
+    # a line's indent before each ">" is measured against its own level.
+    stacks: list[list[int]] = [[]]
+    paragraph = False  # a paragraph is open, so a dedented line is lazy
+
+    def enter(line: int, end: int) -> tuple[list[int], str]:
+        """Reconcile the stacks for a line; return its innermost stack and
+        the text after its quote markers."""
+        nonlocal stacks
+        pos, depth = line, 0
+        while (q := _QUOTE_MARKER.match(md, pos, end)):
+            if depth < len(stacks):
+                indent = len(q.group(1))
+                # A quote less indented than an item is outside it.
+                while stacks[depth] and stacks[depth][-1] > indent:
+                    stacks[depth].pop()
+            pos, depth = q.end(), depth + 1
+        stacks = stacks[:depth + 1] + [[] for _ in range(depth + 1 - len(stacks))]
+        return stacks[depth], md[pos:end]
+
     for line in [0, *(k + 1 for k in newlines)]:
-        m = _FENCE.match(md, line)
+        end = md.find("\n", line)
+        end = n if end < 0 else end
+        m = _FENCE.match(md, line, end)
+        if opened is None and not m:
+            # Track list items for fence indents.
+            items, body = enter(line, end)
+            if not body.strip():
+                paragraph = False
+                continue
+            col = len(body) - len(body.lstrip(" "))
+            marker = _LIST_MARKER.match(body)
+            block = _BLOCK_START.match(body)
+            # A less indented line ends the deeper items, unless it is a
+            # lazy continuation of an open paragraph.
+            if marker or block or not paragraph:
+                while items and items[-1] > col:
+                    items.pop()
+            if marker:
+                items.append(marker.end())
+            paragraph = not block or bool(marker)
+            continue
         if not m:
             continue
-        indent, run, rest = m.group(1), m.group(2), m.group(3)
+        spaces, run, rest = m.group(2), m.group(3), m.group(4)
+        indent = m.group(1) + spaces
         if opened is None:
+            # The deepest item still enclosing the fence sets its base.
+            items, _ = enter(line, end)
+            while items and items[-1] > len(spaces):
+                items.pop()
+            base = items[-1] if items else 0
+            if len(spaces) - base > 3:
+                continue  # indented code, not a fence
             if not (run[0] == "`" and "`" in rest):
-                opened = (line, run[0], len(run), len(indent))
+                opened = (line, run[0], len(run), len(indent), base)
+                paragraph = False
         elif (
             run[0] == opened[1] and len(run) >= opened[2]
             and not rest.strip(" \t")
+            and len(spaces) - opened[4] <= 3
         ):
             fences[opened[0]] = (line, opened[3])
             fenced.append((opened[0], line_end(line)))
             opened = None
+            paragraph = False
     if opened is not None:
         fences[opened[0]] = (None, opened[3])
         fenced.append((opened[0], n))
@@ -281,6 +342,8 @@ def _visible_text(
         if m:
             keep(i, m.end())
             i = m.end()
+        elif md.startswith(_RUN_SEPARATOR, i) and i + len(_RUN_SEPARATOR) <= limit:
+            i += len(_RUN_SEPARATOR)
         elif ch == "\\" and i + 1 < limit and md[i + 1] != "\n":
             keep(i + 1, i + 2)
             i += 2
@@ -396,12 +459,19 @@ def _place_quote(
 
     text, where = visible
     found: dict[int, str] = {}  # line index -> the reading found there
-    for reading in readings:
-        for start in find_overlapping(text, reading):
-            last = where[start + len(reading) - 1]
-            found.setdefault(bisect_left(newlines, last), reading)
-            if len(found) > 1:
-                break
+    # Exactly first; then with Unicode spaces (NBSP and the like) folded,
+    # which keeps every character's position.
+    for fold in (False, True):
+        search = fold_unicode_spaces(text) if fold else text
+        for reading in readings:
+            key = fold_unicode_spaces(reading) if fold else reading
+            for start in find_overlapping(search, key):
+                last = where[start + len(key) - 1]
+                found.setdefault(bisect_left(newlines, last), reading)
+                if len(found) > 1:
+                    break
+        if found:
+            break
     if not found:
         return "quoted text not found (edited or detached)", None, raw
     if len(found) > 1:
@@ -415,6 +485,7 @@ def annotate_markdown(
     comments: list[dict],
     show_resolved: bool = False,
     anchors: dict[str, dict | None] | None = None,
+    other_tabs: list[str] | None = None,
 ) -> str:
     """Produce line-numbered annotated output with inline comment annotations.
 
@@ -429,6 +500,10 @@ def annotate_markdown(
             comment is placed where its quoted text occurs, which is only
             a location guess: Drive keeps the quote after the anchor is
             edited or detached.
+        other_tabs: Markdown of the document's other tabs, when *markdown*
+            is one tab. Drive does not say which tab a quote is in, so a
+            quote found only there is reported as in another tab, and one
+            found in both as ambiguous.
 
     Returns:
         Annotated string with numbered content lines and un-numbered
@@ -489,6 +564,16 @@ def annotate_markdown(
         if newlines is None:
             newlines = _newlines(markdown)
         note, line_idx, anchor_text = _place_quote(newlines, visible_all, qfc)
+        if other_tabs and note in ("quoted text found",
+                                   "quoted text not found (edited or detached)"):
+            # Present elsewhere, once or more (ambiguous there too).
+            elsewhere = any(
+                _place_quote(_newlines(other), _visible_text(other, footnotes=True),
+                             qfc)[0] in ("quoted text found", "quoted text ambiguous")
+                for other in other_tabs)
+            if elsewhere:
+                note, line_idx = ("quoted text ambiguous" if line_idx is not None
+                                  else "quoted text in another tab"), None
         if line_idx is None:
             unanchored.append((c, note))
         else:

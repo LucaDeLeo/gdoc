@@ -130,7 +130,7 @@ gdoc edit DOC_ID "old text" "**new bold text**"
 # Same replacement, but as a suggested edit for a human to accept
 gdoc suggest DOC_ID "old text" "new text"
 
-# Overwrite a document from a local file
+# Replace the first tab from a local file
 gdoc write DOC_ID draft.md
 
 # Create a new blank document
@@ -181,7 +181,7 @@ gdoc cat 1aBcDeFg...
 
 | Command | Description |
 |---------|-------------|
-| `cat DOC` | Export document as markdown (or `--plain` for plain text, `--max-bytes N` to truncate) |
+| `cat DOC` | Read the first tab as editable Markdown (`--plain` for text; `--max-bytes N` explicitly marks partial output) |
 | `cat --tab NAME DOC` | Read a specific tab by title or ID |
 | `cat --all-tabs DOC` | Read all tabs with headers |
 | `cat --comments DOC` | Line-numbered content with inline comment annotations |
@@ -192,7 +192,7 @@ gdoc cat 1aBcDeFg...
 | `images DOC` | List images, charts, and drawings (`--download DIR` to save locally) |
 | `find QUERY` | Search files by name or content (`--raw` to pass a full [Drive query](https://developers.google.com/workspace/drive/api/guides/search-files) verbatim) |
 | `drives` | List shared drives |
-| `export DOC --out FILE` | Render to `pdf`, `docx`, `odt`, `epub`, `html`, `md`, `txt`, or `rtf` (format inferred from the extension, or `--format`; all tabs included) |
+| `export DOC --out FILE` | Render to `pdf`, `docx`, `odt`, `epub`, `html`, `md`, `txt`, or `rtf` (format inferred from the extension, or `--format`; Markdown exports the first tab, or `--tab NAME`; other formats cover every tab) |
 | `structure DOC` | Native document JSON — styles, tables, tab topology, UTF-16 index ranges (`--tab` to narrow, `--fields` for a raw field mask, `--suggestions-view-mode` to pick the suggestions rendering) |
 
 ### Writing
@@ -203,7 +203,7 @@ gdoc cat 1aBcDeFg...
 | `edit DOC --cell ADDR NEW` | Replace a table cell by label or `ROW,COL` coordinates (`--col`, `--table`) |
 | `suggest DOC OLD NEW` | Same find-and-replace as `edit`, made as a **suggested edit** the doc's reviewers accept or reject (same `--all`/`--normalize`/`--case-sensitive`/`--tab`/`--old-file`/`--new-file`/`-` flags; inline Markdown only — see below) |
 | `nest DOC TEXT` / `unnest DOC TEXT` | Move a list item (and its sub-items) one level in or out, in place; `--to TEXT` for a range of items, `--levels N`, `--tab` — see below |
-| `write DOC FILE` | Overwrite document from a local markdown file |
+| `write DOC FILE` | Replace the first tab from Markdown; `--tab NAME` selects another tab and siblings survive |
 | `cells SHEET RANGE` | Write values into a spreadsheet range (`-v VALUE` per cell, `--file rows.csv`, `--stdin` for TSV; `--append` adds rows, `--user-entered` parses formulas/dates) |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
 | `insert-image DOC IMG` | Insert a local image or public URL (`--after TEXT`, `--index N`, or `--end`; `--tab` for multi-tab docs; `--width`/`--height` in points) |
@@ -217,7 +217,7 @@ gdoc cat 1aBcDeFg...
 | `revisions DOC` | List retained revisions — id, modified time, author, `[keep]` marker (`--limit N`; alias: `history`) |
 | `cat --revision REV DOC` | Export a past revision to stdout |
 | `pull --revision REV DOC FILE` | Download a past revision (gets `source:`/`revision:` frontmatter, not `gdoc:`, so it can't be pushed back by accident) |
-| `diff DOC FILE` | Compare the current doc against a local file (unified diff) |
+| `diff DOC FILE` | Compare one tab's Markdown, as `cat` and `pull` read it, against a local file's body (unified diff; the file's pulled tab, `--tab NAME`, or the first tab) |
 | `diff DOC --rev A..B` | Word-diff two revisions (`--rev A` compares A against latest) |
 | `diff DOC --since ISO` | What changed since a timestamp (last revision at/before it vs latest) |
 | `diff DOC --rev A..B --format html` | Write a styled diff artifact (`--out PATH`, `--with-comments` to anchor comment threads) |
@@ -234,21 +234,38 @@ gdoc cat 1aBcDeFg...
 | `reopen DOC COMMENT_ID` | Reopen a resolved comment |
 | `delete-comment DOC ID` | Delete a comment (`--force` to skip confirmation) |
 
-`comment --quote "some doc text"` anchors the comment to the first occurrence
-of that text (all tabs are searched). When the OAuth client's Cloud project is
-enrolled in the
-[Google Workspace Developer Preview Program](https://developers.google.com/workspace/preview),
-this creates a **real anchored comment** via the Docs API `insertComment`
-request — highlighted in the Docs UI exactly like a comment made by hand
-(`OK comment #ID (anchored)`; `"anchored": true` in `--json`). Without preview
-access (or with comment-only permission on the doc, which can't `batchUpdate`),
-or when the quoted text isn't found in the document, it falls back
-transparently to the Drive API path: the comment is created unanchored
-(`anchored: false` in `--json`/`--plain`) with the quote stored as
-`quotedFileContent` metadata, which `cat --comments` places by matching that
-text but the Docs UI does not highlight. Same command either way — anchoring
-problems never fail the comment (though unrelated API errors, like a missing doc or
-expired auth, still do).
+`comment --quote "some doc text"` requires a unique match across all tabs
+(including child tabs), searching the body, headers, footers and footnotes.
+Matches in the quote's own letter case take precedence; other casings count
+only when none exist.
+Use a longer quote to distinguish repeated text, `--tab TITLE_OR_ID` to
+limit the search to one tab, or `--occurrence N` to pick the Nth match in a
+stable order (tabs in outline order; within a tab the body, then headers,
+footers and footnotes each sorted by segment ID). IDs take precedence over
+titles; duplicate titles require an ID. Matching folds typography and Unicode spaces such as NBSP,
+while preserving native UTF-16 coordinates. Comments can span non-text objects
+within a paragraph, but quotes cannot cross table/cell boundaries.
+
+With the OAuth project's
+[Workspace Developer Preview](https://developers.google.com/workspace/preview)
+access, the Docs API creates a native highlighted anchor. JSON/plain output
+reports `anchored: true` and `tabId`. Only a definite preview or permission
+rejection permits an unanchored Drive fallback: output reports
+`anchored: false`, `reason: preview_unavailable`, and stderr explains the
+rejection. The quote is stored as `quotedFileContent` metadata, without a
+native highlight; fallback output omits tab/segment scope because no anchor
+was created. Comments without `--quote` report `anchored: false` and
+`reason: no_quote` in JSON/plain output.
+
+No normalized match, ambiguity, or missing revision metadata refuses the
+comment with **exit 3**. A rejected revision triggers one fresh read and
+resolution; another revision rejection also exits 3. Successful anchors and
+unanchored comments exit **0**. Uncertain writes (including a lost response,
+incomplete save confirmation, or server error) exit **1**: inspect comments
+before retrying, since the first write may have saved. Comment creation never
+replays a wire request after a lost response and never falls back in that
+case. Other API errors exit **1**, authentication errors **2**. Errors retain
+the usual `ERR:` stderr format even with `--json`.
 
 ### Other
 
@@ -326,14 +343,17 @@ the server with, it restricts the tool surface too — and must include
 How the tools differ from the CLI:
 
 - `write`, `insert`, and `new` take markdown content as inline `text`
-  instead of a local file path.
+  instead of a local file path. `write` of pulled text checks its
+  `gdoc-revision` as for a file, but no file is updated afterwards; `cat`
+  again before the next write.
 - Parameters that name local files (`edit --old-file/--new-file`,
   `diff FILE`/`--out`, `images --download`, …) are not exposed: a chat
   client cannot see the server's filesystem, and hiding them keeps a
   prompt-injected model from reading or writing files on the host.
-- `auth`, `update`, `config`, `pull`, `push`, `export`, `insert-image`,
-  and `replace-image` are not exposed: they need a browser, change the
-  install, or only work on local paths.
+- `insert-image` and `replace-image` accept HTTP(S) image URLs.
+- `auth`, `update`, `config`, `pull`, `push`, and `export` are not exposed:
+  they need a browser, change the install, or operate on local files.
+  Use `cat` and inline `write` for the same Markdown workflow over MCP.
 - `diff` reporting "differences found" (exit code 1 in the CLI,
   diff-style) is a normal result, not an error.
 
@@ -373,23 +393,367 @@ On subsequent interactions:
 ---
 ```
 
-If nothing changed: `--- no changes ---`
+If nothing changed, no banner is printed. Each comment-update category shows at
+most three previews, with an omitted count and a command for full details.
 
-### Conflict prevention
+### Editable Markdown and revision safety
 
-The `write` command blocks if the document was modified since your last read:
+CLI and MCP share the same handlers and content contract. Read a complete tab,
+modify its Markdown, then replace that tab:
 
 ```bash
-gdoc cat DOC               # establishes a read baseline
-# ... someone else edits the doc ...
-gdoc write DOC draft.md    # ERR: doc changed since last read
-gdoc cat DOC               # re-read to update baseline
-gdoc write DOC draft.md    # OK written
+gdoc cat DOC --max-bytes 0 > draft.md
+# Edit draft.md, including paragraph, list or table structure.
+gdoc write DOC draft.md
+
+# File workflows remember the selected tab in frontmatter.
+gdoc pull DOC draft.md --tab Notes
+gdoc push draft.md
 ```
 
-Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight checks entirely (saves 2 API calls).
+The default is the first tab. `--tab` accepts an exact ID or a unique title;
+other tabs, headers, footers and page setup survive a body replacement.
+`cat --all-tabs` is an inspection view with tab headers, not a file to write back
+as one tab. `structure --heading "Checklist"` and `structure --table 1 --tab Notes`
+provide detail for a specific element; complete raw structure remains available.
 
-Files from `gdoc pull` carry their own baseline. `pull` stamps the file with `gdoc-version: N`, the Drive version its content came from, and `push`, `write DOC FILE`, and the sync hook compare that stamp with the doc's current version instead of this machine's last read. If anyone has edited the doc since the pull, the upload is refused (exit 3), even when a later `gdoc cat` on this machine has seen the newer version. Nothing is sent and the file is left untouched. To recover, pull a fresh copy to a new path (`gdoc pull DOC draft.latest.md`), see what changed with `gdoc diff DOC draft.md`, and carry your edits into the new file before pushing it; `--force` discards the newer changes in the doc. The sync hook reports the same refusal with exit 2, which Claude Code shows to the agent, and the pull hook will not overwrite a stale stamped file that differs from the doc. A successful upload advances the stamp to the version the upload created, so you can push, edit, and push again. Any change to the doc makes the file stale, including edits in other tabs. Files without a stamp (hand-written, or pulled by an older gdoc) keep the read-baseline rule above.
+Complete native Markdown reads establish a baseline for the tabs actually read.
+Metadata, truncated output, plain text, annotated comments and structure selectors
+do not establish a full-content baseline. Truncation is reported on stderr and in
+JSON scope metadata; `--max-bytes 0` retrieves complete content. `cat --json`
+also reports `tab_count`. When a tab holds content Markdown cannot show (footnotes,
+chips, equations, page breaks, positioned objects, drawings, linked charts,
+generated contents, custom named ranges, tables that cannot be pipe tables, or
+lists, headings, rules and indented paragraphs inside table cells), `cat`, `pull` and
+Markdown `export` name it on stderr, and JSON reports `complete: false` with an
+`omitted` list. Such a read records only limited coverage of its revision:
+targeted edits and `insert` keep the omitted content and proceed, and a rewrite of
+the tab needs `--allow-lossy` to discard it while staying revision-protected. `pull` and Markdown
+`export` use the same native serializer as `cat`.
+
+`write` and `insert` accept at most one leading metadata block: `pull` frontmatter
+with `key: value` lines, or an empty block of two `---` lines. `write` of a pulled
+file (one whose `gdoc` names this document) replaces the tab it was pulled from
+when `--tab` is absent, and refuses a different `--tab` or another document;
+remove the frontmatter to copy the text elsewhere. It also checks the file's
+`gdoc-revision` as `push` does (below), and after an acknowledged write it
+updates the file's provenance fields as `push` does, so the next write or push of
+the same file is not stale because of it. `write` of a `pull --revision` file needs
+`--force`, because it replaces the live tab with older text. A `tab` field without
+`gdoc` provenance is ignored. When a tab starts
+with a horizontal rule, `cat` and Markdown `export` print that empty block first, so
+the rule and the text after it stay content. Keep the empty block when writing such
+a read back; `pull` files already carry their own metadata block. Without it, a
+leading `---` block is metadata only when its first line (after `#` comments) is a
+`key: value` line and so is every unindented line with a colon. Markdown-shaped
+lines are not key lines: links, code, tables, list items, quotes, keys wrapped in
+emphasis, paths and URLs such as `https://example.com`. Otherwise the block stays
+content: `---`, a blank
+line, `Note: keep me`, `---` is a rule, a paragraph and a rule. `---`, `Note: keep me`, `---` is
+metadata; to start a body that way, write the empty block first or escape the
+colon (`Note\: keep me`).
+
+Writes compare that baseline with the native document revision and pin mutations
+to the checked snapshot. A collaborator edit requires a fresh read. `--force`
+explicitly authorizes replacement from the current snapshot; it never disables the
+revision precondition. `--quiet` only suppresses notifications. A successful write
+uses the revision acknowledged by Google, so successive own writes normally need
+no extra read. Missing acknowledgments or a rebased recovery do not bless unseen
+content; a rebased write says so with a stderr warning and `rebased: true` in JSON. An unchanged selected tab returns `already in sync` without mutation.
+Matching Markdown is not a read: styles and pending suggestions do not appear in
+Markdown, so an `already in sync` result never establishes a new baseline.
+
+`push`, `write` of a pulled file and the sync hook also check the file's own `gdoc-revision`; reading a newer
+copy elsewhere cannot authorize an older file. The revision covers the whole
+document, so an older file is still accepted when its selected tab's native content
+matches the `gdoc-tab-sha256` fingerprint recorded at that revision: edits to other
+tabs, including your own push of a sibling tab's file, leave it pushable. A matching
+fingerprint also serves as the tab's read baseline, so a pulled file stays pushable
+on another machine or after local state is cleared. Any change
+to the selected tab itself, including text colour or a pending suggestion, makes the
+file stale; `--allow-lossy` does not override that. The fingerprint covers the
+tab's text, styles, lists, named ranges, named and document styles, segments and
+suggestions. A tab containing images has no fingerprint: Google issues a fresh
+temporary image URI on every read, and a replaced image can keep its object ID and
+size, so any later revision change makes such a file stale until a fresh pull.
+Because a revision string alone is never a read baseline, such a file also needs a
+fresh read or `--force` when this machine has no local state for the document,
+even at the same revision (for example after moving the file to another machine). Files without revision provenance
+need a fresh pull or an explicit `--force`. An acknowledged push, or `write` of a
+pulled file, updates only its provenance fields, preserving other frontmatter, and reads the document once more
+to fingerprint the written tab; if another edit already landed, the fingerprint is
+left empty and the next push needs a fresh pull. `gdoc-body-sha256` records the
+last pulled or acknowledged body. The pull hook leaves locally edited files in
+place; pull a separate copy to reconcile them. When a hook skips or fails, it
+prints the reason on stderr and, for Claude Code hook events, also returns it as
+`additionalContext` so the agent sees it.
+
+Local replacements retain the previous file at `FILE.gdoc-backup-UNIQUE-ID` and
+print its path. This protects edits racing a pull or provenance update, including
+writes through an editor's already-open file handle, even after gdoc finishes. A
+concurrent save at the original path takes precedence. gdoc never deletes recovery
+copies; remove them after comparing. A replacement with identical content leaves the
+file in place without a copy. Replacement needs a filesystem with hard links;
+elsewhere it fails before touching the file. A symlinked file is replaced through
+its link.
+
+Table creation and filling are revision-protected stages. Partial or uncertain
+completion exits 1 and reports completed stages; a clean refusal before mutation
+exits 3, including a pinned revision the server refuses. Docs API writes to an
+existing document (tab content, edits, suggestions, image insertion and
+replacement, tabs and page mode) and every new comment are sent once, and an
+uncertain request is never automatically replayed. Replies, resolve/reopen, Drive
+or Sheets changes, and the images `new --file` inserts into the document it
+creates use the Google client's ordinary transport, which can resend a request
+after a lost response. Inspect the document before retrying.
+
+To recover from a partial, uncertain or rebased write, including one that
+inserted or replaced images, do not rerun it: read the tab again, with `cat` for
+text you write from or `pull` for a pulled file (a `cat` does not refresh a pulled
+file's revision), and apply the remaining change to that read. The fresh read shows which
+content and images landed and gives each image its current
+`gdoc-image:OBJECT_ID`; references from the earlier read may no longer resolve,
+so use the new ones. `--force-collapse-tabs` explicitly
+removes sibling tabs after replacing the first tab, using revision-pinned native
+requests; ordinary writes never collapse tabs.
+
+### Supported Markdown
+
+The [product design contract](docs/CONTRACT.md) defines the intended behavior and
+shared CLI/MCP requirements. The implemented capabilities and remaining API gaps
+are documented below.
+
+**Paragraphs are lines.** In gdoc's format, as `cat` prints it and `write`,
+`insert`, `push` and MCP read it, each line of text is one paragraph and each
+blank line is one empty paragraph. `a` on one line and `b` on the next are two
+paragraphs, and `a`, a blank line, then `b` puts an empty paragraph between them.
+Write each paragraph on a single line and add blank lines only where the
+document should have empty paragraphs; a hard-wrapped CommonMark file becomes one
+paragraph per line. Inside list items, quotes and around code and tables, the
+blank lines shown below are separators, as `cat` prints them. `new --file` is
+different: it uses Google's Markdown import, which follows CommonMark paragraphs
+(joined lines, blank-line separators) and does not create gdoc's code and
+container ranges. To
+create a document in gdoc's format, run `gdoc new TITLE`, then `gdoc write DOC
+FILE`.
+
+The canonical format supports paragraphs and meaningful blank paragraphs, headings
+1–6, bold/italic/strike/inline code, external links, nested bullet and numbered lists,
+fenced code, quotes, rules, rectangular tables with column alignment, and inline
+images. Use a complete read–modify–write for paragraph splits/merges, section moves,
+and row/column changes. Targeted `edit` preserves unrelated native content and does
+not silently fall back to rewriting a rich tab.
+
+`edit` and `suggest` search every tab's body, headers, footers and footnotes by
+default. `--tab` narrows that search to one tab and its segments. A unique match
+can therefore be outside the first tab's body; multiple matches require `--all`,
+which applies to the entire selected scope. Use `--tab` to limit a bulk edit.
+
+This is a semantic Markdown format, not complete CommonMark/GFM conformance.
+Canonical export may escape punctuation or change fence spelling; code text and
+meaningful whitespace survive. A fence's info string (such as `python`) is not
+kept, and an empty code block reads back holding one empty line, the paragraph
+Docs needs for it. Code blocks use native named ranges to retain their
+identity; container ranges retain quotes and list item content nested to any depth
+(list nesting itself stops at nine levels, below):
+paragraphs, headings, rules, code, tables and quotes inside list items, and lists,
+code and tables inside quotes, including a quote inside a quoted list item. Content
+inside a list item is written with the item's content indent (`1. item`, blank line,
+`   > quoted` or `   more text`); lists quoted there are their own lists, and the
+item's list continues after the content. Raw indentation after a list item therefore
+means item content: literal leading whitespace in a paragraph is written as a
+numeric entity (`&#32; text`). A contained table's container is recorded on its first
+cell, and the paragraph Docs keeps between two tables belongs to their container.
+Contained paragraphs are indented 36pt per enclosing quote or list item; a
+contained table keeps its container in Markdown but is not visually indented in
+Docs. `edit` and `insert` create these ranges for new code and containers. Wording
+edited inside a code line or quote stays in its block; a structural replacement
+splits the block around it. A replacement inside code is literal text (`*`, links
+and `#` stay characters); inside inline code in prose, a replacement written as one
+code span such as `` `name` `` uses that span's content. Tab replacements remove gdoc's old ranges. Other named
+ranges (for example from add-ons) are named as omitted by reads; targeted edits
+leave them alone, and a rewrite of their tab needs `--allow-lossy` because it
+deletes the text they mark. Edits made in Docs take precedence over these ranges: a
+paragraph inside a code range that has become a heading or list item, or carries an
+image, link or emphasis, is read as ordinary Markdown, and a paragraph whose quote or
+list indent was removed is read without that container. Plain text typed or merged
+into a code block stays code.
+Reference links accept full, collapsed and shortcut forms with URI definitions.
+A CommonMark link title (`[a](url "title")`, also on a definition) is dropped:
+Docs links have no title, and the URL stays exact. Exported destinations
+containing whitespace are bracketed (`<...>`).
+Native horizontal rules sharing a paragraph with text export as separate rule and
+text paragraphs, preserving text order and heading styles. Tables accept short
+alignment delimiters such as `:--`, `--:` and `:-:` and do not gain incidental header bold.
+As in GFM, table rows may end in whitespace and be indented up to three spaces.
+Only the line after a table's header is its delimiter row, so data rows of dashes stay
+rows. One blank line separates adjacent tables; further blank lines between them are
+blank paragraphs. Docs keeps a paragraph before a table that starts a tab, between
+two tables, and after a table that ends a tab. Reads show each as a blank line (so
+adjacent tables read with two blank lines between them), and writing that read
+back keeps exactly those paragraphs; blank paragraphs you add beyond them are kept
+too. This is stable across rewrites. Syntax highlighting, native object IDs, pagination, custom fonts,
+colors and arbitrary layout are outside the Markdown promise.
+
+Write the canonical spellings that exports use; other spellings of the same
+structure may read differently:
+
+- Nest a list item two spaces per level under any marker (`- a` then `  - b`;
+  `10. a` then `  - b`). Each further two spaces adds a level. gdoc writes
+  nesting as native list levels, and a Docs list's
+  [`nestingLevels`](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents#listproperties)
+  hold nine. gdoc has no representation for deeper nesting (such as extra
+  indents or separate lists), so it is unsupported: deeper items are written at
+  the ninth level and `write`/`insert` warn with the affected lines. This is a
+  gdoc limit, not one of the API gaps below.
+- Write fenced code as `cat` prints it. At the top level, the fence starts at
+  column 0. Inside a list item or quote, the fence goes on its own line after
+  the item's text and a blank line, and every line from the opening fence to
+  the closing one carries the container's prefix: the item's content indent
+  (`1. Install` / blank / `` ```bash `` / `make` / `` ``` ``, each code line
+  indented three spaces) or the quote's `> `. The closing fence repeats the
+  opening backticks or tildes, without the info string (`` ```bash `` closes
+  with `` ``` ``). Any other line that starts with three or more backticks or
+  tildes after spaces, quote markers and list markers (an indented top-level
+  fence, `` 1. ``` ``, `` >``` ``, a fence after a line the item doesn't
+  indent) is refused with nothing sent, and the message shows the accepted
+  spelling.
+- When emphasis spans close together, mark the inner one with underscores:
+  `**bold _italic_**`, not `**bold *italic***`. Spans that open together read
+  as CommonMark does (`***bold** then italic*`).
+- Bold, italic or strikethrough on whitespace alone has no Markdown spelling and
+  is not kept; a link on whitespace alone is (`[ ](url)`).
+- An explicit line break inside a paragraph is Docs' soft break, the vertical-tab
+  character U+000B, which gdoc reads and writes as that character; in table cells
+  it is `<br>`. A trailing backslash or two trailing spaces is not a line break.
+- To begin a file with two thematic breaks, spell them `***`: a file whose first
+  two lines are `---` is read as an empty metadata block.
+
+Images accept publicly fetchable HTTP(S) URLs. Existing images export as
+`![](gdoc-image:OBJECT_ID)` (with alt text when available); a linked image is
+`[![](gdoc-image:OBJECT_ID)](URL)`, and writes keep the link on the image. Those
+references are valid only in their source document; each write resolves a fresh image URI from its
+checked snapshot. Moving or rewriting an image may change its native ID. gdoc does
+not publish existing private images. Drawing/chart identity, image crop and layout
+are richer features.
+
+Two verified API gaps have explicit best-effort behavior:
+
+- A reconstructed numbered list starts at 1, even when Markdown asks for another
+  starting value. gdoc warns with the affected list. Native numbering is retained;
+  it is never replaced by plain numbered text. Export reads existing starts, and
+  targeted text edits retain them. The [Docs bullet request](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/request#CreateParagraphBulletsRequest)
+  provides presets but no start-number setter. Drive import does not provide the
+  same revision-protected in-place write, and Apps Script list methods do not add
+  a start-number setter. Restarts at 1 and continuation across prose or mixed
+  bullet/numbered sections are supported. Independently numbered lists of the same
+  style interleaved at the same depth can require a new non-1 start when rebuilt
+  (for example, displayed items `1, 1, 2, 2`); that case also warns and may reset.
+  Docs REST has no list-ID setter. Apps Script offers
+  [setListId](https://developers.google.com/apps-script/reference/document/list-item#setListId(ListItem)),
+  but, like its image setters, requires a separate execution service outside the
+  revision-pinned Docs batch. Targeted text edits preserve existing list identity.
+- Inserted/reconstructed images cannot receive Markdown alt text through the
+  [Docs image request](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/request#InsertInlineImageRequest).
+  gdoc warns when alt text cannot be written. Apps Script exposes an
+  [alt-description setter](https://developers.google.com/apps-script/reference/document/inline-image#setAltDescription(String)),
+  but requires a separately deployed script and does not join the revision-pinned
+  Docs batch. This release does not introduce that separate execution service.
+
+These are documented shortfalls, not claims of full support.
+
+### Rich-content replacement safety
+
+`write` and `push` inspect the selected body, including table cells, before mutation.
+Ordinary supported Markdown needs no `--allow-lossy`. Chips, footnotes, equations,
+generated contents, pending suggestions, internal native links, linked Sheets
+charts (a rewrite keeps only their rendered image), drawings, custom named
+ranges, complex tables,
+table cells aligned unlike their column's header cell, and section/layout boundaries may require explicit loss consent. Rich content in
+unmodified sibling tabs or separate document segments does not block a body write.
+Use targeted edits when richer native content should survive. With consent, a
+body with section breaks is rewritten as one section: the breaks and their
+per-section layout are removed.
+
+A pipe-table cell holds inline Markdown and `<br>` line breaks, so block content
+inside a cell is a richer feature: a native bulleted or numbered paragraph, or a
+heading, inside a cell has no Markdown spelling, nor does a native rule or an indented
+paragraph in a cell. Reads name such a table as omitted content, a rewrite of it
+is refused, and with `--allow-lossy` those cell paragraphs become plain text and
+rules in cells are dropped; edit the
+cell's wording with `edit --cell`, one line per paragraph, to keep them. Lists around and beside tables,
+and tables inside list items and quotes, are supported Markdown and never need
+consent.
+
+A changed tab rewrite deletes and reinserts the tab's body, so comments anchored in
+it can lose their anchors even where the text is unchanged. A targeted edit
+deletes and reinserts only its matched text, but all of it: a comment on
+unchanged words inside the match can lose its anchor too, so match no more
+context than you need to make it unique.
+
+Markdown reads show a tab's text without its pending suggestions: suggested
+insertions are left out and wording suggested for deletion stays. `cat` notes on
+stderr how many suggestions are pending (`scope.pending_suggestions` with `--json`).
+Writing that text back unchanged sends nothing. Resolve the suggestions in Docs
+(accept or reject them) before a changed rewrite; otherwise it is refused unless
+`--allow-lossy` is given, which discards the suggestions and keeps the text as read,
+never applying them as direct edits. When a suggested paragraph break joins
+paragraphs of a different style, list or code/quote container, gdoc cannot
+reliably render that paragraph from the inline suggestion view, so it marks the
+read incomplete (`scope.complete` is false, with `scope.suggestion_preview_gaps`);
+such a read cannot authorize a rewrite until the suggestions are resolved.
+`edit` refuses a match that touches text with a pending suggestion (exit 3,
+nothing written), so a direct edit never settles someone's suggestion; edits
+elsewhere in the document proceed. When the search covered several tabs, `edit`
+names each changed tab (`tab ID: N`, or `tabs` in JSON).
+
+```bash
+gdoc write DOC draft.md --tab Notes --allow-lossy
+```
+
+Known style resets produce a concise warning. `--allow-lossy` accepts identified
+rich-feature losses; it does not bypass revision conflicts. Automatic sync uses the
+same native tab and revision checks and reports a skip when it cannot safely write.
+The inventory is not a promise of pixel-perfect formatting or detection of properties
+Google does not expose.
+
+Files pulled by gdoc 0.21.1 to 0.22.0 carry only `gdoc-version: N`, the Drive
+version their content came from, instead of `gdoc-revision`. When the doc has moved
+past that version, `push`, `write DOC FILE` (and MCP `write` of such text) and the sync hook refuse
+such a file with exit 3: nothing is sent and the file is left untouched. The sync hook
+exits 2 instead, which Claude Code shows to the agent. The refusal prints recovery
+steps: pull a fresh copy to a new path (`gdoc pull DOC draft.latest.md`), see what
+changed with `gdoc diff DOC draft.md`, and carry your edits into the new file; `--force`
+discards the newer changes in the doc. A file whose body already matches the target
+tab's Markdown, or the doc's Markdown export for the first tab (ignoring only line
+endings and one final newline), is reported `already in sync` and nothing is sent;
+`--force-collapse-tabs` skips that shortcut. Otherwise, at the
+current version such a file still has no revision provenance, so it needs a fresh
+pull or `--force`, as above. The pull hook blocks an edit to a stale file (exit 2,
+with the same recovery steps), re-pulls one that matches the doc, and leaves a
+current file with local edits in place. `pull` now records `gdoc-revision` and the
+tab fingerprint rather than `gdoc-version`, and a file with `gdoc-revision` ignores
+any `gdoc-version`. A file that starts (after at most one byte-order mark)
+with a header as `pull` writes it is a pulled file: `---`, `key: value` lines
+with lower-case `gdoc` keys including `gdoc: ID`, and `---`. Any other file
+that holds a `gdoc` or `gdoc-*` key line anywhere is refused: `write` (CLI and
+MCP) and `push` exit 3 with nothing sent. The sync hook pushes only pulled
+files and skips every other file, so editing a Markdown file that was never
+pulled never triggers it. A key line is a `gdoc:` or `gdoc-NAME:` key after anything but
+letters and digits, or a numbered-list marker (`gdoc: ID`, `> - gdoc-revision:
+R`, `1. gdoc: ID`, `<!-- gdoc: ID`), read in any case and ignoring invisible
+characters and accents. This catches a pulled header that was quoted, wrapped
+in a code block or placed after other text, whose stale-file checks couldn't
+run. The refusal names the line that stops the header being read (such as a
+`tags:` list or a blank line an editor added) or says that text comes before
+it. Pull the tab again and copy your edits into the fresh file, or fix that
+line; either way the stale-file checks run. The refusal also covers ordinary
+text with such a line, including `cat` output of a doc that has one: write it
+from a fresh pull, or, when the file holds no `gdoc-revision` or
+`gdoc-version` key (keys only `pull` writes), with `write --force` (MCP
+`force: true`), which writes it as it is. Other front matter, a body that
+opens with a rule, and `cat`'s empty `---`/`---` block before such a body are
+unaffected.
 
 ## Spreadsheets
 
@@ -482,7 +846,7 @@ HTML output has no extra dependencies. Richer artifacts (docx, PDF, …) are del
 
 ## Tabs
 
-Google Docs supports multiple tabs per document. The default `cat` command uses Drive export which only returns the first tab. Use `--tab` or `--all-tabs` to read tab content via the Docs API:
+Google Docs supports multiple tabs per document. The default `cat` command reads the first tab through the native Docs serializer. Use `--tab` to select another editable tab, or `--all-tabs` for combined inspection output:
 
 ```bash
 # List tabs in a document
@@ -501,7 +865,19 @@ gdoc cat --all-tabs DOC
 # ...content...
 ```
 
-`--tab` and `--all-tabs` are mutually exclusive with `--comments`. They work with `--json` and `--plain`.
+Without `--tab`, `--comments` annotates the whole document's Markdown export and places comments from their live anchors. With `--tab`, it annotates that tab's Markdown and places comments where their quoted text occurs. Drive does not record which tab a quote is in, so a comment whose quote appears only in another tab is listed as `quoted text in another tab`, and one whose quote appears in several tabs as `quoted text ambiguous`. `--all-tabs` cannot be combined with `--comments`. Both tab flags work with `--json` and `--plain`.
+
+Tab Markdown export escapes literal syntax: a plain `1. Hello` paragraph now
+prints as `1\. Hello`, and `_`, `[`, and `<` gain backslashes. It also emits
+`<!-- -->` between touching emphasis runs and `<!-- gdoc:TITLE --> ` or
+`<!-- gdoc:SUBTITLE --> ` prefixes for those named paragraph styles. This visible
+source noise is an accepted trade-off: escapes distinguish literal prose from
+Markdown structure, empty comments separate styles without adding characters to
+the document, and ordinary Markdown cannot express TITLE and SUBTITLE distinctly.
+Keep these markers when reconstructing a tab with `write --tab`; arbitrary
+Markdown tools and the separate Drive importer may not preserve them. For verbatim
+prose, copying search strings, or text to match with `edit`, use
+`gdoc cat --plain --tab "Notes" DOC`.
 
 ## Byte truncation
 
@@ -528,10 +904,10 @@ Tables require a single match — use without `--all` when the replacement conta
 
 ## Editing inside tables
 
-`edit` searches and replaces text inside table cells, not just plain paragraphs. For label/value grids (a label in one column, the value in the next), address a cell directly instead of anchoring on its current text:
+`edit` searches and replaces text inside table cells, not just plain paragraphs. For label/value grids (a label in the first column, the value in the next), address a cell directly instead of anchoring on its current text:
 
 ```bash
-# Replace the cell to the right of a label
+# Replace the cell to the right of a unique first-column label
 gdoc edit DOC --tab "Tab 1" --cell "Discussion topics from JP" "Show and tell; Q2 planning"
 
 # Address by ROW,COL coordinates (0-based) within the Nth table (--table, default 0)
@@ -541,7 +917,9 @@ gdoc edit DOC --cell 7,1 "new value"
 gdoc edit DOC --cell "Status" --col 2 "Done"
 ```
 
-Cell edits preserve the cell's paragraph structure; an empty cell is filled in place. The replacement supports the same Markdown formatting as a normal `edit`.
+Labels must identify exactly one first-column row in the selected table(s). If the same text also appears in a value column, label mode refuses with exit code 3; use explicit `--table` and `--cell ROW,COL` coordinates.
+
+A cell's paragraphs are separated by `<br>` in the replacement, as `cat` prints them. With one line per paragraph, each paragraph is reworded in place and keeps its style and any native bullet. A different number of lines replaces the cell's paragraphs. In a cell holding list items that is refused with nothing sent, since their bullets have no Markdown spelling: delete an item with a targeted edit of its text and line break (`gdoc edit DOC $'Item\n' ''`), or empty the cell first (`--cell 0,0 ''`, which removes its list) to write plain paragraphs. An empty cell is filled in place. The replacement supports the same Markdown formatting as a normal `edit`.
 
 ### Matching tolerance
 
@@ -550,6 +928,74 @@ By default matching is exact. If an anchor isn't found, `edit` explains why — 
 ```bash
 gdoc edit DOC "JP's job" "JP's role" --normalize   # matches "JP's job" in the doc
 ```
+
+### Links in replaced text
+
+An edit inside one link's text stays in that link, so correcting or extending part
+of a label keeps the link. When a match covers a whole link, or reaches past it,
+the link follows only its own words that reappear once, as whole words, in the
+replacement. Write `[label](url)` in the replacement to set a link explicitly.
+Wording that does not keep a link also loses Docs' default link colour and
+underline; a custom colour on the linked text stays.
+
+### Editing list items
+
+`edit` and `insert` change list items only in place. They can reword items,
+each keeping its list, kind (numbered or bullet), level and number, and they can delete
+whole items. So `edit DOC "b" "2. B"` or `edit DOC "b" "B"` in `1. a / 2. b / 3. c`
+gives `1. a / 2. B / 3. c`, and one line per replaced item rewords several items.
+Write an item inside a quote or list item without the container's markers
+(`2. B`, not `> 2. B`); it keeps its container.
+Any other list change is refused with nothing sent. `gdoc nest` and
+`gdoc unnest` move items a level in or out ([Nesting list items](#nesting-list-items)), and `write --tab`
+makes the rest:
+
+- an item of another kind, level or number (a number the item doesn't show
+  starts a new list in Markdown);
+- an added or removed item (including one split by an encoded line break,
+  `&#10;`), or a paragraph turned into an item or back;
+- an item moved into or out of a quote or list item;
+- deleting an item when anything but a blank line, top-level text or the next
+  item at its level (as `cat` shows it; in a table cell, the rest of the cell)
+  follows it (content paragraphs, sub-items, a quote, a rule,
+  an empty heading, code or a table), since that may be the item's and would
+  join the item above; delete it together with the item;
+- inserted items that would, or may, join a list above them: beside it, below
+  its deeper items, inside another item's content, or, for a numbered list
+  starting at a number other than 1, when the tab has a numbered list.
+
+A later `edit --block` will make these as targeted edits. A refused level change
+names `gdoc nest` only when it would accept those items and they have no
+sub-items (`nest` moves sub-items with them); it does not yet move items
+of a quoted list, of a loose list (blank lines between items), or an item that
+follows another item's content paragraphs.
+
+A table cell (`edit --cell`) holds inline text only: an item or
+heading marker there stays literal, as the cell's `cat` spelling reads, and
+`<br>` writes a line break. A cell replacement with a line break (from `<br>`, a
+newline or `&#10;`), or one that changes the cell's number of lines, cannot include
+an image; insert the image separately.
+
+### Deleting across paragraphs
+
+An empty replacement removes complete matched paragraphs, and only those: every
+other paragraph keeps its style, list and container. A match that starts or ends
+inside a paragraph and spans a paragraph break joins the remaining text into one
+paragraph, which keeps the first paragraph's style and list. Matches are on the
+document's text, so `edit DOC "lo\nwor" ""` on the paragraph `Hello` followed by
+the heading `world` leaves the paragraph `Helld`. A join that takes a later list
+item into the paragraph before it is refused, because it would remove that item
+or its bullet; delete whole items instead. A join that starts at a list item's
+first character is refused when the paragraph it joins has another list state,
+because Docs would give the result that paragraph's list.
+
+Docs cannot delete a tab's last paragraph break or the one before a table, so
+removing the paragraphs there deletes the break of the paragraph above instead;
+that paragraph keeps its own style and list. Two such removals are refused, with
+nothing sent: one with no paragraph above (use `write --tab`), and one whose
+paragraph above is an empty list item of another list, which cannot be kept.
+A removal that would delete any character or paragraph break carrying a pending
+suggestion, including a break outside the matched text, is refused too.
 
 ### Multi-line arguments from stdin
 
@@ -602,10 +1048,13 @@ Requirements and limits:
 - **Inline Markdown only.** Bold, italic, strikethrough, inline code, and links
   are suggested along with the text. Headings, lists, blockquotes, horizontal
   rules, tables, and `--cell` are rejected before any API call — use `edit` for
-  those. Newlines are fine: they become suggested paragraph breaks, and the new
-  paragraphs inherit the anchor paragraph's style (unlike `edit`, which resets
-  inserted paragraphs to normal text). Fenced code blocks are accepted as
-  code-font paragraphs.
+  those. A replacement inside one paragraph must not introduce paragraph
+  breaks; block Markdown requires the whole paragraph as its target and must
+  also satisfy the command's supported-format rules. An empty replacement
+  suggests deleting the wording but keeps its paragraph; use `edit` to remove
+  whole paragraphs. Fenced code blocks are
+  accepted as code-font paragraphs only when the paragraph-boundary contract
+  is satisfied.
 - **No overlap with existing suggestions.** The document is read with
   suggestions inline; a match that touches text someone else has already
   suggested inserting, deleting, or restyling is refused, so a review thread is
@@ -698,6 +1147,13 @@ Create a document from a local markdown file with `new --file`:
 ```bash
 gdoc new "Report" --file report.md
 ```
+
+`new --file` uses Google's Markdown import, which reads CommonMark paragraphs
+(joined lines, blank-line separators) rather than gdoc's line-per-paragraph
+format ([Supported Markdown](#supported-markdown)); code and container ranges,
+table alignment and gdoc image references are not recreated. To create a
+document from a file in gdoc's format, such as a `cat` or `pull` output, run
+`gdoc new TITLE` and then `gdoc write DOC FILE`.
 
 Images in the markdown are handled automatically:
 - **Remote images** (`https://...`) are inserted directly via URL

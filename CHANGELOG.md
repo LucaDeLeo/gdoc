@@ -4,14 +4,223 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.23.0] — 2026-09-29
 
 ### Added
+
+- Native read–modify–write supports structural Markdown changes through the same
+  CLI and MCP handlers, including code, quotes, aligned tables and images.
+- `write` and `push` refuse identified rich-content loss before mutation.
+  `--allow-lossy` permits that loss independently of revision conflicts and
+  explicit sibling-tab collapse. Supported Markdown needs no loss override.
 - **`share DOC EMAIL --no-notify` skips Google's notification email.**
   Email shares still notify the recipient by default; the flag opts out
   for one share. The MCP share tool takes the matching option. Combining
   `--no-notify` with `--domain` or `--anyone` (link shares, which never
   send email) is rejected with exit 3 before any API call.
+
+### Changed
+
+- Pulled files record the native `gdoc-revision` and a tab fingerprint instead
+  of 0.21.1's Drive `gdoc-version`. A file stamped only with `gdoc-version` is
+  still refused while stale, with 0.21.1's recovery steps, and otherwise needs a
+  fresh pull or `--force`.
+- `cat --comments` of the whole document places comments from live anchors, as
+  in 0.21.x. With `--tab` it annotates that tab's native Markdown, placing
+  comments by quoted text; a quote found only in another tab says so.
+- Targeted edits that would move list items a level in or out point to
+  `gdoc nest` and `gdoc unnest` when those would accept the items, and to
+  `write` otherwise.
+- A file that doesn't start with a header as `pull` writes it, but holds a
+  `gdoc` or `gdoc-*` key line anywhere (after any prefix of spaces, `>`, list
+  markers, backticks or `<!--`, in any case), is refused by `write`, `push` and
+  MCP `write`, instead of writing a quoted, wrapped or prefixed stale header
+  without its stale-file checks. The sync hook pushes only files that start
+  with such a header and skips every other file.
+  The refusal names the line that stops the header being read, and its
+  advice (pull again, or fix that line) keeps the stale-file checks. Ordinary
+  text with such a line is refused too; a fresh pull writes it, and so does
+  `--force` when the file holds no `gdoc-revision` or `gdoc-version` key.
+  Other front matter is unaffected.
+- A file stamped only with `gdoc-version` whose body matches the doc is
+  `already in sync`, as in 0.21.1; the pull hook blocks edits to a stale one
+  and re-pulls a matching one.
+- Deleting a list item is refused when anything but a blank line, top-level
+  text or the next item at its level follows it, since that content may be the
+  item's and would join the item above. In a table cell, unindented text after
+  the item doesn't block the deletion. Inserted items that `write` would or
+  may join to a list beside them are refused, including a numbered list
+  starting at a number other than 1 when the tab has a numbered list.
+- Code fences in list items and quotes are accepted only as `cat` prints them:
+  on their own lines, every line carrying the container's indent or `> `, and
+  closed inside the container. Any other line starting with a fence after
+  spaces, quote markers and list markers is refused with nothing sent; the
+  message gives the accepted spelling.
+- `edit --cell` refuses an image when the cell's number of lines changes or an
+  encoded line break (`&#10;`) is present, instead of dropping it.
+- `edit --cell` with one line per paragraph keeps each paragraph's native
+  bullet. A replacement that changes the paragraph count of a cell holding
+  list items is refused with nothing sent, since the bullets would be removed;
+  emptying the cell removes its list.
+- `cat --comments` ignores the `<!-- -->` separator between touching runs when
+  matching quotes, and whole-document output reports truncation.
+
+- Default `write` and `push` read Markdown in gdoc's format instead of Google's
+  Markdown import, as `write --tab` and `insert` already did: each line is one
+  paragraph and each blank line is an empty paragraph, matching `cat` output.
+  Files written for CommonMark paragraph rules (hard-wrapped lines, blank-line
+  separators) gain paragraph breaks and empty paragraphs; write one line per
+  paragraph. `new --file` still uses Google's import.
+
+- A pinned revision refused by the server exits 3 for `insert-image`,
+  `replace-image` and `suggest`, as for other writes. The README now says that
+  images inserted by `new --file` use the ordinary client transport.
+
+- Link titles no longer enter link URLs; exported destinations with whitespace
+  are bracketed. Table rows may end in whitespace or be indented up to three
+  spaces. `***bold** then italic*` reads as CommonMark does. Whitespace-only
+  links are written once. Rule-like list items no longer gain backslashes.
+  `cat --comments` finds anchors that span emphasis or links. Inline parsing of
+  long paragraphs is linear.
+
+- Container context is a path of quote markers and list item indents, so
+  paragraphs, headings, rules, code, tables and quotes nest inside list items
+  and quotes to any depth, and blank paragraphs between contained tables keep
+  their count across rewrites. New nestings use `gdoc:prefix:v3:` range names;
+  v1/v2 ranges keep their meaning. Literal leading whitespace in a paragraph is
+  exported as a numeric entity.
+
+- Reads name native content their Markdown leaves out (footnotes, chips, page
+  breaks and similar, including inside table cells) and report
+  `complete: false` with an `omitted` list; `cat --json` reports `tab_count`.
+- Default `cat`, `pull` and Markdown `export` use the native first-tab serializer.
+  Use `--tab` for another editable tab or `cat --all-tabs` for inspection.
+- Default `write` and `push` replace the first tab and preserve siblings.
+  `--force-collapse-tabs` explicitly removes siblings through native requests.
+- `insert`, `write` and `push` require complete per-tab content at the exact Docs
+  revision. Metadata/partial reads cannot authorize replacement. Acknowledged
+  writes advance known content; rebased or uncertain writes require a fresh read.
+- `comment --quote` refuses ambiguous matches and reports candidates.
+- `edit` refuses matches that touch pending suggestions, like `suggest`, and
+  names the changed tab whenever its search covered several tabs.
+- `edit` and `suggest` search all tabs, including headers, footers and footnotes.
+  `--tab` selects one tab and its segments; `--all` replaces every match in scope.
+- Pushes check the file's revision as well as the shared read baseline. An older
+  file stays pushable only while its selected tab's native content (text, styles
+  and suggestions) matches the recorded `gdoc-tab-sha256`; Markdown equality alone
+  never blesses a newer revision. Pull hooks
+  leave unsynced local bodies in place. Local replacements retain the previous
+  file as a printed recovery copy, so an editor write racing the replacement is
+  never lost. Files without `gdoc-revision` need a fresh pull or `--force`.
+
+### Fixed
+
+- A list quoted inside a nested list item keeps its own bullets or numbering;
+  the enclosing list no longer absorbs it.
+- Nested list items get their native nesting level, not only an indent: a
+  nested restart, an orphan nested item or a nested list under another bullet
+  type no longer reads back flat. A later nested numbered list no longer
+  continues an earlier sublist's numbering.
+- Editing list items keeps their native list: items reworded as items of the
+  same kind and level keep their bullets and numbering. `edit` and `insert`
+  refuse, with nothing sent, any other list change (another kind or level, an
+  added or removed item, a container change, or items that would join the
+  list beside them); `write --tab` makes it.
+- `edit OLD ""` removes exactly the matched paragraphs. Removing the last
+  paragraph, or one before a table, no longer also deletes an empty paragraph,
+  rule or code line above it, and it no longer refuses after a list item. It is
+  refused when it would delete a paragraph break carrying a suggestion.
+- A whole-paragraph replacement with a table inside list-item content stays in
+  the item instead of reading back as quotes, and a table replacing a paragraph
+  between blank lines adds no extra blank paragraph.
+- A rule or empty heading between two tables keeps its own quote or item.
+- Whitespace between differently styled runs in a document with an explicit
+  font reads as plain whitespace, not doubled spaces or empty `**` markers.
+- An empty paragraph reads as `---` only when its bottom border is visible.
+- A rebased write warns and reports `rebased: true`; `--plain` prints an in-sync
+  result as TSV; an input file that is not UTF-8 exits 3.
+- `suggest` refuses an empty replacement across a paragraph break, which
+  accepting could not join.
+- `**`, `__` and `~~` beside whitespace stay literal; `<...>` link destinations
+  may hold parentheses; an image title is dropped from its URI; an incomplete
+  entity name such as `&notes;` stays literal.
+- `write` of a pulled file replaces the tab it came from and refuses another
+  `--tab` or document. It checks the file's `gdoc-revision` as `push` does, so a
+  later read cannot authorize an older file; a `pull --revision` file needs
+  `--force`. Rule-first bodies whose lines contain a colon or a link
+  stay content instead of being read as metadata.
+- Linked Sheets charts, custom named ranges, and rules or indented paragraphs in
+  table cells are named as read omissions and need `--allow-lossy` to rewrite.
+- `insert` keeps the tab's first or last paragraph in its quote, list item or
+  code block, does not pass those properties to appended content, and starts an
+  appended numbered list as its own list.
+- Reference definitions accept `<...>` destinations with spaces, and blank
+  paragraphs before trailing definitions survive. Lists nested past nine levels
+  warn. Comment, image and Drive commands no longer exit 1 after Google saved the
+  change when local state cannot be written. `push` accepts a pulled file whose
+  tab fingerprint matches without local state. `cat --no-images` keeps code text.
+- Loose nested numbered lists retain parent numbering. Reference links retain
+  destinations; quoted lists, quoted code, quoted tables, and fences or tables
+  indented inside list items preserve their structure through changed Markdown
+  round trips.
+- Native rules sharing a paragraph preserve surrounding text, escaped comment
+  anchors match correctly, and backticks in link destinations round-trip.
+- A failed display-version lookup no longer hides an acknowledged write. Image
+  and suggestion commands carry exact acknowledged revision provenance forward.
+- Tab replacements reset inherited bullets and direct paragraph/text styles;
+  nested list items share a list-creation range and final rules use the retained
+  paragraph mark without adding a blank paragraph. `insert --end` applies the
+  same rule handling, so an appended `---` no longer leaves a blank paragraph.
+- Unchanged single-tab `write`/`push` uploads skip reconstruction even without
+  a conflict and report that nothing was written.
+- A table data row of dashes stays a row; one blank line separates adjacent
+  tables. A tab starting with a rule reads with an empty metadata block first,
+  so `write` keeps the rule and the text after it.
+- `edit` and `insert` create and maintain code and container ranges, and tab
+  replacements remove gdoc's old ones. Loose numbered lists nested under
+  bullets keep their numbering, a list item containing a rule stays one item,
+  and custom first-level list indents no longer read as nesting.
+- An indented paragraph's heading style and literal punctuation survive inside
+  its quote. Cells aligned unlike their column header need loss consent.
+- A table directly beside a heading, list item, quote or rule keeps those
+  paragraphs' styles and list membership through rewrites and `insert --end`;
+  removing a final paragraph, or one before a table, restores the paragraph
+  before it. A numbered list continues across a table or image.
+- Inserted Markdown no longer inherits a neighboring quote indent, rule border,
+  bold, link or code style, and a tab holding only a rule or empty heading keeps it.
+- Images whose alt text has backticks or line breaks, list items of dashes,
+  escaped backticks in table cells, non-space cell edges and definition-shaped
+  links survive rewrites. Tables separated by a blank line in another container
+  no longer gain a paragraph per rewrite.
+- An edit inside a link's label keeps the link. `--allow-lossy` rewrites a tab
+  with section breaks as one section. Table shading, borders and fixed widths
+  produce the style warning. `comment --quote` prefers its own letter case.
+- A pulled file stays pushable after a collaborator edits another tab. An
+  unreadable add-tab reply is reported as an uncertain outcome (still an
+  `ERR:` with exit 1) that says to list the tabs before retrying, instead of
+  a generic unexpected-response error.
+- Replacement wording inside code is literal text. Markdown reads show a tab
+  without its pending suggestions and say how many are pending, so a consented
+  rewrite discards suggestions instead of applying them. A read whose preview
+  gdoc cannot render reliably is reported as incomplete.
+- A quote inside a list item stays in that item, including under nested items;
+  its container range records the item's indent (`gdoc:prefix:v2`).
+- Leading tabs of code inside list items survive bullet creation, and restored
+  content tabs keep their own style. A blank line between a container and a
+  table stays outside code. Empty scaffolding and emptied paragraphs are removed
+  one paragraph per deletion, the shape observed to keep the following
+  paragraph's style, so two different lists around a table keep their identity.
+- An empty replacement across a paragraph break joins the paragraphs in the
+  first paragraph's style. Appending a table or trailing blank line leaves a
+  plain final paragraph. Wording that loses its link loses the default link
+  colour and underline, and a link with mixed styles exports as one link.
+- A soft break before `=== Tab:` text and a rule before a final empty code block
+  can be written back. Zero-width table borders produce the style warning.
+- `edit` and `insert` record an acknowledged write before the optional version
+  lookup. Markdown `export` and `pull` name the tab they read. Sync hooks
+  report skips to the agent, identical local replacements leave the file in
+  place, and comment anchors no longer match through escapes in code.
+
 
 ## [0.22.0] — 2026-09-28
 

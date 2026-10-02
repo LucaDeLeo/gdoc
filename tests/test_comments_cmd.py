@@ -68,7 +68,10 @@ class TestCmdComment:
         rc = cmd_comment(args)
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
-        assert data == {"ok": True, "id": "c_new", "status": "created"}
+        assert data == {
+            "ok": True, "id": "c_new", "status": "created",
+            "anchored": False, "reason": "no_quote",
+        }
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -684,7 +687,9 @@ class TestCommentCommandsPlainOutput:
         args = _make_args("comment", text="hello", quiet=True, plain=True)
         rc = cmd_comment(args)
         assert rc == 0
-        assert capsys.readouterr().out.strip() == "id\tc_new"
+        assert capsys.readouterr().out.strip() == (
+            "id\tc_new\nanchored\tfalse\nreason\tno_quote"
+        )
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -711,3 +716,30 @@ class TestCommentCommandsPlainOutput:
         out = capsys.readouterr().out
         assert "id\tc1" in out
         assert "status\treopened" in out
+
+
+class TestAcknowledgedMutationKeepsSuccess:
+    """R7-10: a saved comment stays a success when local state cannot be saved."""
+
+    @pytest.mark.parametrize("command,handler,args", [
+        ("comment", cmd_comment, {"text": "hello"}),
+        ("reply", cmd_reply, {"comment_id": "c1", "text": "hello"}),
+        ("resolve", cmd_resolve, {"comment_id": "c1", "message": None}),
+        ("reopen", cmd_reopen, {"comment_id": "c1", "message": None}),
+    ])
+    @patch("gdoc.state.update_state_after_command",
+           side_effect=OSError("read-only state directory"))
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_comment", return_value={"id": "c_new"})
+    @patch("gdoc.api.comments.create_reply", return_value={"id": "r1"})
+    def test_state_failure_after_acknowledged_mutation_exits_0(
+        self, _reply, _create, _svc, _ver, _pf, _update, command, handler, args,
+        capsys,
+    ):
+        rc = handler(_make_args(command, quiet=True, **args))
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.out.startswith("OK")
+        assert "local state could not be updated" in captured.err

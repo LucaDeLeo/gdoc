@@ -286,15 +286,14 @@ class TestGetTabText:
         ]}}
         assert get_tab_text(tab, markdown=True) == "Body\n"
 
-    def test_heading_markdown_collapses_leading_space(self):
-        # A stored leading space must not stack into "##  Two"; lstrip
-        # keeps the round-trip stable.
+    def test_heading_markdown_preserves_leading_space(self):
+        # Exactly one separator space is syntax; the stored space is content.
         tab = {"body": {"content": [self._heading(" Two\n", "HEADING_2")]}}
-        assert get_tab_text(tab, markdown=True) == "## Two\n"
+        assert get_tab_text(tab, markdown=True) == "##  Two\n"
 
-    def test_heading_markdown_ignores_blank_heading(self):
+    def test_heading_markdown_preserves_blank_heading(self):
         tab = {"body": {"content": [self._heading("\n", "HEADING_1")]}}
-        assert get_tab_text(tab, markdown=True) == "\n"
+        assert get_tab_text(tab, markdown=True) == "# \n"
 
 
 def _run(text, **style):
@@ -336,7 +335,11 @@ class TestGetTabTextInlineMarkdown:
 
     def test_spaces_kept_outside_markers(self):
         tab = {"body": {"content": [_para(_run(" b \n", bold=True))]}}
-        assert get_tab_text(tab, markdown=True) == " **b** \n"
+        # Literal leading whitespace is an entity: raw indentation marks
+        # list item content.
+        assert get_tab_text(tab, markdown=True) == "&#32;**b** \n"
+        from gdoc.mdparse import parse_markdown
+        assert parse_markdown("- item\n&#32;**b** \n").plain_text == "item\n b \n"
 
     def test_plain_mode_ignores_styles(self):
         tab = {"body": {"content": [_para(_run("x\n", bold=True))]}}
@@ -373,14 +376,14 @@ class TestGetTabTextListMarkdown:
         ]}}
         assert get_tab_text(tab, markdown=True) == "- top\n  - sub\n"
 
-    def test_ordered_numbering_resets_after_break(self):
+    def test_ordered_numbering_resumes_same_list_after_break(self):
         tab = {"lists": self._ORDERED, "body": {"content": [
             _para(_run("a\n"), bullet={"listId": "L2"}),
             _para(_run("b\n"), bullet={"listId": "L2"}),
-            _para(_run("\n")),  # blank paragraph ends the list
+            _para(_run("\n")),  # same list ID resumes after this paragraph
             _para(_run("a\n"), bullet={"listId": "L2"}),
         ]}}
-        assert get_tab_text(tab, markdown=True) == "1. a\n2. b\n\n1. a\n"
+        assert get_tab_text(tab, markdown=True) == "1. a\n2. b\n\n3. a\n"
 
     def test_nested_ordered_counters_independent(self):
         tab = {"lists": self._ORDERED, "body": {"content": [
@@ -421,14 +424,14 @@ class TestResolveTab:
         result = resolve_tab(self._tabs(), "t2")
         assert result["id"] == "t2"
 
-    def test_title_priority_over_id(self):
-        """When a title matches, it takes priority over ID match."""
+    def test_id_priority_over_title(self):
+        """An immutable ID takes priority over a title match."""
         tabs = [
             {"id": "t1", "title": "t2", "index": 0, "nesting_level": 0, "body": {}},
             {"id": "t2", "title": "Other", "index": 1, "nesting_level": 0, "body": {}},
         ]
         result = resolve_tab(tabs, "t2")
-        assert result["id"] == "t1"  # title match wins
+        assert result["id"] == "t2"  # ID match wins
 
     def test_not_found_raises(self):
         with pytest.raises(GdocError, match="tab not found: nope") as exc_info:

@@ -159,48 +159,79 @@ def get_file_info(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
-def update_doc_content(doc_id: str, content: str) -> int:
-    """Overwrite a Google Doc's content with markdown.
+def update_doc_content(
+    doc_id: str, content: str, *, expected_version: int | None = None,
+    document: dict | None = None, allow_lossy: bool = False,
+    collapse_tabs: bool = False, result_details: dict | None = None,
+    image_aliases: dict | None = None,
+) -> int | None:
+    """Replace the first tab using the exact guard snapshot's Docs revision.
 
-    Uploads markdown content via files.update with media, triggering
-    automatic conversion to Google Docs format.
-
-    Args:
-        doc_id: The document ID.
-        content: Markdown content string to upload.
-
-    Returns:
-        The new document version (int) from the API response.
+    Sibling tabs survive unless the caller explicitly authorizes collapse.
+    The numeric Drive version remains a display value; result_details carries
+    only the revision acknowledged by the native mutation response.
     """
-    import io
+    from gdoc.api.docs import (
+        _StagedWrite,
+        flatten_tabs,
+        get_document_with_tabs,
+        insert_markdown_into_tab,
+    )
 
-    from googleapiclient.http import MediaIoBaseUpload
+    if expected_version is None:
+        if document is not None:
+            raise GdocError(
+                "expected version is required with a supplied document snapshot",
+                exit_code=3,
+            )
+        expected_version = get_file_version(doc_id).get("version")
+    if expected_version is None:
+        raise GdocError("cannot verify document version before writing", exit_code=3)
+    document = document if document is not None else get_document_with_tabs(doc_id)
+    tabs = flatten_tabs(document.get("tabs", []))
+    if not tabs:
+        raise GdocError("cannot identify document tabs before writing", exit_code=3)
+
+    require_write_version(doc_id, expected_version)
+    result = insert_markdown_into_tab(
+        doc_id, tabs[0]["id"], content, replace=True,
+        allow_lossy=allow_lossy, document=document, image_aliases=image_aliases,
+    )
+    with _StagedWrite(doc_id, applied=["first tab content replaced"]) as progress:
+        if collapse_tabs and len(tabs) > 1:
+            # Children precede parents; never silently collapse the siblings
+            # of an ordinary default-tab replacement.
+            result["acknowledged_revision_id"] = progress.batch(
+                "authorized sibling tabs removed",
+                [{"deleteTab": {"tabId": tab["id"]}} for tab in reversed(tabs[1:])],
+                result["acknowledged_revision_id"],
+            )
+    if result_details is not None:
+        result_details.update(result)
+    return version_after_write(doc_id)
+
+
+def version_after_write(doc_id: str) -> int | None:
+    """An optional display lookup must not hide an acknowledged mutation."""
+    import sys
 
     try:
-        service = get_drive_service()
-        media = MediaIoBaseUpload(
-            io.BytesIO(content.encode("utf-8")),
-            mimetype="text/markdown",
-            resumable=False,
+        return get_file_version(doc_id).get("version")
+    except Exception as error:
+        print("WARN: write acknowledged, but display version could not be "
+              f"refreshed: {error}",
+              file=sys.stderr)
+        return None
+
+
+def require_write_version(doc_id: str, expected_version: int) -> None:
+    current = get_file_version(doc_id).get("version")
+    if current is None or current != expected_version:
+        raise GdocError(
+            "conflict: document changed while preparing the write; "
+            "content was not uploaded. Read the document again before writing.",
+            exit_code=3,
         )
-        result = (
-            service.files()
-            .update(
-                fileId=doc_id,
-                body={
-                    "mimeType": (
-                        "application/vnd.google-apps.document"
-                    ),
-                },
-                media_body=media,
-                fields="version",
-                supportsAllDrives=True,
-            )
-            .execute()
-        )
-        return int(result["version"])
-    except HttpError as e:
-        _translate_http_error(e, doc_id)
 
 
 def get_file_version(doc_id: str) -> dict:

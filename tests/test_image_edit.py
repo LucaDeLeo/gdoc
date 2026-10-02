@@ -55,7 +55,15 @@ class TestInsertInlineImage:
                         "location": {"index": 19},
                         "uri": IMG_URL,
                     }
-                }
+                },
+                # An image after linked text must not inherit the link (R8-11).
+                {
+                    "updateTextStyle": {
+                        "range": {"startIndex": 19, "endIndex": 20},
+                        "textStyle": {},
+                        "fields": "link",
+                    }
+                },
             ]
         }
 
@@ -263,7 +271,7 @@ class TestCmdInsertImage:
         mock_insert.assert_called_once_with(
             "doc123", IMG_URL, 19,
             tab_id="t1", revision_id="rev1",
-            width_pt=None, height_pt=None,
+            width_pt=None, height_pt=None, result_details={},
         )
         assert "OK inserted image kix.newimg" in capsys.readouterr().out
         assert mock_update.call_args.kwargs["command_version"] == 7
@@ -516,7 +524,7 @@ class TestCmdReplaceImage:
         assert rc == 0
         mock_replace.assert_called_once_with(
             "doc123", "kix.img1", IMG_URL,
-            tab_id="t2", revision_id="rev1",
+            tab_id="t2", revision_id="rev1", result_details={},
         )
         assert "OK replaced image kix.img1" in capsys.readouterr().out
         assert mock_update.call_args.kwargs["command_version"] == 8
@@ -586,3 +594,45 @@ class TestCmdReplaceImage:
         assert data["ok"] is True
         assert data["object_id"] == "kix.img1"
         assert data["status"] == "replaced"
+
+
+@pytest.mark.parametrize('command', ['insert-image', 'replace-image'])
+@pytest.mark.parametrize('acknowledged', ['', 'rev2'])
+def test_image_write_advances_only_acknowledged_revision(mocker, command, acknowledged):
+    from copy import deepcopy
+
+    from gdoc.state import load_state, record_content_read
+
+    doc = deepcopy(_ONE_TAB_DOC)
+    doc['tabs'][0]['documentTab']['inlineObjects'] = {'kix.img1': {}}
+    mocker.patch('gdoc.api.docs.get_document_with_tabs', return_value=doc)
+    mocker.patch('gdoc.notify.pre_flight', return_value=None)
+    mocker.patch('gdoc.api.drive.get_file_version', return_value={'version': 7})
+    response = {**_INSERT_OK, 'writeControl': {'requiredRevisionId': acknowledged}}
+    service = _mock_docs_service(batch_response=response)
+    mocker.patch('gdoc.api.docs.get_docs_service', return_value=service)
+    record_content_read('doc123', ['t1'], 'rev1')
+    if command == 'insert-image':
+        assert cmd_insert_image(_make_args(command, after='Architecture')) == 0
+    else:
+        assert cmd_replace_image(_make_args(command, object_id='kix.img1')) == 0
+    assert load_state('doc123').read_revision_ids == {'t1': acknowledged or 'rev1'}
+
+
+@patch("gdoc.state.update_state_after_command",
+       side_effect=OSError("read-only state directory"))
+@patch("gdoc.api.drive.get_file_version", return_value={"version": 7})
+@patch("gdoc.api.docs.replace_image")
+@patch("gdoc.api.docs.insert_inline_image", return_value="kix.newimg")
+def test_image_writes_keep_success_when_local_state_fails(
+    _insert, _replace, _ver, _update, capsys,
+):
+    """R7-10: an acknowledged image write is not reported as failed."""
+    with patch("gdoc.api.docs.get_document_with_tabs", return_value=_ONE_TAB_DOC):
+        assert cmd_insert_image(_make_args("insert-image", after="Architecture")) == 0
+    with patch("gdoc.api.docs.get_document_with_tabs", return_value=_REPLACE_DOC):
+        assert cmd_replace_image(_make_args("replace-image", object_id="kix.img1")) == 0
+    captured = capsys.readouterr()
+    assert "OK inserted image kix.newimg" in captured.out
+    assert "OK replaced image kix.img1" in captured.out
+    assert captured.err.count("local state could not be updated") == 2

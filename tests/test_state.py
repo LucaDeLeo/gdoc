@@ -122,7 +122,7 @@ class TestUpdateStateAfterCommand:
             update_state_after_command("doc1", info, command="info", quiet=False)
             state = load_state("doc1")
             assert state.last_version == 50
-            assert state.last_read_version == 50  # info is a read
+            assert state.last_read_version is None  # Metadata is not content exposure.
 
     def test_normal_export_is_a_read(self, tmp_path):
         with patch("gdoc.state.STATE_DIR", tmp_path):
@@ -226,7 +226,7 @@ class TestUpdateStateAfterCommand:
             )
             state = load_state("doc1")
             assert state.last_version == 20
-            assert state.last_read_version == 20
+            assert state.last_read_version == 10
 
     def test_push_advances_read_baseline(self, tmp_path):
         """A full-content write doubles as a read: the doc now contains

@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -56,8 +56,8 @@ class TestInsertBasic:
         out = capsys.readouterr().out
         assert 'OK inserted into "TODO"' in out
         mock_insert.assert_called_once_with(
-            "abc123", "TODO", "# Hello",
-            position="start", replace=False,
+            "abc123", "t.todo", "# Hello",
+            position="start", replace=False, document=ANY, image_aliases={},
         )
 
     @patch("gdoc.state.update_state_after_command")
@@ -91,8 +91,8 @@ class TestInsertBasic:
         args = _make_args(file=str(f), position="end")
         cmd_insert(args)
         mock_insert.assert_called_once_with(
-            "abc123", "TODO", "tail",
-            position="end", replace=False,
+            "abc123", "t.todo", "tail",
+            position="end", replace=False, document=ANY, image_aliases={},
         )
 
 
@@ -138,7 +138,7 @@ class TestInsertConflict:
     @patch("gdoc.api.docs.insert_markdown_into_tab")
     @patch("gdoc.notify.pre_flight")
     def test_blocks_on_conflict(
-        self, mock_pf, mock_insert, _ver, tmp_path,
+        self, mock_pf, mock_insert, _ver, tmp_path, mocker,
     ):
         f = tmp_path / "content.md"
         f.write_text("hi")
@@ -146,7 +146,9 @@ class TestInsertConflict:
             current_version=10, last_read_version=5,
         )
         args = _make_args(file=str(f))
-        with pytest.raises(GdocError, match="doc changed"):
+        from gdoc.state import record_content_read
+        record_content_read("abc123", ["t.todo"], "older")
+        with pytest.raises(GdocError, match="changed"):
             cmd_insert(args)
         mock_insert.assert_not_called()
 
@@ -162,7 +164,21 @@ class TestInsertConflict:
         mock_pf.return_value = ChangeInfo(
             current_version=10, last_read_version=5,
         )
+        from gdoc.state import record_content_read
+        record_content_read("abc123", ["t.todo"], "older")
         args = _make_args(file=str(f), force=True)
         rc = cmd_insert(args)
         assert rc == 0
         mock_insert.assert_called_once()
+
+
+@pytest.fixture(autouse=True)
+def _native_snapshot(mocker):
+    mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
+        "revisionId": "r1", "tabs": [{
+            "tabProperties": {"tabId": "t.todo", "title": "TODO"},
+            "documentTab": {"body": {"content": []}},
+        }],
+    })
+    from gdoc.state import record_content_read
+    record_content_read("abc123", ["t.todo"], "r1")
