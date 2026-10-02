@@ -141,8 +141,7 @@ def test_r5_03_the_sync_hook_skips_ordinary_front_matter(monkeypatch, tmp_path, 
     pulled.write_text("\n" + HEADER + "Changed.\n")
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
         {"tool_input": {"file_path": str(pulled)}})))
-    assert cli.cmd_sync_hook(SimpleNamespace()) == 2
-    assert "may be a pulled file" in capsys.readouterr().err
+    assert cli.cmd_sync_hook(SimpleNamespace()) == 0
     assert cli.run_argv(["push", str(pulled)], check_updates=False) == 3
     assert not route.service.batches
 

@@ -29,8 +29,9 @@ All notable changes to `gdoc` are documented here. This project follows
 - A file that doesn't start with a header as `pull` writes it, but holds a
   `gdoc` or `gdoc-*` key line anywhere (after any prefix of spaces, `>`, list
   markers, backticks or `<!--`, in any case), is refused by `write`, `push` and
-  MCP `write`, and the sync hook reports the refusal, instead of writing a
-  quoted, wrapped or prefixed stale header without its stale-file checks.
+  MCP `write`, instead of writing a quoted, wrapped or prefixed stale header
+  without its stale-file checks. The sync hook pushes only files that start
+  with such a header and skips every other file.
   Ordinary text with such a line is refused too; a fresh pull, or escaping the
   colon (`gdoc\:`), writes it. Other front matter is unaffected.
 - A file stamped only with `gdoc-version` whose body matches the doc is

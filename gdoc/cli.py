@@ -2733,17 +2733,14 @@ def cmd_sync_hook(args) -> int:
         with open(file_path, encoding="utf-8", newline="") as f:
             content = f.read()
 
-        from gdoc.frontmatter import parse_frontmatter
+        from gdoc.frontmatter import _pulled_header, parse_frontmatter
 
-        try:
-            _refuse_unreadable_provenance(content)
-        except GdocError as e:
-            # Exit 2 shows stderr to the agent; its edit did not sync.
-            print(f"SYNC: not pushed {file_path}: {e}", file=sys.stderr)
-            return 2
-        metadata, body = parse_frontmatter(content)
-        if "gdoc" not in metadata:
+        # The hook pushes only files that start with a header as `pull`
+        # writes it. Skipping any other file never overwrites anyone, so
+        # files that were never pulled (READMEs, notes) are left alone.
+        if not _pulled_header(content):
             return 0
+        metadata, body = parse_frontmatter(content)
 
         doc_id = _resolve_doc_id(metadata["gdoc"])
         title = metadata.get("title", doc_id)

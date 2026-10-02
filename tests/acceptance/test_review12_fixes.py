@@ -85,7 +85,8 @@ def test_r4_an_unreadable_gdoc_header_is_refused(route, header):
     _refused(route, "write", "may be a pulled file", text=header + "Changed.\n")
 
 
-def test_r4_08_push_and_the_sync_hook_refuse_it_too(monkeypatch, tmp_path, capsys):
+def test_r4_08_push_refuses_it_and_the_sync_hook_skips_it(monkeypatch, tmp_path,
+                                                         capsys):
     from gdoc import cli
 
     route = NativeRoute("cli", monkeypatch, tmp_path)
@@ -96,8 +97,7 @@ def test_r4_08_push_and_the_sync_hook_refuse_it_too(monkeypatch, tmp_path, capsy
     assert "may be a pulled file" in capsys.readouterr().err
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
         {"tool_input": {"file_path": str(pulled)}})))
-    assert cli.cmd_sync_hook(SimpleNamespace()) == 2
-    assert "may be a pulled file" in capsys.readouterr().err
+    assert cli.cmd_sync_hook(SimpleNamespace()) == 0
     assert not route.service.batches
 
 

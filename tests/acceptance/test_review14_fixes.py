@@ -116,7 +116,10 @@ def test_r6_01_a_wrapped_pulled_header_is_refused(route, tmp_path, wrapper, entr
     _stale(route, path, WRAPPERS[wrapper])
     sent = len(route.service.batches)
     code, output = _attempt(entry, path)
-    assert code != 0 and "may be a pulled file" in output, output
+    if entry == "hook":  # Skips any file that doesn't start with a header.
+        assert code == 0 and not output, output
+    else:
+        assert code != 0 and "may be a pulled file" in output, output
     assert len(route.service.batches) == sent
     assert "COLLAB." in _texts(route)
 
@@ -153,7 +156,9 @@ def test_r6_01_random_prefixes_around_a_stale_header_are_refused(
         _stale(route, path, _random_wrap(seed))
         sent = len(route.service.batches)
         code, output = _attempt(entry, path)
-        assert code != 0, (entry, path.read_text(encoding="utf-8"), output)
+        # The hook may skip the file; the others refuse it.
+        assert entry == "hook" or code != 0, (
+            entry, path.read_text(encoding="utf-8"), output)
         assert len(route.service.batches) == sent
         assert "COLLAB." in _texts(route)
 

@@ -736,8 +736,9 @@ any `gdoc-version`. A file that starts (after at most one byte-order mark)
 with a header as `pull` writes it is a pulled file: `---`, `key: value` lines
 with lower-case `gdoc` keys including `gdoc: ID`, and `---`. Any other file
 that holds a `gdoc` or `gdoc-*` key line anywhere is refused: `write` (CLI and
-MCP) and `push` exit 3 with nothing sent, and the sync hook reports the refusal
-(exit 2). A key line is a `gdoc:` or `gdoc-NAME:` key after anything but
+MCP) and `push` exit 3 with nothing sent. The sync hook pushes only pulled
+files and skips every other file, so editing a Markdown file that was never
+pulled never triggers it. A key line is a `gdoc:` or `gdoc-NAME:` key after anything but
 letters and digits, or a numbered-list marker (`gdoc: ID`, `> - gdoc-revision:
 R`, `1. gdoc: ID`, `<!-- gdoc: ID`), read in any case and ignoring invisible
 characters and accents. This catches a pulled header that was quoted, wrapped
