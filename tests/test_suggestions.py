@@ -26,10 +26,7 @@ from gdoc.api.docs import (
     summarize_suggestion_thread,
 )
 from gdoc.cli import (
-    cmd_accept_suggestion,
-    cmd_delete_suggestion,
-    cmd_reject_suggestion,
-    cmd_suggestion_info,
+    cmd_suggestion,
     cmd_suggestions,
 )
 from gdoc.notify import ChangeInfo
@@ -935,7 +932,7 @@ class TestDecideSuggestion:
         assert decide_suggestion("doc1", "suggest.a", decision, "rev1") is body
 
 
-# --- CLI: suggestions / suggestion-info -----------------------------------
+# --- CLI: suggestions (list / show one) -----------------------------------
 
 
 def _args(command, **overrides):
@@ -1138,21 +1135,21 @@ class TestCmdSuggestionInfo:
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
     def test_terse(self, _get, _pf, mock_update, capsys):
-        rc = cmd_suggestion_info(_args("suggestion-info", suggestion_id="suggest.b"))
+        rc = cmd_suggestions(_args("suggestions", suggestion_id="suggest.b"))
         assert rc == 0
         assert capsys.readouterr().out == (
             "#suggest.b [open] Alejandro Acelas 2026-08-26\n"
             "  Delete: “beta text to delete”\n"
             "  @Tab 1 73-92 delete\n"
         )
-        assert mock_update.call_args.kwargs["command"] == "suggestion-info"
+        assert mock_update.call_args.kwargs["command"] == "suggestions"
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
     def test_plain(self, _get, _pf, _u, capsys):
-        cmd_suggestion_info(
-            _args("suggestion-info", suggestion_id="suggest.a", plain=True)
+        cmd_suggestions(
+            _args("suggestions", suggestion_id="suggest.a", plain=True)
         )
         assert capsys.readouterr().out == (
             "id\tsuggest.a\nstatus\topen\nauthor\tAlejo Acelas\n"
@@ -1171,8 +1168,8 @@ class TestCmdSuggestionInfo:
             "summaryText": "first\tpart\nsecond line",
         }
         mock_get.return_value = {**_DOC, "suggestions": [thread]}
-        cmd_suggestion_info(
-            _args("suggestion-info", suggestion_id="suggest.a", plain=True)
+        cmd_suggestions(
+            _args("suggestions", suggestion_id="suggest.a", plain=True)
         )
         assert "summary\tfirst part second line\n" in capsys.readouterr().out
 
@@ -1180,8 +1177,8 @@ class TestCmdSuggestionInfo:
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
     def test_json(self, _get, _pf, _u, capsys):
-        cmd_suggestion_info(
-            _args("suggestion-info", suggestion_id="suggest.h", json=True)
+        cmd_suggestions(
+            _args("suggestions", suggestion_id="suggest.h", json=True)
         )
         data = json.loads(capsys.readouterr().out)
         assert data["suggestion"] == _DOC["suggestions"][0]
@@ -1203,7 +1200,7 @@ class TestCmdSuggestionInfo:
     @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
     def test_unknown_id_is_usage_error(self, _get, _pf, mock_update):
         with pytest.raises(GdocError, match="suggestion not found: suggest.zz") as e:
-            cmd_suggestion_info(_args("suggestion-info", suggestion_id="suggest.zz"))
+            cmd_suggestions(_args("suggestions", suggestion_id="suggest.zz"))
         assert e.value.exit_code == 3
         mock_update.assert_not_called()
 
@@ -1240,15 +1237,15 @@ class TestCmdDecisions:
     def test_accept_terse_pins_revision_and_updates_state(self, capsys):
         p = _decision_patches("ACCEPTED")
         with p[0] as mock_update, p[1], p[2], p[3] as mock_decide, p[4] as mock_get:
-            rc = cmd_accept_suggestion(
-                _args("accept-suggestion", suggestion_id="suggest.a")
+            rc = cmd_suggestion(
+                _args("suggestion", accept=True, suggestion_id="suggest.a")
             )
         assert rc == 0
         assert capsys.readouterr().out == "OK accepted suggestion #suggest.a\n"
         mock_decide.assert_called_once_with("doc1", "suggest.a", "accept", "rev1")
         assert mock_get.call_count == 2
         kw = mock_update.call_args.kwargs
-        assert kw["command"] == "accept-suggestion"
+        assert kw["command"] == "suggestion"
         assert kw["command_version"] == 50
         assert "comment_state_patch" not in kw
         assert not kw.get("full_doc_write")
@@ -1256,8 +1253,8 @@ class TestCmdDecisions:
     def test_accept_json_includes_suggestion_responses(self, capsys):
         p = _decision_patches("ACCEPTED")
         with p[0], p[1], p[2], p[3], p[4]:
-            cmd_accept_suggestion(
-                _args("accept-suggestion", suggestion_id="suggest.a", json=True)
+            cmd_suggestion(
+                _args("suggestion", accept=True, suggestion_id="suggest.a", json=True)
             )
         assert json.loads(capsys.readouterr().out) == {
             "ok": True,
@@ -1277,8 +1274,8 @@ class TestCmdDecisions:
             },
         )
         with p[0], p[1], p[2], p[3] as mock_decide, p[4]:
-            rc = cmd_reject_suggestion(
-                _args("reject-suggestion", suggestion_id="suggest.a", plain=True)
+            rc = cmd_suggestion(
+                _args("suggestion", reject=True, suggestion_id="suggest.a", plain=True)
             )
         assert rc == 0
         assert capsys.readouterr().out == "id\tsuggest.a\nstatus\trejected\n"
@@ -1294,9 +1291,9 @@ class TestCmdDecisions:
             },
         )
         with p[0], p[1], p[2], p[3] as mock_decide, p[4]:
-            rc = cmd_delete_suggestion(
+            rc = cmd_suggestion(
                 _args(
-                    "delete-suggestion",
+                    "suggestion", delete=True,
                     suggestion_id="suggest.a",
                     force=True,
                     json=True,
@@ -1323,8 +1320,8 @@ class TestCmdDecisions:
                 GdocError,
                 match="Refusing to delete suggestion #suggest.a without --force",
             ) as e:
-                cmd_delete_suggestion(
-                    _args("delete-suggestion", suggestion_id="suggest.a", force=False)
+                cmd_suggestion(
+                    _args("suggestion", delete=True, suggestion_id="suggest.a", force=False)
                 )
         assert e.value.exit_code == 3
         mock_decide.assert_not_called()
@@ -1337,8 +1334,8 @@ class TestCmdDecisions:
             with pytest.raises(
                 GdocError, match="suggestion not found: suggest.zz"
             ) as e:
-                cmd_accept_suggestion(
-                    _args("accept-suggestion", suggestion_id="suggest.zz")
+                cmd_suggestion(
+                    _args("suggestion", accept=True, suggestion_id="suggest.zz")
                 )
         assert e.value.exit_code == 3
         mock_decide.assert_not_called()
@@ -1350,8 +1347,8 @@ class TestCmdDecisions:
             with pytest.raises(
                 GdocError, match="suggestion suggest.done is already accepted"
             ) as e:
-                cmd_reject_suggestion(
-                    _args("reject-suggestion", suggestion_id="suggest.done")
+                cmd_suggestion(
+                    _args("suggestion", reject=True, suggestion_id="suggest.done")
                 )
         assert e.value.exit_code == 3
         mock_decide.assert_not_called()
@@ -1362,8 +1359,8 @@ class TestCmdDecisions:
             with pytest.raises(
                 GdocError, match="reads back as open \\(expected accepted\\)"
             ):
-                cmd_accept_suggestion(
-                    _args("accept-suggestion", suggestion_id="suggest.a")
+                cmd_suggestion(
+                    _args("suggestion", accept=True, suggestion_id="suggest.a")
                 )
         assert capsys.readouterr().out == ""
         mock_update.assert_not_called()
@@ -1379,8 +1376,8 @@ class TestCmdDecisions:
                     "verification failed.*may already have been applied"
                 ),
             ):
-                cmd_accept_suggestion(
-                    _args("accept-suggestion", suggestion_id="suggest.a")
+                cmd_suggestion(
+                    _args("suggestion", accept=True, suggestion_id="suggest.a")
                 )
         assert capsys.readouterr().out == ""
         mock_update.assert_not_called()
@@ -1389,8 +1386,8 @@ class TestCmdDecisions:
         p = _decision_patches("ACCEPTED")
         with p[0] as mock_update, p[1], p[2] as mock_version, p[3], p[4]:
             mock_version.side_effect = TimeoutError("timed out")
-            rc = cmd_accept_suggestion(
-                _args("accept-suggestion", suggestion_id="suggest.a")
+            rc = cmd_suggestion(
+                _args("suggestion", accept=True, suggestion_id="suggest.a")
             )
         captured = capsys.readouterr()
         assert rc == 0
@@ -1406,8 +1403,8 @@ class TestCmdDecisions:
         p = _decision_patches("ACCEPTED")
         with p[0] as mock_update, p[1], p[2], p[3], p[4]:
             mock_update.side_effect = OSError("disk full")
-            rc = cmd_accept_suggestion(
-                _args("accept-suggestion", suggestion_id="suggest.a")
+            rc = cmd_suggestion(
+                _args("suggestion", accept=True, suggestion_id="suggest.a")
             )
         captured = capsys.readouterr()
         assert rc == 0
@@ -1425,16 +1422,16 @@ class TestCmdDecisions:
             with pytest.raises(
                 GdocError, match="reads back as accepted \\(expected rejected\\)"
             ):
-                cmd_reject_suggestion(
-                    _args("reject-suggestion", suggestion_id="suggest.a")
+                cmd_suggestion(
+                    _args("suggestion", reject=True, suggestion_id="suggest.a")
                 )
         p = _decision_patches("REJECTED")
         with p[0], p[1], p[2], p[3], p[4]:
             with pytest.raises(
                 GdocError, match="reads back as rejected \\(expected gone\\)"
             ):
-                cmd_delete_suggestion(
-                    _args("delete-suggestion", suggestion_id="suggest.a", force=True)
+                cmd_suggestion(
+                    _args("suggestion", delete=True, suggestion_id="suggest.a", force=True)
                 )
 
     def test_api_permission_error_propagates_without_state_update(self):
@@ -1445,8 +1442,8 @@ class TestCmdDecisions:
                 "(accept requires edit access)"
             )
             with pytest.raises(GdocError, match="accept requires edit access"):
-                cmd_accept_suggestion(
-                    _args("accept-suggestion", suggestion_id="suggest.a")
+                cmd_suggestion(
+                    _args("suggestion", accept=True, suggestion_id="suggest.a")
                 )
         assert mock_get.call_count == 1  # no read-back after a failed write
         mock_update.assert_not_called()
@@ -1458,16 +1455,16 @@ class TestCmdDecisions:
                 "native comment threads are not available"
             )
             with pytest.raises(GdocError, match="not available"):
-                cmd_accept_suggestion(
-                    _args("accept-suggestion", suggestion_id="suggest.a")
+                cmd_suggestion(
+                    _args("suggestion", accept=True, suggestion_id="suggest.a")
                 )
         mock_decide.assert_not_called()
 
     def test_pre_flight_runs_unless_quiet(self):
         p = _decision_patches("ACCEPTED")
         with p[0], p[1] as mock_pf, p[2], p[3], p[4]:
-            cmd_accept_suggestion(
-                _args("accept-suggestion", suggestion_id="suggest.a", quiet=False)
+            cmd_suggestion(
+                _args("suggestion", accept=True, suggestion_id="suggest.a", quiet=False)
             )
         mock_pf.assert_called_once_with("doc1", quiet=False)
 
@@ -1482,14 +1479,20 @@ class TestParserAndMcp:
             (["suggestions", "D"], ("cmd_suggestions", {"all": False})),
             (["suggestions", "D", "--all"], ("cmd_suggestions", {"all": True})),
             (
-                ["suggestion-info", "D", "suggest.x"],
-                ("cmd_suggestion_info", {"suggestion_id": "suggest.x"}),
+                ["suggestions", "D", "suggest.x"],
+                ("cmd_suggestions", {"suggestion_id": "suggest.x"}),
             ),
-            (["accept-suggestion", "D", "suggest.x"], ("cmd_accept_suggestion", {})),
-            (["reject-suggestion", "D", "suggest.x"], ("cmd_reject_suggestion", {})),
             (
-                ["delete-suggestion", "D", "suggest.x", "--force"],
-                ("cmd_delete_suggestion", {"force": True}),
+                ["suggestion", "D", "suggest.x", "--accept"],
+                ("cmd_suggestion", {"accept": True, "force": False}),
+            ),
+            (
+                ["suggestion", "D", "suggest.x", "--reject"],
+                ("cmd_suggestion", {"reject": True}),
+            ),
+            (
+                ["suggestion", "D", "suggest.x", "--delete", "--force"],
+                ("cmd_suggestion", {"delete": True, "force": True}),
             ),
         ],
     )
@@ -1503,17 +1506,69 @@ class TestParserAndMcp:
         for k, v in attrs.items():
             assert getattr(args, k) == v
 
+    @pytest.mark.parametrize("flags", [[], ["--accept", "--reject"],
+                                       ["--accept", "--delete"]])
+    def test_suggestion_needs_exactly_one_decision(self, flags):
+        from gdoc.cli import build_parser
+
+        with pytest.raises(SystemExit) as e:
+            build_parser().parse_args(["suggestion", "D", "suggest.x", *flags])
+        assert e.value.code == 3
+
+    @patch("gdoc.notify.pre_flight")
+    def test_handler_rechecks_one_decision(self, mock_pf):
+        # MCP builds its own argv, so the handler repeats the argparse rule.
+        for flags in ({}, {"accept": True, "reject": True}):
+            with pytest.raises(GdocError, match="exactly one") as e:
+                cmd_suggestion(_args("suggestion", suggestion_id="suggest.a", **flags))
+            assert e.value.exit_code == 3
+        mock_pf.assert_not_called()
+
+    def test_suggestions_all_with_id_is_usage_error(self):
+        with pytest.raises(GdocError, match="--all") as e:
+            cmd_suggestions(
+                _args("suggestions", suggestion_id="suggest.a", all=True)
+            )
+        assert e.value.exit_code == 3
+
+    def test_dropped_commands_are_gone(self):
+        from gdoc.cli import build_parser
+
+        for cmd in ("suggestion-info", "accept-suggestion",
+                    "reject-suggestion", "delete-suggestion"):
+            with pytest.raises(SystemExit):
+                build_parser().parse_args([cmd, "D", "suggest.x"])
+            assert cmd not in mcp.EXPOSED_COMMANDS
+
     def test_mcp_exposure(self):
         assert mcp.EXPOSED_COMMANDS["suggestions"] is True
-        assert mcp.EXPOSED_COMMANDS["suggestion-info"] is True
-        assert mcp.EXPOSED_COMMANDS["accept-suggestion"] is False
-        assert mcp.EXPOSED_COMMANDS["reject-suggestion"] is False
-        assert mcp.EXPOSED_COMMANDS["delete-suggestion"] is False
+        assert mcp.EXPOSED_COMMANDS["suggestion"] is False
+        props = mcp.build_tools(allow={"suggestions"})["gdoc_suggestions"][
+            "inputSchema"
+        ]["properties"]
+        assert "suggestion_id" in props
 
-    def test_mcp_delete_suggestion_requires_force(self):
-        schema = mcp.build_tools(allow={"delete-suggestion"})["gdoc_delete_suggestion"][
+    def test_mcp_suggestion_delete_requires_force(self):
+        schema = mcp.build_tools(allow={"suggestion"})["gdoc_suggestion"][
             "inputSchema"
         ]
-        assert "force" in schema["required"]
+        assert {"accept", "reject", "delete", "force"} <= set(schema["properties"])
+        # force is required for --delete only, so the schema leaves it
+        # optional and the call-time guard enforces it.
+        assert "force" not in schema.get("required", [])
+        assert "const" not in schema["properties"]["force"]
         with pytest.raises(ValueError, match="`force: true` is required"):
-            mcp.call_command("delete-suggestion", {"doc": "D", "suggestion_id": "s"})
+            mcp.call_command(
+                "suggestion",
+                {"doc": "D", "suggestion_id": "s", "delete": True},
+            )
+
+    def test_mcp_suggestion_accept_does_not_need_force(self):
+        from gdoc.cli import build_parser
+
+        subparser = mcp._subparsers(build_parser())["suggestion"]
+        argv = mcp._argv_for(
+            "suggestion", {"doc": "D", "suggestion_id": "s", "accept": True},
+            subparser,
+        )
+        assert argv == ["suggestion", "--accept", "--", "D", "s"]

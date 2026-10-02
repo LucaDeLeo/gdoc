@@ -1,9 +1,10 @@
 """Tests for native comment assignment and post operations (Docs API preview).
 
-Covers `comment --assign`, `reply --suggestion` / `--reassign`,
-`edit-comment`, `edit-suggestion-reply`, `delete-reply` and
-`delete-suggestion-reply`. Drive v3 stays the path for ordinary comments;
-these commands use Docs-native threads only for what Drive cannot express.
+Covers `comment --assign`, `reply` on a suggestion thread and
+`reply --reassign`, `edit-comment`, and `delete-comment` with a POST_ID.
+A `suggest.` ID prefix selects the suggestion-thread namespace. Drive v3
+stays the path for ordinary comments; these commands use Docs-native
+threads only for what Drive cannot express.
 
 Fixture shapes mirror live responses from a preview-enrolled project:
 ``comments[]`` threads carry ``commentId``, ``headPost`` and ``replies[]``
@@ -37,10 +38,8 @@ from gdoc.api.docs import (
 from gdoc.cli import (
     _try_anchored_comment,
     cmd_comment,
-    cmd_delete_reply,
-    cmd_delete_suggestion_reply,
+    cmd_delete_comment,
     cmd_edit_comment,
-    cmd_edit_suggestion_reply,
     cmd_reply,
 )
 from gdoc.util import AuthError, GdocError, PreviewUnavailableError
@@ -956,8 +955,7 @@ class TestCmdReplyNative:
     def test_suggestion_reply_routes_natively_without_preread(
         self, mock_add, mock_read, mock_drive, _ver, _pf, mock_update, capsys,
     ):
-        args = _make_args("reply", comment_id="suggest.s1", text="hi", suggestion=True,
-                          reassign=None)
+        args = _make_args("reply", comment_id="suggest.s1", text="hi", reassign=None)
         assert cmd_reply(args) == 0
         mock_add.assert_called_once_with(
             "abc123", "suggest.s1", content="hi", suggestion=True, assignee_email=None,
@@ -974,13 +972,13 @@ class TestCmdReplyNative:
         self, _add, _ver, _pf, _update, capsys,
     ):
         cmd_reply(_make_args("reply", comment_id="suggest.s1", text="hi",
-                             suggestion=True, reassign=None, json=True))
+                             reassign=None, json=True))
         assert json.loads(capsys.readouterr().out) == {
             "ok": True, "suggestionId": "suggest.s1", "postId": "p9",
             "status": "created",
         }
         cmd_reply(_make_args("reply", comment_id="suggest.s1", text="hi",
-                             suggestion=True, reassign=None, plain=True))
+                             reassign=None, plain=True))
         assert capsys.readouterr().out == "suggestionId\tsuggest.s1\npostId\tp9\n"
 
     @patch("gdoc.api.docs.get_document_threads")
@@ -993,7 +991,7 @@ class TestCmdReplyNative:
     ):
         mock_read.return_value = _doc(comments=[_comment_thread("c1", assignee=ME)])
         args = _make_args("reply", comment_id="c1", text="over to you",
-                          suggestion=False, reassign=OTHER, json=True)
+                          reassign=OTHER, json=True)
         assert cmd_reply(args) == 0
         mock_read.assert_called_once_with("abc123")
         mock_add.assert_called_once_with(
@@ -1014,8 +1012,7 @@ class TestCmdReplyNative:
         self, mock_add, mock_read, _ver, _pf, mock_update, capsys,
     ):
         mock_read.return_value = _doc(comments=[_comment_thread("c1")])
-        args = _make_args("reply", comment_id="c1", text="t", suggestion=False,
-                          reassign=OTHER)
+        args = _make_args("reply", comment_id="c1", text="t", reassign=OTHER)
         with pytest.raises(GdocError, match="has no assignee") as ei:
             cmd_reply(args)
         assert ei.value.exit_code == 3
@@ -1029,8 +1026,7 @@ class TestCmdReplyNative:
         self, mock_add, mock_read, _ver, _pf, _update,
     ):
         mock_read.return_value = _doc()
-        args = _make_args("reply", comment_id="c1", text="t", suggestion=False,
-                          reassign=OTHER)
+        args = _make_args("reply", comment_id="c1", text="t", reassign=OTHER)
         with pytest.raises(GdocError, match="comment thread not found") as ei:
             cmd_reply(args)
         assert ei.value.exit_code == 3
@@ -1044,8 +1040,7 @@ class TestCmdReplyNative:
         # --quiet skips only the awareness pre-flight; the precondition read
         # is a correctness gate and always runs.
         mock_read.return_value = _doc(comments=[_comment_thread("c1")])
-        args = _make_args("reply", comment_id="c1", text="t", suggestion=False,
-                          reassign=OTHER, quiet=True)
+        args = _make_args("reply", comment_id="c1", text="t", reassign=OTHER, quiet=True)
         with pytest.raises(GdocError):
             cmd_reply(args)
         mock_pf.assert_called_once_with("abc123", quiet=True)
@@ -1072,34 +1067,24 @@ class TestCmdReplyNative:
     @patch("gdoc.api.docs.add_comment_reply")
     def test_suggestion_and_reassign_conflict(self, mock_add, _ver, _pf, _update):
         args = _make_args("reply", comment_id="suggest.s1", text="t",
-                          suggestion=True, reassign=OTHER)
+                          reassign=OTHER)
         with pytest.raises(GdocError, match="comment threads only") as ei:
             cmd_reply(args)
         assert ei.value.exit_code == 3
         mock_add.assert_not_called()
 
-    @patch("gdoc.api.docs.add_comment_reply", return_value=_post("p9", "t"))
-    def test_suggestion_ids_are_opaque(self, mock_add, _ver, _pf, _update, capsys):
-        # No shape check: the flag alone selects the suggestionId namespace.
-        args = _make_args("reply", comment_id="AAACopaque", text="t",
-                          suggestion=True, reassign=None, json=True)
-        assert cmd_reply(args) == 0
-        mock_add.assert_called_once_with(
-            "abc123", "AAACopaque", content="t", suggestion=True,
-            assignee_email=None,
-        )
-        assert json.loads(capsys.readouterr().out)["suggestionId"] == "AAACopaque"
-
     @patch("gdoc.api.docs.add_comment_reply")
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_reply", return_value={"id": "r1"})
-    def test_drive_path_ignores_id_shape(
+    def test_only_the_suggest_prefix_selects_suggestion_threads(
         self, mock_drive, _svc, mock_add, _ver, _pf, _update,
     ):
-        args = _make_args("reply", comment_id="suggest.looking", text="t",
-                          suggestion=False, reassign=None)
-        assert cmd_reply(args) == 0
-        mock_drive.assert_called_once_with("abc123", "suggest.looking", content="t")
+        # "suggest" elsewhere in the ID, or without the dot, is a comment ID.
+        for comment_id in ("AAACsuggest.x", "suggestAAAC"):
+            args = _make_args("reply", comment_id=comment_id, text="t",
+                              reassign=None)
+            assert cmd_reply(args) == 0
+            mock_drive.assert_called_with("abc123", comment_id, content="t")
         mock_add.assert_not_called()
 
     @patch("gdoc.api.docs.get_document_threads")
@@ -1111,8 +1096,7 @@ class TestCmdReplyNative:
         mock_read.return_value = _doc(comments=[
             _comment_thread("c1", replies=[_post("r1", assignee=ME)]),
         ])
-        args = _make_args("reply", comment_id="c1", text="t", suggestion=False,
-                          reassign=OTHER)
+        args = _make_args("reply", comment_id="c1", text="t", reassign=OTHER)
         with pytest.raises(GdocError, match="head post") as ei:
             cmd_reply(args)
         assert ei.value.exit_code == 3
@@ -1125,8 +1109,7 @@ class TestCmdReplyNative:
     ):
         # Whitespace-only --reassign: neither a Drive reply nor a native one.
         for value in ("", "   "):
-            args = _make_args("reply", comment_id="c1", text="t", suggestion=False,
-                              reassign=value, quiet=False)
+            args = _make_args("reply", comment_id="c1", text="t", reassign=value, quiet=False)
             with pytest.raises(GdocError, match="requires an email") as ei:
                 cmd_reply(args)
             assert ei.value.exit_code == 3
@@ -1138,7 +1121,7 @@ class TestCmdReplyNative:
     @patch("gdoc.api.docs.add_comment_reply")
     def test_native_reply_validates_text(self, mock_add, _ver, _pf, _update):
         args = _make_args("reply", comment_id="suggest.s1", text="",
-                          suggestion=True, reassign=None)
+                          reassign=None)
         with pytest.raises(GdocError, match="must not be empty") as ei:
             cmd_reply(args)
         assert ei.value.exit_code == 3
@@ -1150,7 +1133,7 @@ class TestCmdReplyNative:
         self, mock_drive, _svc, _ver, _pf, mock_update, capsys,
     ):
         args = _make_args("reply", comment_id="c1", text="thanks",
-                          suggestion=False, reassign=None, json=True)
+                          reassign=None, json=True)
         assert cmd_reply(args) == 0
         mock_drive.assert_called_once_with("abc123", "c1", content="thanks")
         assert json.loads(capsys.readouterr().out) == {
@@ -1185,11 +1168,10 @@ class TestPostWriteVersionBestEffort:
 
     @patch("gdoc.api.docs.add_comment_reply", return_value=_post("p9", "hi"))
     def test_native_reply(self, _add, _ver, _pf, mock_update, capsys):
-        args = _make_args("reply", comment_id="s1", text="hi", suggestion=True,
-                          reassign=None)
+        args = _make_args("reply", comment_id="suggest.s1", text="hi", reassign=None)
         assert cmd_reply(args) == 0
         out, err = capsys.readouterr()
-        assert "OK reply on suggestion #s1" in out and "WARN" in err
+        assert "OK reply on suggestion #suggest.s1" in out and "WARN" in err
         assert mock_update.call_args.kwargs["command_version"] is None
 
     @patch("gdoc.api.docs.update_comment_post")
@@ -1209,8 +1191,8 @@ class TestPostWriteVersionBestEffort:
     def test_delete(self, mock_read, _del, _ver, _pf, mock_update, capsys):
         thread = _comment_thread("c1", replies=[_post("r1")])
         mock_read.return_value = _doc(comments=[thread])
-        args = _make_args("delete-reply", thread_id="c1", post_id="r1", force=True)
-        assert cmd_delete_reply(args) == 0
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1", force=True)
+        assert cmd_delete_comment(args) == 0
         assert "WARN" in capsys.readouterr().err
         assert mock_update.call_args.kwargs["command_version"] is None
 
@@ -1264,9 +1246,9 @@ class TestEditPost:
         mock_read.return_value = _doc(suggestions=[
             _suggestion_thread("suggest.s1", replies=[_post("r1", "old")])
         ])
-        args = _make_args("edit-suggestion-reply", thread_id="suggest.s1",
+        args = _make_args("edit-comment", thread_id="suggest.s1",
                           post_id="r1", text="new", plain=True)
-        assert cmd_edit_suggestion_reply(args) == 0
+        assert cmd_edit_comment(args) == 0
         mock_update_post.assert_called_once_with(
             "abc123", "suggest.s1", "r1", "new", suggestion=True,
         )
@@ -1279,10 +1261,10 @@ class TestEditPost:
         self, mock_read, mock_update_post, _ver, _pf, _state,
     ):
         mock_read.return_value = _doc(suggestions=[_suggestion_thread("suggest.s1")])
-        args = _make_args("edit-suggestion-reply", thread_id="suggest.s1",
+        args = _make_args("edit-comment", thread_id="suggest.s1",
                           post_id="p_head", text="new")
         with pytest.raises(GdocError, match="head post of a suggestion") as ei:
-            cmd_edit_suggestion_reply(args)
+            cmd_edit_comment(args)
         assert ei.value.exit_code == 3
         mock_update_post.assert_not_called()
 
@@ -1352,8 +1334,8 @@ class TestDeletePost:
         mock_read.return_value = _doc(
             comments=[_comment_thread("c1", replies=[_post("r1")])]
         )
-        args = _make_args("delete-reply", thread_id="c1", post_id="r1", force=True)
-        assert cmd_delete_reply(args) == 0
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1", force=True)
+        assert cmd_delete_comment(args) == 0
         mock_delete.assert_called_once_with("abc123", "c1", "r1", suggestion=False)
         assert "OK deleted reply r1 from #c1" in capsys.readouterr().out
         # The thread survives, so its ID stays known; nothing is removed.
@@ -1367,9 +1349,9 @@ class TestDeletePost:
         mock_read.return_value = _doc(suggestions=[
             _suggestion_thread("suggest.s1", replies=[_post("r1")])
         ])
-        args = _make_args("delete-suggestion-reply", thread_id="suggest.s1",
+        args = _make_args("delete-comment", comment_id="suggest.s1",
                           post_id="r1", force=True, json=True)
-        assert cmd_delete_suggestion_reply(args) == 0
+        assert cmd_delete_comment(args) == 0
         mock_delete.assert_called_once_with(
             "abc123", "suggest.s1", "r1", suggestion=True,
         )
@@ -1384,9 +1366,9 @@ class TestDeletePost:
         self, mock_stdin, mock_read, mock_delete, _ver, _pf, _state,
     ):
         mock_stdin.isatty.return_value = False
-        args = _make_args("delete-reply", thread_id="c1", post_id="r1", force=False)
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1", force=False)
         with pytest.raises(GdocError, match="without --force") as ei:
-            cmd_delete_reply(args)
+            cmd_delete_comment(args)
         assert ei.value.exit_code == 3
         mock_read.assert_not_called()
         mock_delete.assert_not_called()
@@ -1395,9 +1377,9 @@ class TestDeletePost:
         self, mock_read, mock_delete, _ver, _pf, _state,
     ):
         mock_read.return_value = _doc(comments=[_comment_thread("c1")])
-        args = _make_args("delete-reply", thread_id="c1", post_id="c1", force=True)
-        with pytest.raises(GdocError, match="delete-comment") as ei:
-            cmd_delete_reply(args)
+        args = _make_args("delete-comment", comment_id="c1", post_id="c1", force=True)
+        with pytest.raises(GdocError, match="omit POST_ID") as ei:
+            cmd_delete_comment(args)
         assert ei.value.exit_code == 3
         mock_delete.assert_not_called()
 
@@ -1405,10 +1387,10 @@ class TestDeletePost:
         self, mock_read, mock_delete, _ver, _pf, _state,
     ):
         mock_read.return_value = _doc(suggestions=[_suggestion_thread("suggest.s1")])
-        args = _make_args("delete-suggestion-reply", thread_id="suggest.s1",
+        args = _make_args("delete-comment", comment_id="suggest.s1",
                           post_id="p_head", force=True)
         with pytest.raises(GdocError, match="head post") as ei:
-            cmd_delete_suggestion_reply(args)
+            cmd_delete_comment(args)
         assert ei.value.exit_code == 3
         mock_delete.assert_not_called()
 
@@ -1419,9 +1401,9 @@ class TestDeletePost:
         self, mock_read, mock_delete, _ver, _pf, _state, post,
     ):
         mock_read.return_value = _doc(comments=[_comment_thread("c1", replies=[post])])
-        args = _make_args("delete-reply", thread_id="c1", post_id="r1", force=True)
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1", force=True)
         with pytest.raises(GdocError, match="action or an assignment") as ei:
-            cmd_delete_reply(args)
+            cmd_delete_comment(args)
         assert ei.value.exit_code == 3
         mock_delete.assert_not_called()
 
@@ -1430,8 +1412,8 @@ class TestDeletePost:
     ):
         post = dict(_post("r1"), author=None)
         mock_read.return_value = _doc(comments=[_comment_thread("c1", replies=[post])])
-        args = _make_args("delete-reply", thread_id="c1", post_id="r1", force=True)
-        assert cmd_delete_reply(args) == 0
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1", force=True)
+        assert cmd_delete_comment(args) == 0
 
     def test_delete_other_users_reply_refused(
         self, mock_read, mock_delete, _ver, _pf, _state,
@@ -1439,18 +1421,18 @@ class TestDeletePost:
         mock_read.return_value = _doc(
             comments=[_comment_thread("c1", replies=[_post("r1", me=False)])]
         )
-        args = _make_args("delete-reply", thread_id="c1", post_id="r1", force=True)
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1", force=True)
         with pytest.raises(GdocError, match="another user"):
-            cmd_delete_reply(args)
+            cmd_delete_comment(args)
         mock_delete.assert_not_called()
 
     def test_delete_post_not_found(
         self, mock_read, mock_delete, _ver, _pf, _state,
     ):
         mock_read.return_value = _doc(comments=[_comment_thread("c1")])
-        args = _make_args("delete-reply", thread_id="c1", post_id="zz", force=True)
+        args = _make_args("delete-comment", comment_id="c1", post_id="zz", force=True)
         with pytest.raises(GdocError, match="not found") as ei:
-            cmd_delete_reply(args)
+            cmd_delete_comment(args)
         assert ei.value.exit_code == 3
         mock_delete.assert_not_called()
 
@@ -1460,11 +1442,42 @@ class TestDeletePost:
         mock_read.return_value = _doc(comments=[
             _comment_thread("c1", replies=[dict(_post("r1"), deleted=True)]),
         ])
-        args = _make_args("delete-reply", thread_id="c1", post_id="r1", force=True)
+        args = _make_args("delete-comment", comment_id="c1", post_id="r1", force=True)
         with pytest.raises(GdocError, match="already deleted") as ei:
-            cmd_delete_reply(args)
+            cmd_delete_comment(args)
         assert ei.value.exit_code == 3
         mock_delete.assert_not_called()
+
+
+class TestDeleteCommentRouting:
+    @patch("gdoc.api.comments.delete_comment")
+    @patch("gdoc.notify.pre_flight")
+    def test_suggestion_id_without_post_id_is_usage_error(self, mock_pf, mock_del):
+        args = _make_args("delete-comment", comment_id="suggest.s1",
+                          post_id=None, force=True)
+        with pytest.raises(GdocError, match="suggestion DOC suggest.s1 --delete") as ei:
+            cmd_delete_comment(args)
+        assert ei.value.exit_code == 3
+        mock_pf.assert_not_called()
+        mock_del.assert_not_called()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 7})
+    @patch("gdoc.api.docs.delete_comment_reply")
+    @patch("gdoc.api.comments.delete_comment")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    def test_without_post_id_deletes_whole_comment_via_drive(
+        self, _pf, mock_drive_del, mock_reply_del, _ver, mock_state, capsys,
+    ):
+        args = _make_args("delete-comment", comment_id="c1", post_id=None,
+                          force=True)
+        assert cmd_delete_comment(args) == 0
+        mock_drive_del.assert_called_once_with("abc123", "c1")
+        mock_reply_del.assert_not_called()
+        assert "OK deleted comment #c1" in capsys.readouterr().out
+        assert mock_state.call_args.kwargs["comment_state_patch"] == {
+            "remove_comment_id": "c1",
+        }
 
 
 # --- parser and MCP exposure ---------------------------------------------
@@ -1483,19 +1496,26 @@ class TestParserAndMcp:
         parser = build_parser()
         a = parser.parse_args(["comment", "d", "t", "--quote", "q", "--assign", ME])
         assert a.assign == ME and a.quote == "q"
-        a = parser.parse_args(["reply", "d", "suggest.s1", "t", "--suggestion"])
-        assert a.suggestion is True and a.reassign is None
         a = parser.parse_args(["reply", "d", "c1", "t", "--reassign", OTHER])
-        assert a.reassign == OTHER and a.suggestion is False
+        assert a.reassign == OTHER
+        with pytest.raises(SystemExit):
+            parser.parse_args(["reply", "d", "suggest.s1", "t", "--suggestion"])
         a = parser.parse_args(["edit-comment", "d", "c1", "p1", "new"])
         assert (a.thread_id, a.post_id, a.text) == ("c1", "p1", "new")
         assert a.func is cmd_edit_comment
-        a = parser.parse_args(["edit-suggestion-reply", "d", "s", "p", "n"])
-        assert a.func is cmd_edit_suggestion_reply
-        a = parser.parse_args(["delete-reply", "d", "c1", "p1", "--force"])
-        assert a.force is True and a.func is cmd_delete_reply
-        a = parser.parse_args(["delete-suggestion-reply", "d", "s", "p"])
-        assert a.force is False and a.func is cmd_delete_suggestion_reply
+        a = parser.parse_args(["delete-comment", "d", "c1", "p1", "--force"])
+        assert (a.comment_id, a.post_id, a.force) == ("c1", "p1", True)
+        assert a.func is cmd_delete_comment
+        a = parser.parse_args(["delete-comment", "d", "c1"])
+        assert a.post_id is None and a.force is False
+
+    def test_dropped_commands_are_gone(self):
+        from gdoc.cli import build_parser
+
+        for cmd in ("edit-suggestion-reply", "delete-reply",
+                    "delete-suggestion-reply"):
+            with pytest.raises(SystemExit):
+                build_parser().parse_args([cmd, "d", "c1", "p1", "t"])
 
     def test_reply_text_still_required(self):
         from gdoc.cli import build_parser
@@ -1506,33 +1526,33 @@ class TestParserAndMcp:
     def test_mcp_exposes_new_commands_as_writes(self):
         from gdoc.mcp import EXPOSED_COMMANDS, build_tools
 
-        for cmd in ("edit-comment", "edit-suggestion-reply", "delete-reply",
+        assert EXPOSED_COMMANDS["edit-comment"] is False
+        for cmd in ("edit-suggestion-reply", "delete-reply",
                     "delete-suggestion-reply"):
-            assert EXPOSED_COMMANDS[cmd] is False
-        names = set(build_tools())
-        assert {"gdoc_edit_comment", "gdoc_delete_suggestion_reply"} <= names
-        assert "gdoc_delete_reply" not in build_tools(read_only=True)
+            assert cmd not in EXPOSED_COMMANDS
+        assert "gdoc_edit_comment" in build_tools()
+        assert "gdoc_edit_comment" not in build_tools(read_only=True)
+        props = build_tools()["gdoc_delete_comment"]["inputSchema"]["properties"]
+        assert "post_id" in props
 
     def test_mcp_descriptions_state_cross_parameter_rules(self):
         from gdoc.mcp import build_tools
 
         tools = build_tools()
         assert "`assign` requires `quote`" in tools["gdoc_comment"]["description"]
-        assert "mutually exclusive" in tools["gdoc_reply"]["description"]
+        assert "comment threads only" in tools["gdoc_reply"]["description"]
 
     def test_mcp_delete_reply_requires_force(self):
         from gdoc.mcp import build_tools, call_command
 
         tools = build_tools()
-        for name in ("gdoc_delete_reply", "gdoc_delete_suggestion_reply",
-                     "gdoc_delete_comment"):
-            schema = tools[name]["inputSchema"]
-            assert "force" in schema["required"]
-            assert schema["properties"]["force"]["const"] is True
+        schema = tools["gdoc_delete_comment"]["inputSchema"]
+        assert "force" in schema["required"]
+        assert schema["properties"]["force"]["const"] is True
         assert "const" not in tools["gdoc_edit"]["inputSchema"]["properties"].get(
             "all", {},
         )
         with pytest.raises(ValueError, match="force: true"):
             call_command(
-                "delete-reply", {"doc": "d", "thread_id": "c1", "post_id": "p"},
+                "delete-comment", {"doc": "d", "comment_id": "c1", "post_id": "p"},
             )

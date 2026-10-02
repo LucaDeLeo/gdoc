@@ -208,8 +208,8 @@ def insert_comment(
 # comments (listing, pagination, tombstones and the awareness system all
 # depend on it). The helpers below are used only for what Drive cannot
 # express: assignment, replies on suggestion threads, editing a post, and
-# deleting a single reply. Both ID spaces are explicit: callers say whether
-# a thread ID names a CommentThread or a SuggestionThread; nothing guesses.
+# deleting a single reply. The CLI picks the namespace from the ID itself
+# (is_suggestion_id); these helpers take that choice as an explicit flag.
 
 _DOCS_BASE_URL = "https://docs.googleapis.com/v1/documents/"
 SUGGESTIONS_VIEW_MODE_INLINE = "SUGGESTIONS_INLINE"
@@ -343,6 +343,21 @@ def _read_back_threads(doc_id: str, what: str) -> dict:
         ) from e
 
 
+SUGGESTION_ID_PREFIX = "suggest."
+
+
+def is_suggestion_id(thread_id: str) -> bool:
+    """True when an ID names a SuggestionThread rather than a CommentThread.
+
+    Every suggestion ID Google returns starts with ``suggest.`` (the Docs
+    API how-to's examples, and every thread and inline mark observed
+    live); comment and post IDs are drawn from ``[A-Za-z0-9_-]`` and never
+    contain a dot. A misrouted ID still fails closed: each path looks the
+    thread up in its own list before writing and reports "not found".
+    """
+    return thread_id.startswith(SUGGESTION_ID_PREFIX)
+
+
 def thread_kind(suggestion: bool) -> str:
     """Request/response field naming the thread ID for its namespace."""
     return "suggestionId" if suggestion else "commentId"
@@ -351,8 +366,7 @@ def thread_kind(suggestion: bool) -> str:
 def find_thread(doc: dict, thread_id: str, suggestion: bool) -> dict | None:
     """Locate a native thread by ID in the namespace the caller named.
 
-    IDs are opaque; the caller's flag/command selects the namespace. A
-    comment ID is never looked up among suggestions or vice versa.
+    A comment ID is never looked up among suggestions or vice versa.
     """
     key = thread_kind(suggestion)
     threads = doc.get("suggestions" if suggestion else "comments") or []

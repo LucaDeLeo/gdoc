@@ -3006,9 +3006,8 @@ def _native_thread_or_fail(doc_id: str, thread_id: str, suggestion: bool) -> dic
     return thread
 
 
-def _validate_native_reply_args(args) -> None:
-    """Usage checks for `reply --suggestion` / `--reassign`, before any I/O."""
-    suggestion = bool(getattr(args, "suggestion", False))
+def _validate_native_reply_args(args, suggestion: bool) -> None:
+    """Usage checks for a suggestion-thread reply or `--reassign`, before any I/O."""
     reassign_raw = getattr(args, "reassign", None)
     reassign = (reassign_raw or "").strip()
     if reassign_raw is not None and not reassign:
@@ -3022,10 +3021,11 @@ def _validate_native_reply_args(args) -> None:
     _validate_post_text(args.text or "", "reply text")
 
 
-def _native_reply(args, doc_id: str, change_info, thread_id: str) -> int:
-    """`gdoc reply --suggestion` / `--reassign`: Docs-native addCommentReply."""
+def _native_reply(
+    args, doc_id: str, change_info, thread_id: str, suggestion: bool,
+) -> int:
+    """Reply on a suggestion thread or with `--reassign`: Docs-native addCommentReply."""
     quiet = getattr(args, "quiet", False)
-    suggestion = bool(getattr(args, "suggestion", False))
     reassign = (getattr(args, "reassign", "") or "").strip()
     text = args.text or ""
 
@@ -3095,20 +3095,21 @@ def cmd_reply(args) -> int:
     quiet = getattr(args, "quiet", False)
     comment_id = args.comment_id
 
-    # Any --reassign value (even blank) selects the native path so that a
-    # blank one is a usage error rather than a silent Drive reply.
-    native = bool(
-        getattr(args, "suggestion", False)
-        or getattr(args, "reassign", None) is not None
-    )
+    from gdoc.api.docs import is_suggestion_id
+
+    # A suggestion ID (suggest.xxx) or any --reassign value (even blank)
+    # selects the native path, so a blank --reassign is a usage error
+    # rather than a silent Drive reply.
+    suggestion = is_suggestion_id(comment_id)
+    native = suggestion or getattr(args, "reassign", None) is not None
     if native:
-        _validate_native_reply_args(args)
+        _validate_native_reply_args(args, suggestion)
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
 
     if native:
-        return _native_reply(args, doc_id, change_info, comment_id)
+        return _native_reply(args, doc_id, change_info, comment_id, suggestion)
 
     from gdoc.api.comments import create_reply
     result = create_reply(doc_id, comment_id, content=args.text)
@@ -3209,10 +3210,27 @@ def cmd_reopen(args) -> int:
 
 
 def cmd_delete_comment(args) -> int:
-    """Handler for `gdoc delete-comment`."""
+    """Handler for `gdoc delete-comment`.
+
+    Without POST_ID, deletes the whole comment through Drive. With POST_ID,
+    deletes that one reply through the Docs API preview, on a comment or a
+    suggestion thread.
+    """
+    from gdoc.api.docs import is_suggestion_id
+
+    comment_id = args.comment_id
+    if getattr(args, "post_id", None):
+        return _cmd_delete_post(args, suggestion=is_suggestion_id(comment_id))
+    if is_suggestion_id(comment_id):
+        raise GdocError(
+            f"{comment_id} is a suggestion thread; delete it with "
+            f"`gdoc suggestion DOC {comment_id} --delete`, or name a "
+            "POST_ID to delete one reply",
+            exit_code=3,
+        )
+
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
-    comment_id = args.comment_id
     force = getattr(args, "force", False)
 
     from gdoc.util import confirm_destructive
@@ -3247,11 +3265,14 @@ def cmd_delete_comment(args) -> int:
     return 0
 
 
-def _cmd_edit_post(args, suggestion: bool) -> int:
-    """Shared body of `edit-comment` and `edit-suggestion-reply`."""
+def cmd_edit_comment(args) -> int:
+    """Handler for `gdoc edit-comment`: edit one post on a comment or suggestion thread."""
+    from gdoc.api.docs import is_suggestion_id
+
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     thread_id = args.thread_id
+    suggestion = is_suggestion_id(thread_id)
     post_id = args.post_id
     text = args.text or ""
     _validate_post_text(text, "new text")
@@ -3317,10 +3338,10 @@ def _cmd_edit_post(args, suggestion: bool) -> int:
 
 
 def _cmd_delete_post(args, suggestion: bool) -> int:
-    """Shared body of `delete-reply` and `delete-suggestion-reply`."""
+    """`gdoc delete-comment DOC THREAD_ID POST_ID`: delete one reply."""
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
-    thread_id = args.thread_id
+    thread_id = args.comment_id
     post_id = args.post_id
     force = getattr(args, "force", False)
 
@@ -3352,8 +3373,9 @@ def _cmd_delete_post(args, suggestion: bool) -> int:
     head_id = (thread.get("headPost") or {}).get("postId")
     if post_id == head_id:
         hint = (
-            "use `delete-comment` to delete the whole thread"
-            if not suggestion else "reject or delete the suggestion instead"
+            "omit POST_ID to delete the whole comment"
+            if not suggestion
+            else "reject or delete the suggestion with `gdoc suggestion` instead"
         )
         raise GdocError(
             f"post {post_id} is the head post of #{thread_id}, not a reply; "
@@ -3396,26 +3418,6 @@ def _cmd_delete_post(args, suggestion: bool) -> int:
         command_version=command_version, comment_state_patch=patch,
     )
     return 0
-
-
-def cmd_edit_comment(args) -> int:
-    """Handler for `gdoc edit-comment`."""
-    return _cmd_edit_post(args, suggestion=False)
-
-
-def cmd_edit_suggestion_reply(args) -> int:
-    """Handler for `gdoc edit-suggestion-reply`."""
-    return _cmd_edit_post(args, suggestion=True)
-
-
-def cmd_delete_reply(args) -> int:
-    """Handler for `gdoc delete-reply`."""
-    return _cmd_delete_post(args, suggestion=False)
-
-
-def cmd_delete_suggestion_reply(args) -> int:
-    """Handler for `gdoc delete-suggestion-reply`."""
-    return _cmd_delete_post(args, suggestion=True)
 
 
 def cmd_comment_info(args) -> int:
@@ -3999,10 +4001,19 @@ def _print_suggestion_thread(summary: dict, locations: list[dict], mode: str,
 
 
 def cmd_suggestions(args) -> int:
-    """Handler for `gdoc suggestions`: list native suggestion threads."""
+    """Handler for `gdoc suggestions`: list native suggestion threads, or show one."""
+    include_all = getattr(args, "all", False)
+    if getattr(args, "suggestion_id", None):
+        if include_all:
+            raise GdocError(
+                "--all applies only when listing; omit it to show one "
+                "suggestion",
+                exit_code=3,
+            )
+        return _show_suggestion(args)
+
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
-    include_all = getattr(args, "all", False)
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
@@ -4056,8 +4067,8 @@ def cmd_suggestions(args) -> int:
     return 0
 
 
-def cmd_suggestion_info(args) -> int:
-    """Handler for `gdoc suggestion-info`."""
+def _show_suggestion(args) -> int:
+    """`gdoc suggestions DOC SUGGESTION_ID`: one suggestion thread in full."""
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     suggestion_id = args.suggestion_id
@@ -4105,13 +4116,13 @@ def cmd_suggestion_info(args) -> int:
 
     from gdoc.state import update_state_after_command
     update_state_after_command(
-        doc_id, change_info, command="suggestion-info", quiet=quiet,
+        doc_id, change_info, command="suggestions", quiet=quiet,
     )
     return 0
 
 
 def _decide_suggestion(args, decision: str) -> int:
-    """Shared body of accept-/reject-/delete-suggestion.
+    """`gdoc suggestion DOC ID --accept|--reject|--delete`.
 
     Reads the thread (SUGGESTIONS_INLINE, so the revision is the one the
     write is pinned to), refuses IDs that are unknown or already decided,
@@ -4121,7 +4132,7 @@ def _decide_suggestion(args, decision: str) -> int:
     doc_id = _resolve_doc_id(args.doc)
     quiet = getattr(args, "quiet", False)
     suggestion_id = args.suggestion_id
-    command = f"{decision}-suggestion"
+    command = "suggestion"
     from gdoc.api.docs import SUGGESTION_DECISION_STATUS
     final_status = SUGGESTION_DECISION_STATUS[decision]
 
@@ -4239,19 +4250,19 @@ def _decide_suggestion(args, decision: str) -> int:
     return 0
 
 
-def cmd_accept_suggestion(args) -> int:
-    """Handler for `gdoc accept-suggestion`."""
-    return _decide_suggestion(args, "accept")
-
-
-def cmd_reject_suggestion(args) -> int:
-    """Handler for `gdoc reject-suggestion`."""
-    return _decide_suggestion(args, "reject")
-
-
-def cmd_delete_suggestion(args) -> int:
-    """Handler for `gdoc delete-suggestion`."""
-    return _decide_suggestion(args, "delete")
+def cmd_suggestion(args) -> int:
+    """Handler for `gdoc suggestion`: accept, reject, or delete one suggestion."""
+    decisions = [
+        d for d in ("accept", "reject", "delete") if getattr(args, d, False)
+    ]
+    if len(decisions) != 1:
+        # argparse enforces this on the command line; MCP calls build
+        # their own argv, so check again before anything is read.
+        raise GdocError(
+            "exactly one of --accept, --reject, --delete is required",
+            exit_code=3,
+        )
+    return _decide_suggestion(args, decisions[0])
 
 
 def cmd_structure(args) -> int:
@@ -5517,17 +5528,16 @@ def build_parser() -> GdocArgumentParser:
     comment_p.set_defaults(func=cmd_comment)
 
     # reply
-    reply_p = sub.add_parser("reply", parents=[output_parent], help="Reply to a comment")
+    reply_p = sub.add_parser("reply", parents=[output_parent], help="Reply to a comment or suggestion thread")
     reply_p.add_argument("doc", help="Document ID or URL")
     reply_p.add_argument(
         "comment_id",
-        help="Comment ID to reply to (a suggestion ID with --suggestion)",
+        help=(
+            "Comment ID to reply to, or a suggestion ID (suggest.xxx) to "
+            "reply on a suggestion thread (Docs API preview)"
+        ),
     )
     reply_p.add_argument("text", help="Reply text")
-    reply_p.add_argument(
-        "--suggestion", action="store_true",
-        help="The ID names a suggestion thread (Docs API preview)",
-    )
     reply_p.add_argument(
         "--reassign", metavar="EMAIL",
         help=(
@@ -5564,10 +5574,22 @@ def build_parser() -> GdocArgumentParser:
     # delete-comment
     del_comment_p = sub.add_parser(
         "delete-comment", parents=[output_parent],
-        help="Delete a comment",
+        help="Delete a comment, or one reply on a comment or suggestion thread",
+        description=(
+            "Without POST_ID, delete the whole comment. With POST_ID, "
+            "delete that one reply you wrote (Docs API preview); THREAD_ID "
+            "may then be a comment ID or a suggestion ID (suggest.xxx)."
+        ),
     )
     del_comment_p.add_argument("doc", help="Document ID or URL")
-    del_comment_p.add_argument("comment_id", help="Comment ID to delete")
+    del_comment_p.add_argument(
+        "comment_id", metavar="thread_id",
+        help="Comment ID, or a suggestion ID (suggest.xxx) when POST_ID is given",
+    )
+    del_comment_p.add_argument(
+        "post_id", nargs="?",
+        help="Reply post ID to delete (default: delete the whole comment)",
+    )
     del_comment_p.add_argument(
         "--force", action="store_true", help="Skip confirmation prompt",
     )
@@ -5576,47 +5598,27 @@ def build_parser() -> GdocArgumentParser:
     )
     del_comment_p.set_defaults(func=cmd_delete_comment)
 
-    # edit-comment / edit-suggestion-reply (Docs API preview)
-    for name, kind, help_text in (
-        ("edit-comment", "comment", "Edit the text of a comment or reply you wrote"),
-        (
-            "edit-suggestion-reply", "suggestion",
-            "Edit the text of a reply you wrote on a suggestion thread",
+    # edit-comment (Docs API preview)
+    ep = sub.add_parser(
+        "edit-comment", parents=[output_parent],
+        help="Edit the text of a comment or reply you wrote",
+        description=(
+            "Edit one post you wrote on a comment thread or a suggestion "
+            "thread (Docs API preview). A suggestion ID (suggest.xxx) "
+            "selects the suggestion thread; its generated head post "
+            "cannot be edited."
         ),
-    ):
-        ep = sub.add_parser(name, parents=[output_parent], help=help_text)
-        ep.add_argument("doc", help="Document ID or URL")
-        ep.add_argument("thread_id", help=f"{kind.capitalize()} thread ID")
-        ep.add_argument("post_id", help="Post ID within the thread")
-        ep.add_argument("text", help="New text")
-        ep.add_argument(
-            "--quiet", action="store_true", help="Skip pre-flight checks"
-        )
-        ep.set_defaults(
-            func=cmd_edit_comment if kind == "comment" else cmd_edit_suggestion_reply
-        )
-
-    # delete-reply / delete-suggestion-reply (Docs API preview)
-    for name, kind, help_text in (
-        ("delete-reply", "comment", "Delete one reply you wrote on a comment"),
-        (
-            "delete-suggestion-reply", "suggestion",
-            "Delete one reply you wrote on a suggestion thread",
-        ),
-    ):
-        dp = sub.add_parser(name, parents=[output_parent], help=help_text)
-        dp.add_argument("doc", help="Document ID or URL")
-        dp.add_argument("thread_id", help=f"{kind.capitalize()} thread ID")
-        dp.add_argument("post_id", help="Reply post ID to delete")
-        dp.add_argument(
-            "--force", action="store_true", help="Skip confirmation prompt",
-        )
-        dp.add_argument(
-            "--quiet", action="store_true", help="Skip pre-flight checks",
-        )
-        dp.set_defaults(
-            func=cmd_delete_reply if kind == "comment" else cmd_delete_suggestion_reply
-        )
+    )
+    ep.add_argument("doc", help="Document ID or URL")
+    ep.add_argument(
+        "thread_id", help="Comment ID or suggestion ID (suggest.xxx)",
+    )
+    ep.add_argument("post_id", help="Post ID within the thread")
+    ep.add_argument("text", help="New text")
+    ep.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks"
+    )
+    ep.set_defaults(func=cmd_edit_comment)
 
     # comment-info
     ci_p = sub.add_parser(
@@ -5633,16 +5635,21 @@ def build_parser() -> GdocArgumentParser:
     # suggestions (Docs API developer preview)
     sugg_p = sub.add_parser(
         "suggestions", parents=[output_parent],
-        help="List suggested edits (native suggestion threads)",
+        help="List suggested edits, or show one (native suggestion threads)",
         description=(
-            "List the document's native suggestion threads (Docs API "
-            "Workspace Developer Preview; requires an enrolled OAuth "
-            "client project). Each thread shows its ID, status, author, "
-            "summary, and the tab/UTF-16 range(s) it touches, derived "
-            "from the SUGGESTIONS_INLINE structure. Read-only."
+            "List the document's native suggestion threads, or show one "
+            "in full when SUGGESTION_ID is given (Docs API Workspace "
+            "Developer Preview; requires an enrolled OAuth client "
+            "project). Each thread shows its ID, status, author, summary, "
+            "and the tab/UTF-16 range(s) it touches, derived from the "
+            "SUGGESTIONS_INLINE structure. Read-only."
         ),
     )
     sugg_p.add_argument("doc", help="Document ID or URL")
+    sugg_p.add_argument(
+        "suggestion_id", nargs="?",
+        help="Show only this suggestion thread (suggest.xxx)",
+    )
     sugg_p.add_argument(
         "--all", action="store_true",
         help="Include accepted/rejected threads (default: open only)",
@@ -5652,56 +5659,41 @@ def build_parser() -> GdocArgumentParser:
     )
     sugg_p.set_defaults(func=cmd_suggestions)
 
-    # suggestion-info
-    si_p = sub.add_parser(
-        "suggestion-info", parents=[output_parent],
-        help="Get a single suggestion thread by ID",
+    # suggestion (Docs API developer preview)
+    sd_p = sub.add_parser(
+        "suggestion", parents=[output_parent],
+        help="Accept, reject, or delete one suggested edit",
+        description=(
+            "Decide one native suggestion thread (Docs API Workspace "
+            "Developer Preview). --accept needs edit access; --reject "
+            "needs edit access or authorship of the suggestion; --delete "
+            "needs authorship. The result is read back before OK is "
+            "printed."
+        ),
     )
-    si_p.add_argument("doc", help="Document ID or URL")
-    si_p.add_argument("suggestion_id", help="Suggestion ID (suggest.xxx)")
-    si_p.add_argument(
-        "--quiet", action="store_true", help="Skip pre-flight checks"
+    sd_p.add_argument("doc", help="Document ID or URL")
+    sd_p.add_argument("suggestion_id", help="Suggestion ID (suggest.xxx)")
+    decision = sd_p.add_mutually_exclusive_group(required=True)
+    decision.add_argument(
+        "--accept", action="store_true",
+        help="Apply the suggested edit (requires edit access)",
     )
-    si_p.set_defaults(func=cmd_suggestion_info)
-
-    # accept-suggestion
-    acc_p = sub.add_parser(
-        "accept-suggestion", parents=[output_parent],
-        help="Accept a suggested edit (requires edit access)",
+    decision.add_argument(
+        "--reject", action="store_true",
+        help="Discard the suggested edit (edit access or its author)",
     )
-    acc_p.add_argument("doc", help="Document ID or URL")
-    acc_p.add_argument("suggestion_id", help="Suggestion ID to accept")
-    acc_p.add_argument(
-        "--quiet", action="store_true", help="Skip pre-flight checks"
+    decision.add_argument(
+        "--delete", action="store_true",
+        help="Delete a suggestion you authored (asks for confirmation)",
     )
-    acc_p.set_defaults(func=cmd_accept_suggestion)
-
-    # reject-suggestion
-    rej_p = sub.add_parser(
-        "reject-suggestion", parents=[output_parent],
-        help="Reject a suggested edit (edit access or its author)",
+    sd_p.add_argument(
+        "--force", action="store_true",
+        help="Skip the --delete confirmation prompt",
     )
-    rej_p.add_argument("doc", help="Document ID or URL")
-    rej_p.add_argument("suggestion_id", help="Suggestion ID to reject")
-    rej_p.add_argument(
-        "--quiet", action="store_true", help="Skip pre-flight checks"
-    )
-    rej_p.set_defaults(func=cmd_reject_suggestion)
-
-    # delete-suggestion
-    dels_p = sub.add_parser(
-        "delete-suggestion", parents=[output_parent],
-        help="Delete a suggestion thread you authored",
-    )
-    dels_p.add_argument("doc", help="Document ID or URL")
-    dels_p.add_argument("suggestion_id", help="Suggestion ID to delete")
-    dels_p.add_argument(
-        "--force", action="store_true", help="Skip confirmation prompt",
-    )
-    dels_p.add_argument(
+    sd_p.add_argument(
         "--quiet", action="store_true", help="Skip pre-flight checks",
     )
-    dels_p.set_defaults(func=cmd_delete_suggestion)
+    sd_p.set_defaults(func=cmd_suggestion)
 
     # images
     images_p = sub.add_parser(

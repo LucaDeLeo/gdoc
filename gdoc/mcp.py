@@ -58,7 +58,6 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "comments": True,
     "comment-info": True,
     "suggestions": True,
-    "suggestion-info": True,
     "diff": True,
     "images": True,
     "structure": True,
@@ -77,13 +76,8 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "resolve": False,
     "reopen": False,
     "delete-comment": False,
-    "accept-suggestion": False,
-    "reject-suggestion": False,
-    "delete-suggestion": False,
+    "suggestion": False,
     "edit-comment": False,
-    "edit-suggestion-reply": False,
-    "delete-reply": False,
-    "delete-suggestion-reply": False,
     "new": False,
     "cp": False,
     "mkdir": False,
@@ -151,9 +145,6 @@ _EXTRA_REQUIRED: dict[str, tuple[str, ...]] = {
     # --old-file/--new-file are hidden over MCP and suggest has no cell
     # mode, so the text pair is the only way to supply the replacement
     "suggest": ("old_text", "new_text"),
-    "delete-suggestion": ("force",),
-    "delete-reply": ("force",),
-    "delete-suggestion-reply": ("force",),
 }
 
 # Commands whose `force` must be true over MCP (see _EXTRA_REQUIRED).
@@ -179,8 +170,13 @@ _DESCRIPTION_NOTES: dict[str, str] = {
     ),
     "comment": "`assign` requires `quote` (Docs API preview, no Drive fallback).",
     "reply": (
-        "`suggestion` and `reassign` are mutually exclusive; `reassign` "
-        "needs a thread that already has an assignee (Docs API preview)."
+        "A suggestion ID (`suggest.xxx`) replies on a suggestion thread. "
+        "`reassign` applies to comment threads only and needs a thread "
+        "that already has an assignee (Docs API preview)."
+    ),
+    "suggestion": (
+        "Exactly one of `accept`, `reject`, `delete` must be true. "
+        "`delete` also requires `force: true`."
     ),
 }
 
@@ -484,7 +480,10 @@ def call_command(
 
     # Schema `required` cannot force a boolean to be true, so guard here:
     # with stdin detached, confirm_destructive() can never prompt.
-    if command in _FORCE_REQUIRED and not arguments.get("force"):
+    if (
+        command in _FORCE_REQUIRED
+        or (command == "suggestion" and arguments.get("delete"))
+    ) and not arguments.get("force"):
         raise ValueError(
             "`force: true` is required: deletion cannot prompt for "
             "confirmation over MCP"
