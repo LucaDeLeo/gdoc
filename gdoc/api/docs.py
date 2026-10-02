@@ -3240,6 +3240,15 @@ def decide_suggestion(
                 f"{request_key} is not available: the OAuth client's Cloud "
                 "project is not enrolled in the Workspace Developer Preview"
             )
+        if status >= 500:
+            # Like a dropped connection: Google may have applied the
+            # decision before the error response was produced.
+            raise GdocError(
+                f"the {decision} request for suggestion {suggestion_id} "
+                f"returned {status}. The outcome is unknown — the decision "
+                "may or may not have been applied. Inspect `gdoc "
+                "suggestions --all` before retrying."
+            ) from e
         _raise_if_stale_revision(e)
         if status == 403:
             raise GdocError(

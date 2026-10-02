@@ -863,6 +863,23 @@ class TestDecideSuggestion:
         ):
             decide_suggestion("doc1", "suggest.a", "accept", "rev1")
 
+    @pytest.mark.parametrize("status", [500, 502, 503])
+    @pytest.mark.parametrize("decision", ["accept", "reject", "delete"])
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_5xx_is_indeterminate(self, mock_svc, decision, status):
+        mock_svc.return_value = _mock_docs_service(
+            batch_error=_http_error(status, b'{"error": {"message": "x"}}')
+        )
+        with pytest.raises(
+            GdocError,
+            match=(
+                f"{decision} request for suggestion suggest.a returned "
+                f"{status}.*outcome is unknown.*Inspect `gdoc suggestions --all`"
+            ),
+        ) as e:
+            decide_suggestion("doc1", "suggest.a", decision, "rev1")
+        assert e.value.exit_code == 1
+
     @patch("gdoc.api.docs.get_docs_service")
     def test_partial_save_failure_is_an_error(self, mock_svc):
         mock_svc.return_value = _mock_docs_service(
