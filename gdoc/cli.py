@@ -1644,7 +1644,8 @@ def cmd_nest(args) -> int:
     ID, numbering and comment anchors) and nothing else in the tab is
     rewritten. See gdoc/listnest.py for the method and what is refused.
     """
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
+    tab_name, _ = _effective_tab(url_tab, getattr(args, "tab", None))
     if args.levels < 1:
         raise GdocError("--levels must be at least 1", exit_code=3)
     delta = args.levels if args.command == "nest" else -args.levels
@@ -1694,7 +1695,6 @@ def cmd_nest(args) -> int:
             exit_code=3,
         )
     tabs = doc.get("tabs", [])
-    tab_name = getattr(args, "tab", None)
     if tab_name:
         raw_tab = resolve_raw_tab(tabs, tab_name)
         if raw_tab is None:

@@ -17,8 +17,9 @@ All notable changes to `gdoc` are documented here. This project follows
 - **Document URLs honor their `?tab=` deep link.** Google's editor appends
   `?tab=<id>` when you open a tab, so a pasted tab URL now acts exactly like
   `--tab <id>` for `cat`, `edit` (incl. `--cell`), `write`, `insert`, `toc`,
-  `structure`, `insert-image`, and `suggest` (0.21.0's suggested-edit
-  command, wired in via this release's merge) — previously the tab was silently dropped
+  `structure`, `insert-image`, `suggest` (0.21.0's suggested-edit
+  command), and `nest`/`unnest` (0.22.0), the last two wired in via this
+  release's merges — previously the tab was silently dropped
   and the command operated on the first tab (or whole doc). An explicit
   `--tab`/`--all-tabs` still overrides the URL.
 

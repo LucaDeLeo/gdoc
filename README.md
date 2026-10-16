@@ -507,7 +507,7 @@ gdoc cat --all-tabs DOC
 
 ### Tabs in the URL
 
-Google's editor deep-links to a tab with a `?tab=<id>` query param (e.g. `.../edit?tab=t.abc123`). `gdoc` honors it: a pasted tab URL acts exactly as if you'd passed `--tab <id>`, so `cat`, `edit`, `write`, `insert`, `toc`, `structure`, `insert-image`, and `suggest` all operate on that tab.
+Google's editor deep-links to a tab with a `?tab=<id>` query param (e.g. `.../edit?tab=t.abc123`). `gdoc` honors it: a pasted tab URL acts exactly as if you'd passed `--tab <id>`, so `cat`, `edit`, `write`, `insert`, `toc`, `structure`, `insert-image`, `suggest`, `nest`, and `unnest` all operate on that tab.
 
 ```bash
 # Reads the "Notes" tab — same as `gdoc cat --tab t.abc123 DOC`

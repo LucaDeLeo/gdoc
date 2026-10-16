@@ -781,6 +781,24 @@ class TestCommand:
         with pytest.raises(GdocError, match="no match"):
             cmd_nest(_args())
 
+    def test_url_tab_targets_that_tab(self, api):
+        """A pasted ?tab= URL acts like --tab, as for edit/write/suggest."""
+        other = {"tabProperties": {"tabId": "t.0", "title": "Other"},
+                 "documentTab": _tab(("Nothing here", 0, None))}
+        first = _doc(_tab(*STD))
+        first["tabs"].insert(0, other)
+        second = _doc(NESTED)
+        second["tabs"].insert(0, other)
+        api.get.side_effect = [first, second]
+        url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
+        assert cmd_nest(_args(doc=url)) == 0
+
+    def test_tab_flag_beats_url_tab(self, api):
+        url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
+        with pytest.raises(GdocError, match="tab not found") as exc:
+            cmd_nest(_args(doc=url, tab="Nope"))
+        assert exc.value.exit_code == 3
+
     def test_unknown_tab(self, api):
         with pytest.raises(GdocError, match="tab not found") as exc:
             cmd_nest(_args(tab="Nope"))
