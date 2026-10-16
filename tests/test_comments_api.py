@@ -139,7 +139,7 @@ class TestListCommentsFiltering:
         call_kwargs = mock_service.comments().list.call_args
         # The fields param should contain quotedFileContent
         fields_arg = call_kwargs[1].get("fields", "") if call_kwargs[1] else ""
-        assert "quotedFileContent(value)" in fields_arg
+        assert "quotedFileContent(mimeType, value)" in fields_arg
 
     @patch("gdoc.api.comments.get_drive_service")
     def test_include_anchor_false_no_quoted_field(self, mock_svc):

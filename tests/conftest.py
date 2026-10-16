@@ -53,7 +53,7 @@ def doc_with_tabs(*pairs):
 
 
 def whole_doc_read_state(version=11):
-    """State proving a whole-doc read at `version` (0.22 provenance)."""
+    """State proving a whole-doc read at `version` (0.23 provenance)."""
     from gdoc.state import DocState
 
     return DocState(last_read_version=version, global_read_covers_doc=True)

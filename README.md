@@ -202,6 +202,7 @@ gdoc cat 1aBcDeFg...
 | `edit DOC OLD NEW` | Find and replace text with Markdown formatting, including text inside tables (`--all` for all; `--normalize` to match through smart quotes/dashes; `-` reads an argument from stdin) |
 | `edit DOC --cell ADDR NEW` | Replace a table cell by label or `ROW,COL` coordinates (`--col`, `--table`) |
 | `suggest DOC OLD NEW` | Same find-and-replace as `edit`, made as a **suggested edit** the doc's reviewers accept or reject (same `--all`/`--normalize`/`--case-sensitive`/`--tab`/`--old-file`/`--new-file`/`-` flags; inline Markdown only — see below) |
+| `nest DOC TEXT` / `unnest DOC TEXT` | Move a list item (and its sub-items) one level in or out, in place; `--to TEXT` for a range of items, `--levels N`, `--tab` — see below |
 | `write DOC FILE` | Overwrite document from a local markdown file |
 | `cells SHEET RANGE` | Write values into a spreadsheet range (`-v VALUE` per cell, `--file rows.csv`, `--stdin` for TSV; `--append` adds rows, `--user-entered` parses formulas/dates) |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
@@ -244,9 +245,9 @@ access (or with comment-only permission on the doc, which can't `batchUpdate`),
 or when the quoted text isn't found in the document, it falls back
 transparently to the Drive API path: the comment is created unanchored
 (`anchored: false` in `--json`/`--plain`) with the quote stored as
-`quotedFileContent` metadata, which `cat --comments` matches client-side but
-the Docs UI does not highlight. Same command either way — anchoring problems
-never fail the comment (though unrelated API errors, like a missing doc or
+`quotedFileContent` metadata, which `cat --comments` places by matching that
+text but the Docs UI does not highlight. Same command either way — anchoring
+problems never fail the comment (though unrelated API errors, like a missing doc or
 expired auth, still do).
 
 ### Other
@@ -254,7 +255,7 @@ expired auth, still do).
 | Command | Description |
 |---------|-------------|
 | `auth` | Authenticate with Google (`--no-browser` for headless) |
-| `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`) |
+| `share DOC EMAIL` | Share a document (`--role reader\|writer\|commenter`; `--no-notify` skips Google's notification email) |
 | `share DOC --domain D` / `--anyone` | Link-based sharing with a Workspace domain or anyone with the link (`--discoverable` to also surface in search) |
 | `mkdir TITLE` | Create a Drive folder (`--parent FOLDER`) |
 | `mv DOC FOLDER` | Move a file into a folder (alias: `move`) |
@@ -390,6 +391,8 @@ Use `--force` to skip conflict detection. Use `--quiet` to skip pre-flight check
 
 **Tabs get their own baseline.** For a tab-scoped write (`write --tab X`, or a pasted `?tab=` URL), the baseline is tracked per tab: `gdoc cat --tab X` establishes a baseline for tab X alone, while a whole-document `gdoc cat DOC` covers every tab (the Drive export is the full document). On a single-tab document, reading the one tab covers the whole document, so a following whole-document write isn't blocked. So reading tab A does **not** let you overwrite tab B unseen — `write --tab B` then errors `no read baseline for tab 'B'` — and writing the same tab twice in a row won't false-conflict against your own edit. Because Google's version number is per-document, an edit to *another* tab still trips the check for tab X (conservative by design); `--force` overrides.
 
+Files from `gdoc pull` carry their own baseline. `pull` stamps the file with `gdoc-version: N`, the Drive version its content came from, and `push`, `write DOC FILE` (including `write --tab`), and the sync hook compare that stamp with the doc's current version instead of this machine's last read. If anyone has edited the doc since the pull, the upload is refused (exit 3), even when a later `gdoc cat` on this machine has seen the newer version. Nothing is sent and the file is left untouched. To recover, pull a fresh copy to a new path (`gdoc pull DOC draft.latest.md`), see what changed with `gdoc diff DOC draft.md`, and carry your edits into the new file before pushing it; `--force` discards the newer changes in the doc. The sync hook reports the same refusal with exit 2, which Claude Code shows to the agent, and the pull hook will not overwrite a stale stamped file that differs from the doc. A successful upload advances the stamp to the version the upload created, so you can push, edit, and push again. Any change to the doc makes the file stale, including edits in other tabs. Files without a stamp (hand-written, or pulled by an older gdoc) keep the read-baseline rules above, per-tab ones included.
+
 ## Spreadsheets
 
 `cat`, `tabs`, and `info` detect Google Sheets automatically — point them at a
@@ -435,7 +438,16 @@ the Sheets API, so no re-authentication is needed.
      5	Authentication uses OAuth2.
 ```
 
-Comments whose anchor text has been deleted, is too short, or is ambiguous are grouped in an `[UNANCHORED]` section at the end.
+Comments are placed from their live anchors: the text each comment covers now, as the Docs UI highlights it. This needs the same [Developer Preview](https://developers.google.com/workspace/preview) enrollment as anchored `comment --quote`. A comment whose anchored text is all gone is listed as `[detached]` (Docs shows "Original content deleted"); a `write --tab` that changes the tab detaches every comment in it, resolved ones included. A comment that is still attached is listed as `[attached, location not found]` when gdoc can't pin its text to one markdown line: for example, a comment on an image, on footnote text, or on heading text that a table of contents may repeat. The same label is used when the document kept changing while gdoc read it; a `WARN` says so. Comments that aren't placed inline are grouped in an `[UNANCHORED]` section at the end.
+
+With `--json`, `"anchors"` says where the labels came from:
+
+- `"live"`: live anchors, with comments placed on their lines.
+- `"live_no_locations"`: live anchors for `[detached]` status, but no lines, because the document or its comments kept changing during the read (or its version couldn't be read). The status comes from a read just before the text shown, so it may miss an edit made in between.
+- `"quoted_text"`: live anchors couldn't be read (see below).
+- `"none"`: there were no comments, so nothing was read.
+
+When live anchors can't be read (no preview access, no comment access on the document, or the request fails), gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment. If comments keep being added or removed during the read, a `WARN` says so and no comment is placed.
 
 ## Revision history & diffs
 
@@ -622,6 +634,79 @@ Requirements and limits:
 
 Like `edit`, a suggestion is a partial write: the awareness state records the
 new document version but does not advance the read baseline.
+
+## Nesting list items
+
+`nest` and `unnest` move list items one level in or out, like pressing Tab or
+Shift-Tab in Google Docs. The items keep their native list: same list ID,
+so numbering continues, a list restarted at 5 stays at 5, and comments on the
+items stay attached. Only the moved items, any deeper items directly above
+them, and blank lines between them are rebuilt; the rest of the tab is not
+touched.
+
+```bash
+gdoc nest DOC "Bravo"                     # Bravo becomes a sub-item of the item above
+gdoc unnest DOC "Bravo"                   # and back
+gdoc nest DOC "Bravo" --to "Delta"        # every item from Bravo through Delta
+gdoc unnest DOC "grandchild" --levels 2   # two levels out
+gdoc unnest DOC --tab "Draft" "Bravo" --json
+# → {"ok": true, "moved": 1, "levels": -1, "verified": true}
+#   (levels is negative for unnest)
+```
+
+`TEXT` is matched like `edit` (case-insensitive) and must occur in exactly one
+paragraph of the tab, which must be a list item. Sub-items move with their
+items. Terse output is `OK nested 1 item by 1 level`; `--plain` prints `id`
+and `status updated`.
+
+How it works: the Docs API cannot set a list level directly, so the command
+rebuilds the moved items (and, when unnesting below a deeper sibling, that
+sibling) in one batch pinned to the revision it read (`requiredRevisionId`),
+so the items rejoin their own list at the new level. It then reads the tab
+back, finds the moved items by their text (so edits elsewhere in the tab do
+not matter), and checks each item's level, list, marker, paragraph style and
+indent, each blank line's indent, and that the paragraphs just before and
+after the moved items are unchanged.
+The change is saved either way, so the command still exits 0; if the result
+is not as planned, or cannot be verified, it says so on stderr and reports
+`"verified": false` (`--plain`: `verified no`). Check the list then rather
+than re-running, which would move the items again. If the document is
+edited between the read and the
+write, the write is rejected: the command says `re-run it` when the list is
+provably untouched, and otherwise that the outcome is unknown and to inspect
+the list first (the operation is not safe to repeat blindly).
+
+Refused before any write (exit 3), with a message naming the item:
+
+- text that matches no paragraph or several, is not a list item, or is inside
+  a table;
+- any move whose rebuilt items would not directly follow an item of their
+  own list: nesting a list's first item, unnesting the first items of a list
+  that starts indented, or moving the first item after a non-list paragraph
+  in a list that continues past it; nesting an item more than one level
+  deeper than the item above it; unnesting an item at the top level, or so far that the
+  next item would sit two levels below it;
+- checkbox lists and lists with custom glyphs (only the default numbered
+  `1. a. i.` and bullet `● ○ ■` lists are supported);
+- moves that would merge or split lists: a range spanning two lists, an item
+  directly after an item of another list (for example a bullet item after a
+  numbered sub-list), an unnest whose rebuild would take in a deeper item of
+  another list above it, or an item whose sub-items are a separate list;
+- items that start with a tab character, carry a hand-set indent, contain
+  pending suggestions, have a floating image or drawing anchored to them, or
+  overlap a named range;
+- items whose bullet or number has its own formatting, which the rebuild
+  could change: marker formatting other than the bold, font and size of a
+  fully formatted item (those are kept), or a style that covers the whole
+  item but not its marker. Items with only some words formatted are fine.
+
+Kept through a rebuild (tested live): list ID and a restarted start number,
+text styles and paragraph spacing, heading IDs, comment anchors and
+bookmarks, and the bold, font and size of a fully formatted item's marker.
+
+Blank lines between items (loose lists) are kept, with their original
+indentation. Like `edit`, this is a partial write: the awareness state records
+the new version but does not advance the read baseline.
 
 ## Import from file
 

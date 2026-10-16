@@ -1,8 +1,8 @@
 # Tab-scoped commands: `comments`, `images`, `toc`, `diff`
 
 Status: **PROPOSAL — none of this is implemented.** (Discussed 2026-07-04/05,
-JP + Claude. "PR #4" below = the `?tab=` URL support that shipped in 0.22.0;
-as of 0.22.0, `diff`/`comments`/`images` print a discard NOTE.) Companion to
+JP + Claude. "PR #4" below = the `?tab=` URL support that shipped in 0.23.0;
+as of 0.23.0, `diff`/`comments`/`images` print a discard NOTE.) Companion to
 `per-tab-read-baselines-plan.md`; follows PR #4 (URL `?tab=` support). This is the "R3"
 workstream: the commands PR #4 left silently discarding `?tab=`, now given real tab
 behavior instead of a discard NOTE.
@@ -14,7 +14,7 @@ comments (read-only probes). Key findings, which several designs depend on:
 
 - **The Drive markdown export includes ALL tabs**, each preceded by a `# **{tab title}**`
   heading line, in Docs-API tab order. (README's "export only returns the first tab" was
-  stale; corrected in 0.22.0, so this is no longer a follow-up for this workstream.)
+  stale; corrected in 0.23.0, so this is no longer a follow-up for this workstream.)
 - **`get_tab_text` emits plain text**, not markdown (0 bold/link/heading markers on a doc
   full of them). Per-tab *markdown* only exists inside the whole-doc export.
 - **`gdoc images` returns wrong answers today**: `list_inline_objects` uses
@@ -194,4 +194,4 @@ mismatch); mode wiring tests for FILE / `--rev` / `--since`; `?tab=t.0` stays wh
 3. `diff` slicing (heuristic, loud-fail, benefits from the others' tab plumbing).
 
 Each is independently shippable. (README's stale export claim was the one cross-cutting
-follow-up here; it was corrected in 0.22.0 and needs no further work.)
+follow-up here; it was corrected in 0.23.0 and needs no further work.)

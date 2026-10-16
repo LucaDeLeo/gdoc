@@ -1,4 +1,4 @@
-"""Per-tab write-conflict baselines (0.22.0).
+"""Per-tab write-conflict baselines (0.23.0).
 
 The lenient effective-baseline rule: a `write --tab X` is allowed when
 max(whole-doc last_read_version, tab_read_versions[X]) equals the current doc
@@ -303,14 +303,14 @@ class TestTabBaselineUrlParity:
 
 
 class TestLegacyBaselineProvenance:
-    """F18: a pre-0.22 state file's last_read_version is ambiguous (it may
+    """F18: a pre-0.23 state file's last_read_version is ambiguous (it may
     record a tab-scoped read) and must not authorize a tab write."""
 
     def test_legacy_global_baseline_is_not_trusted(self, tmp_path):
         f = tmp_path / "body.md"
         f.write_text("# new\n")
         with patch("gdoc.state.STATE_DIR", tmp_path):
-            # Simulates a pre-0.22 file: field filtered in as default False.
+            # Simulates a pre-0.23 file: field filtered in as default False.
             save_state("abc123", DocState(last_version=100,
                                           last_read_version=100))
             with patch("gdoc.api.docs.get_document_with_tabs",

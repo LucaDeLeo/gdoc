@@ -299,6 +299,7 @@ class TestCmdShare:
         mock_perm.assert_called_once_with(
             "abc123", email="alice@co.com", role="reader",
             domain=None, anyone=False, discoverable=False,
+            notify=True,
         )
 
     @patch("gdoc.state.update_state_after_command")
@@ -310,6 +311,7 @@ class TestCmdShare:
         mock_perm.assert_called_once_with(
             "abc123", email="alice@co.com", role="writer",
             domain=None, anyone=False, discoverable=False,
+            notify=True,
         )
 
     @patch("gdoc.state.update_state_after_command")
@@ -321,6 +323,7 @@ class TestCmdShare:
         mock_perm.assert_called_once_with(
             "abc123", email="alice@co.com", role="commenter",
             domain=None, anyone=False, discoverable=False,
+            notify=True,
         )
 
     @patch("gdoc.state.update_state_after_command")
@@ -552,7 +555,7 @@ class TestCreatePermissionAPI:
         }
 
     @patch("gdoc.api.drive.get_drive_service")
-    def test_permission_sends_notification(self, mock_get_service):
+    def test_permission_sends_notification_by_default(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         mock_service.permissions().create().execute.return_value = {"id": "perm1"}
@@ -565,6 +568,21 @@ class TestCreatePermissionAPI:
             "sendNotificationEmail",
             call_kwargs[1].get("sendNotificationEmail"),
         ) is True
+
+    @patch("gdoc.api.drive.get_drive_service")
+    def test_permission_notify_false_skips_notification(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.permissions().create().execute.return_value = {"id": "perm1"}
+
+        from gdoc.api.drive import create_permission
+        create_permission("doc1", "alice@co.com", "reader", notify=False)
+
+        call_kwargs = mock_service.permissions().create.call_args
+        assert call_kwargs.kwargs.get(
+            "sendNotificationEmail",
+            call_kwargs[1].get("sendNotificationEmail"),
+        ) is False
 
     @patch("gdoc.api.drive.get_drive_service")
     def test_permission_404_error(self, mock_get_service):
