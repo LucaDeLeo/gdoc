@@ -79,11 +79,11 @@ All notable changes to `gdoc` are documented here. This project follows
 - State files gain a `tab_read_versions` map and a
   `global_read_covers_doc` provenance marker. Older state files load
   unchanged, but their **whole-doc read baseline is not trusted for
-  tab-scoped writes** — a pre-0.22 `cat --tab A` stored its version in the
+  tab-scoped writes** — a pre-0.23 `cat --tab A` stored its version in the
   global baseline, which would wrongly authorize `write --tab B`. The
   first `write --tab` after upgrading may therefore ask for a fresh
   `gdoc cat`. Downgrading is safe but lossy in the same direction: a
-  pre-0.22 binary rewriting state drops both new fields, so re-upgrading
+  pre-0.23 binary rewriting state drops both new fields, so re-upgrading
   fail-closes (re-read before the next tab write) rather than risking an
   overwrite.
 - **Multi-tab `cat --tab X` / `structure --tab X` no longer establish a
