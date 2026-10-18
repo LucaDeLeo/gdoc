@@ -203,6 +203,13 @@ _PATTERNS = [
 
 _BARE_ID = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+# Tab ids look like `t.0`, `t.abc123` — the dot distinguishes them from
+# doc-id charsets, so it must be included in the capture class. `&amp;` is
+# accepted alongside `?`/`&` because a URL copied out of rendered HTML keeps
+# the escaped separator: failing to match there would silently downgrade a
+# tab-scoped `edit`/`write` to the whole-doc path.
+_TAB_PARAM = re.compile(r"(?:[?&]|&amp;)tab=([A-Za-z0-9._-]+)")
+
 
 def confirm_destructive(message: str, force: bool = False) -> None:
     """Prompt for confirmation on destructive ops. Raises GdocError on decline."""
@@ -255,13 +262,12 @@ def build_doc_url(doc_id: str, tab_id: str | None = None) -> str:
     return url
 
 
-def extract_doc_id(input_str: str) -> str:
-    """Extract document ID from a URL or bare ID string.
+def extract_doc_ref(input_str: str) -> tuple[str, str | None]:
+    """Extract (document ID, tab ID) from a URL or bare ID string.
 
-    Accepts:
-    - Full Google Docs URL: https://docs.google.com/document/d/ID/edit
-    - Full Drive URL with query: https://drive.google.com/open?id=ID
-    - Bare document ID: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ
+    The tab ID is the value of a `?tab=`/`&tab=` query param, if present
+    (Google's editor deep-links to a tab that way). A bare ID or a URL
+    without the param yields a ``None`` tab.
 
     Raises ValueError if no valid ID can be extracted.
     """
@@ -270,13 +276,16 @@ def extract_doc_id(input_str: str) -> str:
     if not input_str:
         raise ValueError("Cannot extract document ID from empty string")
 
+    tab_match = _TAB_PARAM.search(input_str)
+    tab_id = tab_match.group(1) if tab_match else None
+
     for pattern in _PATTERNS:
         match = pattern.search(input_str)
         if match:
-            return match.group(1)
+            return match.group(1), tab_id
 
     if _BARE_ID.match(input_str):
-        return input_str
+        return input_str, None
 
     raise ValueError(f"Cannot extract document ID from: {input_str}")
 

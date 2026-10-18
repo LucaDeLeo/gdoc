@@ -5,10 +5,20 @@ import io
 import os
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from gdoc import __version__
 from gdoc.revdiff import DEFAULT_CONTEXT, DEFAULT_MIN_COMMON
 from gdoc.util import SPREADSHEET_MIME, AuthError, GdocError
+
+if TYPE_CHECKING:
+    from gdoc.state import DocState
+
+# Google's editor auto-appends ``?tab=t.0`` (the first tab) to every doc URL,
+# so a URL tab of ``t.0`` is treated as ambient noise, not an intentional
+# selection. This sentinel is the load-bearing heuristic of URL-tab handling;
+# name it once so the call sites can't drift.
+_FIRST_TAB_ID = "t.0"
 
 
 class GdocArgumentParser(argparse.ArgumentParser):
@@ -34,13 +44,96 @@ def _truncate_bytes(text: str, max_bytes: int) -> str:
 
 def _resolve_doc_id(raw: str) -> str:
     """Extract doc ID, wrapping ValueError as GdocError(exit_code=3)."""
-    from gdoc.util import extract_doc_id
+    return _resolve_doc_ref(raw)[0]
+
+
+def _resolve_doc_ref(raw: str) -> tuple[str, str | None]:
+    """Extract (doc ID, URL tab ID), wrapping ValueError as GdocError(3)."""
+    from gdoc.util import extract_doc_ref
 
     try:
-        return extract_doc_id(raw)
+        return extract_doc_ref(raw)
     except ValueError as e:
         raise GdocError(str(e), exit_code=3)
 
+
+def _effective_tab(
+    url_tab: str | None,
+    flag_tab: str | None,
+    all_tabs: bool = False,
+) -> tuple[str | None, bool]:
+    """Merge a URL's ?tab= value with an explicit --tab flag.
+
+    Rules:
+    - An explicit --tab flag (or --all-tabs) always wins over the URL.
+    - A URL tab of ``t.0`` is treated as absent — Google's editor
+      auto-appends it, so it is ambient UI noise, not an intentional
+      selection. Escape hatch: pass ``--tab t.0`` explicitly.
+
+    Returns (effective_tab, from_url) where from_url is True when the
+    returned tab came from the URL: it is then a tab ID, to be matched by
+    ID only (`by_id`), and errors name the URL.
+    """
+    if flag_tab is not None:
+        # A blank --tab would win precedence here but read as "no tab" at
+        # every truthiness check downstream — a silent wrong-target. Reject.
+        # Return the value unstripped: tab titles can carry leading or
+        # trailing spaces, and stripping could match a different tab.
+        if not flag_tab.strip():
+            raise GdocError(
+                "--tab requires a non-empty tab title or id", exit_code=3,
+            )
+        return flag_tab, False
+    if all_tabs:
+        return None, False
+    if url_tab is not None and url_tab != _FIRST_TAB_ID:
+        return url_tab, True
+    return None, False
+
+
+def _warn_if_changed(
+    doc_id: str, change_info, tab_id: str | None = None,
+) -> None:
+    """Warn (never block) when the doc moved since this machine last read it.
+
+    For a tab-scoped command a read of that tab counts too, as in
+    _check_tab_write_conflict: `cat --tab X` leaves the whole-doc baseline
+    unset, so has_conflict alone would warn after every tab read.
+    """
+    if change_info is None:
+        return
+    if tab_id is None:
+        changed = change_info.has_conflict
+    else:
+        from gdoc.state import load_state
+
+        state = load_state(doc_id)
+        baseline = _max_opt(
+            _global_read_baseline(state), _tab_read_version(state, tab_id),
+        )
+        changed = change_info.current_version is not None and (
+            baseline is None or change_info.current_version != baseline
+        )
+    if changed:
+        print("WARN: doc changed since last read", file=sys.stderr)
+
+
+def _note_discarded_url_tab(
+    url_tab: str | None, command: str, quiet: bool = False
+) -> None:
+    """Print a stderr NOTE when a whole-document command drops a URL's tab.
+
+    Silent for the ambient ``t.0`` (Google auto-appends it), when no tab was
+    present, and under ``--quiet`` (the established switch for suppressing
+    stderr chatter). ``command`` names the operation for the message.
+    """
+    if quiet or not url_tab or url_tab == _FIRST_TAB_ID:
+        return
+    print(
+        f"NOTE: ignoring tab {url_tab!r} from the URL; {command} operates "
+        "on the whole document",
+        file=sys.stderr,
+    )
 
 
 def _file_mime(doc_id: str, change_info) -> str:
@@ -377,16 +470,24 @@ def _export_with_anchors(
 
 def cmd_cat(args) -> int:
     """Handler for `gdoc cat`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
 
     quiet = getattr(args, "quiet", False)
-    tab = getattr(args, "tab", None)
     all_tabs = getattr(args, "all_tabs", False)
+    tab, tab_from_url = _effective_tab(
+        url_tab, getattr(args, "tab", None), all_tabs
+    )
 
     if getattr(args, "comments", False) and getattr(args, "plain", False):
         raise GdocError("--comments and --plain are mutually exclusive", exit_code=3)
 
     if (tab or all_tabs) and getattr(args, "comments", False):
+        if tab_from_url:
+            raise GdocError(
+                f"the URL targets tab {tab!r}, but --comments reads the whole "
+                "document; drop ?tab= from the URL to view comments",
+                exit_code=3,
+            )
         raise GdocError(
             "--tab/--all-tabs and --comments are mutually exclusive",
             exit_code=3,
@@ -397,6 +498,12 @@ def cmd_cat(args) -> int:
 
     revision = getattr(args, "revision", None)
     if revision and (tab or all_tabs or getattr(args, "comments", False)):
+        if tab_from_url:
+            raise GdocError(
+                f"the URL targets tab {tab!r}, but --revision reads the whole "
+                "document; drop ?tab= from the URL to view a revision",
+                exit_code=3,
+            )
         raise GdocError(
             "--revision cannot be combined with "
             "--tab/--all-tabs/--comments",
@@ -445,28 +552,24 @@ def cmd_cat(args) -> int:
         return 0
 
     if tab or all_tabs:
-        from gdoc.api.docs import get_document_tabs, get_tab_text
+        from gdoc.api.docs import get_document_tabs, get_tab_text, resolve_tab
 
         tabs = get_document_tabs(doc_id)
+        read_tab_id = None
 
         # Default view renders markdown (headings survive round-trips);
         # --plain returns the verbatim text gdoc edit matches against.
         want_md = not getattr(args, "plain", False)
 
         if tab:
-            # Match by title (case-insensitive) first, then by ID
-            match = None
-            for t in tabs:
-                if t["title"].lower() == tab.lower():
-                    match = t
-                    break
-            if match is None:
-                for t in tabs:
-                    if t["id"] == tab:
-                        match = t
-                        break
-            if match is None:
-                raise GdocError(f"tab not found: {tab}", exit_code=3)
+            match = resolve_tab(tabs, tab, by_id=tab_from_url)
+            # On a multi-tab doc a `--tab` read covers only that tab, so it
+            # stamps just that tab's baseline. On a single-tab doc the one tab
+            # IS the whole document, so the read advances the whole-doc
+            # baseline (read_tab_id stays None) — otherwise a following
+            # whole-doc write/push would be spuriously blocked for no baseline.
+            if len(tabs) > 1:
+                read_tab_id = match["id"]
             content = get_tab_text(match, markdown=want_md)
             if no_images:
                 from gdoc.mdimport import strip_images
@@ -498,8 +601,13 @@ def cmd_cat(args) -> int:
             else:
                 print(content, end="")
 
+        # A single-tab read stamps only that tab's baseline; --all-tabs is a
+        # whole-doc read (read_tab_id stays None) and advances the global one.
         from gdoc.state import update_state_after_command
-        update_state_after_command(doc_id, change_info, command="cat", quiet=quiet)
+        update_state_after_command(
+            doc_id, change_info, command="cat", quiet=quiet,
+            read_tab_id=read_tab_id,
+        )
         return 0
 
     if getattr(args, "comments", False):
@@ -638,9 +746,9 @@ def cmd_tabs(args) -> int:
 
 def cmd_toc(args) -> int:
     """Handler for `gdoc toc`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
-    tab = getattr(args, "tab", None)
+    tab, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     max_depth = getattr(args, "max_depth", 0)
     no_links = getattr(args, "no_links", False)
 
@@ -657,7 +765,7 @@ def cmd_toc(args) -> int:
         from gdoc.api.docs import get_document_tabs, resolve_tab
 
         tabs = get_document_tabs(doc_id)
-        tab_match = resolve_tab(tabs, tab)
+        tab_match = resolve_tab(tabs, tab, by_id=tab_from_url)
         body = tab_match["body"]
         tab_id = tab_match["id"]
 
@@ -800,10 +908,21 @@ def cmd_insert(args) -> int:
     """Handler for `gdoc insert`."""
     import os
 
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
     force = getattr(args, "force", False)
-    tab_name = args.tab
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
+    if not tab_name:
+        if url_tab == _FIRST_TAB_ID:
+            raise GdocError(
+                "the URL's ?tab=t.0 is the first tab, which is ignored as an "
+                "ambient default; pass --tab NAME to target a specific tab "
+                "(or --tab t.0 for the first tab explicitly)",
+                exit_code=3,
+            )
+        raise GdocError(
+            "--tab is required (or pass a URL with ?tab=)", exit_code=3,
+        )
     position = getattr(args, "position", "start")
     file_path = args.file
 
@@ -821,12 +940,34 @@ def cmd_insert(args) -> int:
     if not content.strip():
         raise GdocError("input file has no content to insert", exit_code=3)
 
-    change_info, _ = _check_write_conflict(doc_id, quiet, force)
+    # Per-tab conflict check: `cat --tab X` establishes the baseline for
+    # `insert --tab X` (the whole-doc check would demand a full-doc read —
+    # the exact flow the collapse-guard error recommends). Pre-flight runs
+    # before the document fetch so usage errors keep their exit code.
+    from gdoc.api.docs import (
+        flatten_tabs,
+        get_document_with_tabs,
+        insert_markdown_into_tab,
+        resolve_tab,
+    )
 
-    from gdoc.api.docs import insert_markdown_into_tab
+    change_info = None
+    if not quiet:
+        from gdoc.notify import pre_flight
+
+        change_info = pre_flight(doc_id, quiet=False)
+        _require_doc(doc_id, change_info)
+
+    doc = get_document_with_tabs(doc_id)
+    tab_match = resolve_tab(
+        flatten_tabs(doc.get("tabs", [])), tab_name, by_id=tab_from_url,
+    )
+    tab_id = tab_match["id"]
+
+    _check_tab_write_conflict(doc_id, tab_id, tab_name, force)
 
     result = insert_markdown_into_tab(
-        doc_id, tab_name, content, position=position, replace=False,
+        doc_id, tab_id, content, position=position, replace=False, doc=doc,
     )
 
     from gdoc.api.drive import get_file_version
@@ -1233,14 +1374,16 @@ def _resolve_replacement_text(args, cell) -> tuple[str | None, str | None]:
 
 def _prepare_text_replacement(
     args, doc_id: str, old_text: str | None,
-    *, suggest: bool = False,
+    *, suggest: bool = False, url_tab: str | None = None,
 ) -> _ReplacementPlan:
     """Pre-flight, read the document, and locate the ranges to replace.
 
     `edit` reads the default view (legacy `body`, or the named tab).
     `suggest` always reads every tab with SUGGESTIONS_INLINE — the only
     view whose indexes match what a suggest-mode batchUpdate addresses —
-    and targets an explicit tab (the first when --tab is absent).
+    and targets an explicit tab (the first when no tab is named). The
+    target tab comes from `--tab` or the doc URL's `?tab=` via
+    `_effective_tab` (`--tab` wins; a URL `t.0` counts as absent).
     """
     quiet = getattr(args, "quiet", False)
     replace_all = getattr(args, "all", False)
@@ -1256,14 +1399,10 @@ def _prepare_text_replacement(
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
 
-    # Conflict warning (warn but don't block, per spec)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
-
     # Get document structure + revision ID
     from gdoc.api.docs import find_text_in_document, get_document
 
-    tab_name = getattr(args, "tab", None)
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     tab_id = None
 
     if suggest:
@@ -1291,7 +1430,10 @@ def _prepare_text_replacement(
         tabs = flatten_tabs(doc.get("tabs", []))
         if not tabs:
             raise GdocError(f"document has no tabs: {doc_id}")
-        tab_match = resolve_tab(tabs, tab_name) if tab_name else tabs[0]
+        tab_match = (
+            resolve_tab(tabs, tab_name, by_id=tab_from_url)
+            if tab_name else tabs[0]
+        )
         tab_id = tab_match["id"]
         search_body = tab_match["body"]
     elif tab_name:
@@ -1299,13 +1441,16 @@ def _prepare_text_replacement(
         doc = get_document_with_tabs(doc_id)
         revision_id = doc.get("revisionId", "")
         tabs = flatten_tabs(doc.get("tabs", []))
-        tab_match = resolve_tab(tabs, tab_name)
+        tab_match = resolve_tab(tabs, tab_name, by_id=tab_from_url)
         tab_id = tab_match["id"]
         search_body = tab_match["body"]
     else:
         document = get_document(doc_id)
         revision_id = document.get("revisionId", "")
         search_body = document.get("body", {})
+
+    # Conflict warning (warn but don't block, per spec)
+    _warn_if_changed(doc_id, change_info, tab_id)
 
     if cell is not None:
         from gdoc.api.docs import resolve_cell_range
@@ -1343,13 +1488,13 @@ def _prepare_text_replacement(
 
 def cmd_edit(args) -> int:
     """Handler for `gdoc edit`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     cell = getattr(args, "cell", None)
 
     # Resolve text from args or files (fail fast before API calls)
     old_text, new_text = _resolve_replacement_text(args, cell)
 
-    plan = _prepare_text_replacement(args, doc_id, old_text)
+    plan = _prepare_text_replacement(args, doc_id, old_text, url_tab=url_tab)
     matches = plan.matches
 
     # Check if replacement contains tables — not supported with --all
@@ -1408,7 +1553,7 @@ def cmd_suggest(args) -> int:
     is unavailable or unverifiable the command fails and nothing is
     edited directly.
     """
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
 
     old_text, new_text = _resolve_replacement_text(args, None)
 
@@ -1428,7 +1573,7 @@ def cmd_suggest(args) -> int:
     read_identity = _token_identity(account_cache_key()[0])
 
     plan = _prepare_text_replacement(
-        args, doc_id, old_text, suggest=True,
+        args, doc_id, old_text, suggest=True, url_tab=url_tab,
     )
 
     # Never touch an existing review thread by accident: Google may merge a
@@ -1534,7 +1679,8 @@ def cmd_nest(args) -> int:
     ID, numbering and comment anchors) and nothing else in the tab is
     rewritten. See gdoc/listnest.py for the method and what is refused.
     """
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     if args.levels < 1:
         raise GdocError("--levels must be at least 1", exit_code=3)
     delta = args.levels if args.command == "nest" else -args.levels
@@ -1544,8 +1690,6 @@ def cmd_nest(args) -> int:
 
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import (
         StaleRevisionError,
@@ -1563,14 +1707,9 @@ def cmd_nest(args) -> int:
 
     def reread_tab() -> dict | None:
         """This tab in a fresh read, found by ID only (never by title)."""
-        def walk(ts):
-            for t in ts:
-                yield t
-                yield from walk(t.get("childTabs", []))
-        for t in walk(get_document_with_tabs(doc_id).get("tabs", [])):
-            if t.get("tabProperties", {}).get("tabId") == tab_id:
-                return t
-        return None
+        return resolve_raw_tab(
+            get_document_with_tabs(doc_id).get("tabs", []), tab_id, by_id=True,
+        )
 
     doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
@@ -1584,9 +1723,8 @@ def cmd_nest(args) -> int:
             exit_code=3,
         )
     tabs = doc.get("tabs", [])
-    tab_name = getattr(args, "tab", None)
     if tab_name:
-        raw_tab = resolve_raw_tab(tabs, tab_name)
+        raw_tab = resolve_raw_tab(tabs, tab_name, by_id=tab_from_url)
         if raw_tab is None:
             raise GdocError(f"tab not found: {tab_name}", exit_code=3)
     elif tabs:
@@ -1594,6 +1732,7 @@ def cmd_nest(args) -> int:
     else:
         raise GdocError(f"document has no tabs: {doc_id}")
     tab_id = raw_tab.get("tabProperties", {}).get("tabId", "")
+    _warn_if_changed(doc_id, change_info, tab_id)
     document_tab = raw_tab.get("documentTab", {})
     body = document_tab.get("body", {})
 
@@ -1800,7 +1939,8 @@ def _file_stamp(metadata: dict, doc_id: str) -> str | None:
 
 
 def _stale_file_error(
-    doc_id: str, file_path: str, stamp: str, current_version,
+    doc_id: str, file_path: str, stamp: str, current_version: int,
+    tab_target: str | None = None,
 ) -> GdocError:
     """Refusal for a stamped file whose doc has moved on.
 
@@ -1811,20 +1951,34 @@ def _stale_file_error(
         f"{file_path} is from doc version {stamp}; the doc is now at "
         f"version {current_version}. Nothing was sent and {file_path} "
         "is unchanged. To recover:\n"
-        + _stale_recovery(doc_id, file_path)
+        + _stale_recovery(doc_id, file_path, tab_target)
         + "\n  4. Use --force only to discard the newer changes in the doc.",
         exit_code=3,
     )
 
 
-def _stale_recovery(doc_id: str, file_path: str) -> str:
-    """Recovery steps for a stale stamped file, via a new path."""
+def _stale_recovery(
+    doc_id: str, file_path: str, tab_target: str | None = None,
+) -> str:
+    """Recovery steps for a stale stamped file, via a new path.
+
+    For a tab write the fresh copy is that tab alone: a pull holds every
+    tab, and pushing it would collapse a multi-tab doc. `tab_target` is
+    the doc-and-tab arguments the write was given (see _tab_target).
+    """
     import os
     import shlex
 
     root, ext = os.path.splitext(file_path)
     latest = f"{root}.latest{ext or '.md'}"
     f, new = shlex.quote(file_path), shlex.quote(latest)
+    if tab_target is not None:
+        return (
+            f"  1. gdoc cat {tab_target} > {new}   (fresh copy of the tab)\n"
+            f"  2. diff {f} {new}   (what changed in the tab)\n"
+            f"  3. Carry your edits into {new} and run "
+            f"'gdoc write {tab_target} {new}'."
+        )
     return (
         f"  1. gdoc pull {doc_id} {new}   (fresh copy at the current version)\n"
         f"  2. gdoc diff {doc_id} {f}   (what changed in the doc)\n"
@@ -1894,6 +2048,46 @@ def _warn_stamp_kept(file_path: str, reason: str) -> None:
     )
 
 
+def _tab_target(doc_id: str, tab_id: str, tab_name: str, from_url: bool) -> str:
+    """Shell arguments that select this doc and tab the way the user did.
+
+    A URL tab is matched by ID only and `--tab` by title first, so a
+    suggested command keeps the user's form to land on the same tab.
+    """
+    import shlex
+
+    from gdoc.util import build_doc_url
+
+    if from_url:
+        return shlex.quote(build_doc_url(doc_id, tab_id))
+    return f"{doc_id} --tab {shlex.quote(tab_name)}"
+
+
+def _check_file_stamp(
+    doc_id: str, stamp: str, file_path: str, current_version: int | None,
+    body: str | None = None, tab_target: str | None = None,
+) -> bool:
+    """Refuse a stamped file whose doc has moved past its stamp.
+
+    Returns True when the doc moved but already equals `body` (in sync:
+    skip the upload). A missing version refuses too: the file can't be
+    shown current.
+    """
+    if current_version is None:
+        raise GdocError(
+            f"Drive returned no version for {doc_id}, so {file_path} can't "
+            "be confirmed current. Nothing was sent; use --force to write "
+            "anyway.",
+        )
+    if str(current_version) == stamp:
+        return False
+    if body is not None and _doc_matches(doc_id, body):
+        return True
+    raise _stale_file_error(
+        doc_id, file_path, stamp, current_version, tab_target,
+    )
+
+
 def _check_write_conflict(
     doc_id: str, quiet: bool, force: bool, body: str | None = None,
     file_stamp: str | None = None, file_path: str | None = None,
@@ -1925,13 +2119,9 @@ def _check_write_conflict(
             from gdoc.api.drive import get_file_version
 
             current_version = get_file_version(doc_id).get("version")
-        if current_version is not None and str(current_version) != file_stamp:
-            if body is not None and _doc_matches(doc_id, body):
-                return change_info, True
-            raise _stale_file_error(
-                doc_id, file_path or "file", file_stamp, current_version,
-            )
-        return change_info, False
+        return change_info, _check_file_stamp(
+            doc_id, file_stamp, file_path, current_version, body,
+        )
 
     if not quiet:
         if not force:
@@ -1988,16 +2178,137 @@ def _check_write_conflict(
     return None, False
 
 
+def _max_opt(a: int | None, b: int | None) -> int | None:
+    """max of two Optional[int]s, treating None as absent."""
+    vals = [v for v in (a, b) if v is not None]
+    return max(vals) if vals else None
+
+
+def _tab_read_version(state: "DocState | None", tab_id: str) -> int | None:
+    """This tab's stamped read baseline from state, or None."""
+    return state.tab_read_versions.get(tab_id) if state else None
+
+
+def _global_read_baseline(state: "DocState | None") -> int | None:
+    """Global last_read_version, gated on whole-doc provenance.
+
+    Pre-0.23 state files stored a `cat --tab A` version in
+    last_read_version, so without the 0.23+ provenance marker the global
+    baseline is ambiguous and must not authorize a tab-scoped write —
+    return None and let the guard fail closed (fresh `cat` required).
+    """
+    if state is None or not state.global_read_covers_doc:
+        return None
+    return state.last_read_version
+
+
+def _raise_on_tab_conflict(
+    tab_label: str, baseline: int | None, current_version: int | None,
+) -> None:
+    """Raise GdocError if a tab write can't be safely made."""
+    if baseline is None:
+        raise GdocError(
+            f"no read baseline for tab {tab_label!r}. "
+            f"Run 'gdoc cat DOC --tab {tab_label}' (or 'gdoc cat DOC' for "
+            "the whole doc) first, or use --force to overwrite.",
+            exit_code=3,
+        )
+    if current_version is None:
+        raise GdocError(
+            f"Drive returned no version, so tab {tab_label!r} can't be "
+            "confirmed current. Nothing was sent; use --force to write "
+            "anyway.",
+        )
+    if current_version != baseline:
+        # "may" is honest: Drive versions are doc-global, so a sibling tab's
+        # edit also trips this. Conservative, and no worse than pre-per-tab.
+        raise GdocError(
+            f"tab {tab_label!r} may have changed since last read "
+            f"(doc moved v{baseline} -> v{current_version}). "
+            f"Run 'gdoc cat DOC --tab {tab_label}' first, or use --force to "
+            "overwrite.",
+            exit_code=3,
+        )
+
+
+def _check_tab_write_conflict(
+    doc_id: str, tab_id: str, tab_label: str, force: bool,
+    file_stamp: str | None = None, file_path: str | None = None,
+    tab_target: str | None = None,
+) -> None:
+    """Conflict detection for a tab-scoped write (per-tab baseline).
+
+    A `file_stamp` (the `gdoc-version` a pulled file carries) is the
+    baseline when given, as in _check_write_conflict: the file says which
+    version it came from, so a later read on this machine can't bless it.
+
+    Otherwise mirrors _check_write_conflict but checks the effective *tab*
+    baseline — lenient rule: max(whole-doc last_read_version, this tab's
+    read version).
+    A plain `cat`/`pull` exports the whole doc (every tab), so the global
+    baseline legitimately covers tab X; a `cat --tab X` or an earlier
+    `write --tab X` stamps X's own entry. (`info` advances the whole-doc
+    guard's last_read_version but is excluded from the provenance marker,
+    so it never authorizes a tab-scoped write — it shows no content.)
+    Tab writes never get the content-match rescue — a tab body is never
+    the whole-doc export — so no in_sync escape.
+
+    Call this AFTER fetching the document to write into: the current
+    version is re-derived here, post-fetch, because comparing against the
+    caller's pre-flight snapshot would miss an edit landing between
+    pre-flight and the fetch — the batchUpdate's requiredRevisionId pin
+    only guards edits after the fetch. (The caller still runs
+    pre_flight/_require_doc first so usage errors surface cheaply, at the
+    right exit code, before the expensive document fetch.)
+    Raises GdocError(exit_code=3) on a real conflict.
+    """
+    if force:
+        return
+    if file_stamp is not None:
+        from gdoc.api.drive import get_file_version
+
+        _check_file_stamp(
+            doc_id, file_stamp, file_path,
+            get_file_version(doc_id).get("version"), tab_target=tab_target,
+        )
+        return
+    from gdoc.state import load_state
+
+    state = load_state(doc_id)
+    baseline = _max_opt(
+        _global_read_baseline(state),
+        _tab_read_version(state, tab_id),
+    )
+
+    # With no baseline the write is rejected regardless of the current
+    # version, so skip the get_file_version network call.
+    current_version = None
+    if baseline is not None:
+        from gdoc.api.drive import get_file_version
+
+        current_version = get_file_version(doc_id).get("version")
+    _raise_on_tab_conflict(tab_label, baseline, current_version)
+
+
 def cmd_write(args) -> int:
     """Handler for `gdoc write`."""
     import os
 
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
     force = getattr(args, "force", False)
-    tab_name = getattr(args, "tab", None)
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     force_collapse = getattr(args, "force_collapse_tabs", False)
     file_path = args.file
+
+    # A URL that targets a tab and --force-collapse-tabs (collapse every tab
+    # into a single whole-doc write) express opposite intents.
+    if tab_from_url and force_collapse:
+        raise GdocError(
+            f"the URL targets tab {tab_name!r}, but --force-collapse-tabs "
+            "rewrites the whole document; drop ?tab= from the URL or the flag",
+            exit_code=3,
+        )
 
     # Read local file first (fail fast on missing file)
     if not os.path.isfile(file_path):
@@ -2015,28 +2326,52 @@ def cmd_write(args) -> int:
     front, content = parse_frontmatter(content)
     stamp = _file_stamp(front, doc_id)
 
-    # Conflict detection. Content comparison only applies to full-doc
-    # writes — a tab write's body never equals the whole-doc export.
-    change_info, in_sync = _check_write_conflict(
-        doc_id, quiet, force, body=None if tab_name else content,
-        file_stamp=stamp, file_path=file_path,
-    )
-    if in_sync:
-        return _finish_noop_write(doc_id, change_info, args, quiet, command="write")
-
     from gdoc.format import format_json, get_output_mode
+    from gdoc.state import update_state_after_command
     mode = get_output_mode(args)
 
     if tab_name:
-        from gdoc.api.docs import insert_markdown_into_tab
-        result = insert_markdown_into_tab(
-            doc_id, tab_name, content, replace=True,
+        # Per-tab write. Pre-flight first — usage errors (spreadsheet, 404)
+        # must exit 3 before the expensive whole-document fetch — then
+        # resolve the tab (the conflict check needs its id) and hand the
+        # fetched doc to the write so the document isn't fetched twice.
+        from gdoc.api.docs import (
+            flatten_tabs,
+            get_document_with_tabs,
+            insert_markdown_into_tab,
+            resolve_tab,
+        )
+        from gdoc.api.drive import get_file_version
+
+        change_info = None
+        if not quiet:
+            from gdoc.notify import pre_flight
+
+            change_info = pre_flight(doc_id, quiet=False)
+            _require_doc(doc_id, change_info)
+
+        doc = get_document_with_tabs(doc_id)
+        all_tabs = flatten_tabs(doc.get("tabs", []))
+        tab_match = resolve_tab(all_tabs, tab_name, by_id=tab_from_url)
+        tab_id = tab_match["id"]
+
+        _check_tab_write_conflict(
+            doc_id, tab_id, tab_name, force,
+            file_stamp=stamp, file_path=file_path,
+            tab_target=_tab_target(doc_id, tab_id, tab_name, tab_from_url),
         )
 
-        from gdoc.api.drive import get_file_version
-        version_data = get_file_version(doc_id)
-        command_version = version_data.get("version")
-
+        result = insert_markdown_into_tab(
+            doc_id, tab_id, content, replace=True, doc=doc,
+        )
+        # Note: this version is fetched AFTER the batchUpdate — unlike the
+        # whole-doc path, whose files.update returns its own version
+        # atomically. A concurrent edit landing in that sub-second window
+        # would be folded into the stamped tab baseline — and on a
+        # single-tab doc, via full_doc_write below, into the whole-doc
+        # baseline too, exposing a later `push` to the same window.
+        # Accepted risk until the Docs API exposes the post-write version.
+        command_version = get_file_version(doc_id).get("version")
         _print_tab_write_result(
             mode, doc_id, result, command_version, verb="wrote",
         )
@@ -2045,40 +2380,64 @@ def cmd_write(args) -> int:
             _warn_stamp_kept(
                 file_path, "a tab write reports no version of its own",
             )
+
+        update_state_after_command(
+            doc_id, change_info, command="write",
+            quiet=quiet, command_version=command_version,
+            # Replacing the only tab IS a whole-doc write (same single-tab
+            # rule as `cat --tab`): advance the global baseline too, so a
+            # following whole-doc write doesn't conflict with our own.
+            full_doc_write=(len(all_tabs) == 1),
+            written_tab_id=tab_id,
+        )
+        return 0
+
+    # Whole-doc write. Content comparison rescues an in-sync write (our own
+    # earlier write, or a cosmetic version bump) from a false conflict.
+    change_info, in_sync = _check_write_conflict(
+        doc_id, quiet, force, body=content,
+        file_stamp=stamp, file_path=file_path,
+    )
+    if in_sync:
+        return _finish_noop_write(doc_id, change_info, args, quiet, command="write")
+
+    # Refuse destructive multi-tab collapse unless the user opts in.
+    if not force_collapse:
+        from gdoc.api.docs import count_document_tabs
+        tab_count = count_document_tabs(doc_id)
+        if tab_count > 1:
+            # If the URL carried the ambient ?tab=t.0 we dropped, say so —
+            # the user may have meant the first tab, not a collapse.
+            t0_hint = (
+                " (the URL's ?tab=t.0 was ignored as an ambient default; "
+                "pass --tab t.0 to write only the first tab)"
+                if url_tab == _FIRST_TAB_ID else ""
+            )
+            raise GdocError(
+                f"write would collapse {tab_count} tabs into 1. "
+                "Use `gdoc write --tab NAME FILE` for per-tab "
+                "writes, `gdoc insert --tab NAME FILE` to populate "
+                f"a tab, or pass --force-collapse-tabs to confirm.{t0_hint}",
+                exit_code=3,
+            )
+
+    from gdoc.api.drive import update_doc_content
+    command_version = update_doc_content(doc_id, content)
+    if stamp is not None:
+        _advance_file_stamp(file_path, original, command_version)
+
+    if mode == "json":
+        print(format_json(written=True, version=command_version))
+    elif mode == "plain":
+        print(f"id\t{doc_id}")
+        print("status\tupdated")
     else:
-        # Refuse destructive multi-tab collapse unless the user opts in.
-        if not force_collapse:
-            from gdoc.api.docs import count_document_tabs
-            tab_count = count_document_tabs(doc_id)
-            if tab_count > 1:
-                raise GdocError(
-                    f"write would collapse {tab_count} tabs into 1. "
-                    "Use `gdoc write --tab NAME FILE` for per-tab "
-                    "writes, `gdoc insert --tab NAME FILE` to populate "
-                    "a tab, or pass --force-collapse-tabs to confirm.",
-                    exit_code=3,
-                )
-
-        from gdoc.api.drive import update_doc_content
-        command_version = update_doc_content(doc_id, content)
-        if stamp is not None:
-            _advance_file_stamp(file_path, original, command_version)
-
-        if mode == "json":
-            print(format_json(written=True, version=command_version))
-        elif mode == "plain":
-            print(f"id\t{doc_id}")
-            print("status\tupdated")
-        else:
-            print("OK written")
-
-    # Update state
-    from gdoc.state import update_state_after_command
+        print("OK written")
 
     update_state_after_command(
         doc_id, change_info, command="write",
         quiet=quiet, command_version=command_version,
-        full_doc_write=not tab_name,
+        full_doc_write=True,
     )
 
     return 0
@@ -2086,8 +2445,9 @@ def cmd_write(args) -> int:
 
 def cmd_pull(args) -> int:
     """Handler for `gdoc pull`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
+    _note_discarded_url_tab(url_tab, "pull", quiet)
     file_path = args.file
     revision = getattr(args, "revision", None)
 
@@ -2216,7 +2576,8 @@ def cmd_push(args) -> int:
             exit_code=3,
         )
 
-    doc_id = _resolve_doc_id(metadata["gdoc"])
+    doc_id, url_tab = _resolve_doc_ref(metadata["gdoc"])
+    _note_discarded_url_tab(url_tab, "push", quiet)
     stamp = _file_stamp(metadata, doc_id)
 
     # Conflict detection (reuse shared helper)
@@ -2654,7 +3015,10 @@ def cmd_diff(args) -> int:
     import difflib
     import os
 
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
+    # A whole-doc diff against a tab-scoped expectation is a plausible-
+    # looking wrong answer — say the tab was dropped.
+    _note_discarded_url_tab(url_tab, "diff", getattr(args, "quiet", False))
     file_path = getattr(args, "file", None)
     rev = getattr(args, "rev", None)
     since = getattr(args, "since", None)
@@ -2747,8 +3111,9 @@ def cmd_diff(args) -> int:
 
 def cmd_comments(args) -> int:
     """Handler for `gdoc comments`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
+    _note_discarded_url_tab(url_tab, "comments", quiet)
 
     # Pre-flight awareness check
     from gdoc.notify import pre_flight
@@ -2855,8 +3220,9 @@ def _try_anchored_comment(doc_id: str, text: str, quote: str) -> str:
 
 def cmd_comment(args) -> int:
     """Handler for `gdoc comment`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
+    _note_discarded_url_tab(url_tab, "comment", quiet)
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
@@ -3111,8 +3477,9 @@ def cmd_comment_info(args) -> int:
 
 def cmd_images(args) -> int:
     """Handler for `gdoc images`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
+    _note_discarded_url_tab(url_tab, "images", quiet)
     image_id = getattr(args, "image_id", None)
     download_dir = getattr(args, "download", None)
 
@@ -3219,8 +3586,10 @@ _EXT_TO_FORMAT = {
 
 def cmd_export(args) -> int:
     """Handler for `gdoc export`: render a doc to PDF/DOCX/HTML/etc."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
+    # Exports always render the whole document, all tabs included.
+    _note_discarded_url_tab(url_tab, "export", quiet)
     fmt = getattr(args, "format", None)
     out = getattr(args, "out", None)
 
@@ -3373,7 +3742,9 @@ def _cleanup_temp_image(temp_file_id: str | None) -> None:
         )
 
 
-def _resolve_image_target_tab(doc: dict, tab_name: str | None) -> dict | None:
+def _resolve_image_target_tab(
+    doc: dict, tab_name: str | None, *, by_id: bool,
+) -> dict | None:
     """Pick the tab an image operation targets; None = legacy body.
 
     A multi-tab document with no --tab is ambiguous — refuse rather than
@@ -3383,7 +3754,7 @@ def _resolve_image_target_tab(doc: dict, tab_name: str | None) -> dict | None:
 
     tabs = flatten_tabs(doc.get("tabs", []))
     if tab_name:
-        return resolve_tab(tabs, tab_name)
+        return resolve_tab(tabs, tab_name, by_id=by_id)
     if len(tabs) > 1:
         raise GdocError(
             f"document has {len(tabs)} tabs; specify --tab", exit_code=3,
@@ -3436,7 +3807,7 @@ def cmd_insert_image(args) -> int:
     """Handler for `gdoc insert-image`: add an image to an existing doc."""
     import math
 
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
     for name in ("width", "height"):
         val = getattr(args, name, None)
@@ -3451,15 +3822,15 @@ def cmd_insert_image(args) -> int:
 
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import get_document_with_tabs
 
     doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
-    tab = _resolve_image_target_tab(doc, getattr(args, "tab", None))
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
+    tab = _resolve_image_target_tab(doc, tab_name, by_id=tab_from_url)
     tab_id = tab["id"] if tab else None
+    _warn_if_changed(doc_id, change_info, tab_id)
     body = tab["body"] if tab else doc.get("body", {})
 
     insert_at = _resolve_insert_index(
@@ -3523,8 +3894,6 @@ def cmd_replace_image(args) -> int:
 
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import find_object_tab, get_document_with_tabs
 
@@ -3536,6 +3905,7 @@ def cmd_replace_image(args) -> int:
             f"image object not found: {object_id} (see `gdoc images`)",
             exit_code=3,
         )
+    _warn_if_changed(doc_id, change_info, tab_id)
 
     uri, temp_file_id = _resolve_image_source(args.image)
 
@@ -3580,9 +3950,9 @@ def cmd_structure(args) -> int:
     """Handler for `gdoc structure`: raw document JSON for native edits."""
     import json
 
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
-    tab_name = getattr(args, "tab", None)
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     fields = getattr(args, "fields", None)
     svm = getattr(args, "suggestions_view_mode", None)
     svm = svm.upper() if svm else None
@@ -3602,16 +3972,27 @@ def cmd_structure(args) -> int:
     if svm and "suggestionsViewMode" not in doc:
         doc = {**doc, "suggestionsViewMode": svm}
 
+    read_tab_id = None
     if tab_name:
-        from gdoc.api.docs import resolve_raw_tab
+        from gdoc.api.docs import flatten_tabs, resolve_raw_tab
 
-        tab = resolve_raw_tab(doc.get("tabs", []), tab_name)
+        tab = resolve_raw_tab(doc.get("tabs", []), tab_name, by_id=tab_from_url)
         if tab is None:
             raise GdocError(
                 f"tab not found: {tab_name} "
                 "(with --fields, the mask must keep tabProperties)",
                 exit_code=3,
             )
+        # Same rule as `cat --tab`: on a multi-tab doc a tab-scoped read
+        # stamps only that tab's baseline; on a single-tab doc the one tab
+        # IS the whole document, so the read stays a full one. Only when
+        # the response is unmasked — a --fields response may omit tabIds,
+        # sibling tabs, or the content itself, so it can't prove coverage
+        # (the fields is None gate below keeps it from stamping anything).
+        # A missing tabId degrades to "" (fail-closed: not None, so the
+        # read never claims whole-doc provenance) — matching cmd_cat.
+        if fields is None and len(flatten_tabs(doc.get("tabs", []))) > 1:
+            read_tab_id = tab.get("tabProperties", {}).get("tabId", "")
         out = {
             "documentId": doc.get("documentId", doc_id),
             "title": doc.get("title", ""),
@@ -3635,8 +4016,13 @@ def cmd_structure(args) -> int:
 
     from gdoc.state import update_state_after_command
 
+    # A --fields-masked response can't prove a full read (it may have no
+    # body at all), so it records the interaction without advancing any
+    # read baseline — same mechanism as cat-revision.
     update_state_after_command(
-        doc_id, change_info, command="structure", quiet=quiet,
+        doc_id, change_info,
+        command="structure" if fields is None else "structure-partial",
+        quiet=quiet, read_tab_id=read_tab_id,
     )
     return 0
 
@@ -4391,7 +4777,9 @@ def build_parser() -> GdocArgumentParser:
         "cat", parents=[output_parent],
         help="Export doc as markdown (spreadsheets print as a table)",
     )
-    cat_p.add_argument("doc", help="Document ID or URL")
+    cat_p.add_argument(
+        "doc", help="Document ID or URL (a ?tab= in the URL selects that tab)"
+    )
     cat_p.add_argument(
         "--comments", action="store_true", help="Include comment annotations"
     )
@@ -4401,7 +4789,7 @@ def build_parser() -> GdocArgumentParser:
     )
     cat_tab_group = cat_p.add_mutually_exclusive_group()
     cat_tab_group.add_argument(
-        "--tab", help="Read a specific tab by title or ID"
+        "--tab", help="Read a specific tab by title or ID (or pass a URL with ?tab=)"
     )
     cat_tab_group.add_argument(
         "--all-tabs", action="store_true", help="Read all tabs"
@@ -4499,8 +4887,12 @@ def build_parser() -> GdocArgumentParser:
         "toc", parents=[output_parent],
         help="Extract table of contents with deep links",
     )
-    toc_p.add_argument("doc", help="Document ID or URL")
-    toc_p.add_argument("--tab", help="Read a specific tab by title or ID")
+    toc_p.add_argument(
+        "doc", help="Document ID or URL (a ?tab= in the URL selects that tab)"
+    )
+    toc_p.add_argument(
+        "--tab", help="Read a specific tab by title or ID (or pass a URL with ?tab=)"
+    )
     toc_p.add_argument(
         "--max-depth", type=int, default=0,
         help="Only show headings up to level N (0 = all)",
@@ -4534,7 +4926,9 @@ def build_parser() -> GdocArgumentParser:
                "Replacement text supports markdown formatting "
                "(bold, italic, headings, bullets, links).",
     )
-    edit_p.add_argument("doc", help="Document ID or URL")
+    edit_p.add_argument(
+        "doc", help="Document ID or URL (a ?tab= in the URL selects that tab)"
+    )
     edit_p.add_argument("old_text", nargs="?", default=None, help="Text to find")
     edit_p.add_argument("new_text", nargs="?", default=None, help="Replacement text")
     edit_p.add_argument("--old-file", help="Read old text from file")
@@ -4569,7 +4963,8 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks"
     )
     edit_p.add_argument(
-        "--tab", help="Target a specific tab by title or ID"
+        "--tab",
+        help="Target a specific tab by title or ID (or pass a URL with ?tab=)",
     )
     edit_p.set_defaults(func=cmd_edit)
 
@@ -4717,11 +5112,14 @@ def build_parser() -> GdocArgumentParser:
             "automatically."
         ),
     )
-    write_p.add_argument("doc", help="Document ID or URL")
+    write_p.add_argument(
+        "doc", help="Document ID or URL (a ?tab= in the URL selects that tab)"
+    )
     write_p.add_argument("file", help="Local markdown file")
     write_p.add_argument(
         "--tab",
-        help="Replace only this tab (by title or ID); leaves siblings alone",
+        help="Replace only this tab (by title or ID, or a URL with ?tab=); "
+             "leaves siblings alone",
     )
     write_p.add_argument(
         "--force-collapse-tabs", action="store_true",
@@ -4745,11 +5143,13 @@ def build_parser() -> GdocArgumentParser:
             "before upload."
         ),
     )
-    insert_p.add_argument("doc", help="Document ID or URL")
+    insert_p.add_argument(
+        "doc", help="Document ID or URL (a ?tab= in the URL supplies the tab)"
+    )
     insert_p.add_argument("file", help="Local markdown file")
     insert_p.add_argument(
-        "--tab", required=True,
-        help="Target tab by title or ID",
+        "--tab",
+        help="Target tab by title or ID (or pass a URL with ?tab=)",
     )
     insert_p.add_argument(
         "--position", choices=["start", "end"], default="start",
@@ -4940,7 +5340,9 @@ def build_parser() -> GdocArgumentParser:
     ii_p.add_argument("doc", help="Document ID or URL")
     ii_p.add_argument("image", help="Local image path or public image URL")
     ii_p.add_argument(
-        "--tab", help="Tab title or ID (required for multi-tab docs)",
+        "--tab",
+        help="Tab title or ID (required for multi-tab docs; "
+        "or pass a URL with ?tab=)",
     )
     ii_where = ii_p.add_mutually_exclusive_group(required=True)
     ii_where.add_argument(
@@ -5003,7 +5405,7 @@ def build_parser() -> GdocArgumentParser:
     structure_p.add_argument(
         "--tab",
         help="Narrow to one tab by title or ID (returns that tab's raw "
-        "subtree plus documentId/revisionId)",
+        "subtree plus documentId/revisionId; or pass a URL with ?tab=)",
     )
     structure_p.add_argument(
         "--fields",

@@ -315,6 +315,30 @@ class TestCmdInsertImage:
         assert rc == 0
         assert mock_insert.call_args.kwargs["tab_id"] == "t2"
 
+    def test_url_tab_satisfies_multi_tab_requirement(
+        self, mock_get, mock_insert, _ver, _update,
+    ):
+        mock_get.return_value = _TWO_TAB_DOC
+        args = _make_args(
+            "insert-image", after="Architecture",
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t2",
+        )
+        rc = cmd_insert_image(args)
+        assert rc == 0
+        assert mock_insert.call_args.kwargs["tab_id"] == "t2"
+
+    def test_tab_flag_overrides_url_tab(
+        self, mock_get, mock_insert, _ver, _update,
+    ):
+        mock_get.return_value = _TWO_TAB_DOC
+        args = _make_args(
+            "insert-image", after="Intro", tab="t1",
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t2",
+        )
+        rc = cmd_insert_image(args)
+        assert rc == 0
+        assert mock_insert.call_args.kwargs["tab_id"] == "t1"
+
     def test_index_used_directly(self, mock_get, mock_insert, _ver, _update):
         args = _make_args("insert-image", index=5)
         cmd_insert_image(args)
