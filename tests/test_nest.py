@@ -808,6 +808,37 @@ class TestCommand:
         assert f"'tabId': '{TAB}'" in written
         assert "'tabId': 't.0'" not in written
 
+    def test_stale_tab_read_warns(self, api, mocker, capsys):
+        """The target tab moved since it was read: warn, as edit does."""
+        from gdoc.notify import ChangeInfo
+        from gdoc.state import DocState
+
+        mocker.patch(
+            "gdoc.notify.pre_flight",
+            return_value=ChangeInfo(current_version=9, last_read_version=None),
+        )
+        mocker.patch(
+            "gdoc.state.load_state",
+            return_value=DocState(tab_read_versions={TAB: 8}),
+        )
+        assert cmd_nest(_args(quiet=False)) == 0
+        assert "WARN: doc changed since last read" in capsys.readouterr().err
+
+    def test_current_tab_read_does_not_warn(self, api, mocker, capsys):
+        from gdoc.notify import ChangeInfo
+        from gdoc.state import DocState
+
+        mocker.patch(
+            "gdoc.notify.pre_flight",
+            return_value=ChangeInfo(current_version=9, last_read_version=None),
+        )
+        mocker.patch(
+            "gdoc.state.load_state",
+            return_value=DocState(tab_read_versions={TAB: 9}),
+        )
+        assert cmd_nest(_args(quiet=False)) == 0
+        assert "WARN" not in capsys.readouterr().err
+
     def test_tab_flag_beats_url_tab(self, api):
         url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
         with pytest.raises(GdocError, match="tab not found") as exc:

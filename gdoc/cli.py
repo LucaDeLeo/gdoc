@@ -1732,6 +1732,7 @@ def cmd_nest(args) -> int:
     else:
         raise GdocError(f"document has no tabs: {doc_id}")
     tab_id = raw_tab.get("tabProperties", {}).get("tabId", "")
+    _warn_if_changed(doc_id, change_info, tab_id)
     document_tab = raw_tab.get("documentTab", {})
     body = document_tab.get("body", {})
 
@@ -1939,7 +1940,7 @@ def _file_stamp(metadata: dict, doc_id: str) -> str | None:
 
 def _stale_file_error(
     doc_id: str, file_path: str, stamp: str, current_version: int,
-    tab: str | None = None,
+    tab_target: str | None = None,
 ) -> GdocError:
     """Refusal for a stamped file whose doc has moved on.
 
@@ -1950,19 +1951,20 @@ def _stale_file_error(
         f"{file_path} is from doc version {stamp}; the doc is now at "
         f"version {current_version}. Nothing was sent and {file_path} "
         "is unchanged. To recover:\n"
-        + _stale_recovery(doc_id, file_path, tab)
+        + _stale_recovery(doc_id, file_path, tab_target)
         + "\n  4. Use --force only to discard the newer changes in the doc.",
         exit_code=3,
     )
 
 
 def _stale_recovery(
-    doc_id: str, file_path: str, tab: str | None = None,
+    doc_id: str, file_path: str, tab_target: str | None = None,
 ) -> str:
     """Recovery steps for a stale stamped file, via a new path.
 
     For a tab write the fresh copy is that tab alone: a pull holds every
-    tab, and pushing it would collapse a multi-tab doc.
+    tab, and pushing it would collapse a multi-tab doc. `tab_target` is
+    the doc-and-tab arguments the write was given (see _tab_target).
     """
     import os
     import shlex
@@ -1970,14 +1972,12 @@ def _stale_recovery(
     root, ext = os.path.splitext(file_path)
     latest = f"{root}.latest{ext or '.md'}"
     f, new = shlex.quote(file_path), shlex.quote(latest)
-    if tab is not None:
-        t = shlex.quote(tab)
+    if tab_target is not None:
         return (
-            f"  1. gdoc cat {doc_id} --tab {t} > {new}   "
-            "(fresh copy of the tab)\n"
+            f"  1. gdoc cat {tab_target} > {new}   (fresh copy of the tab)\n"
             f"  2. diff {f} {new}   (what changed in the tab)\n"
             f"  3. Carry your edits into {new} and run "
-            f"'gdoc write --tab {t} {doc_id} {new}'."
+            f"'gdoc write {tab_target} {new}'."
         )
     return (
         f"  1. gdoc pull {doc_id} {new}   (fresh copy at the current version)\n"
@@ -2048,9 +2048,24 @@ def _warn_stamp_kept(file_path: str, reason: str) -> None:
     )
 
 
+def _tab_target(doc_id: str, tab_id: str, tab_name: str, from_url: bool) -> str:
+    """Shell arguments that select this doc and tab the way the user did.
+
+    A URL tab is matched by ID only and `--tab` by title first, so a
+    suggested command keeps the user's form to land on the same tab.
+    """
+    import shlex
+
+    from gdoc.util import build_doc_url
+
+    if from_url:
+        return shlex.quote(build_doc_url(doc_id, tab_id))
+    return f"{doc_id} --tab {shlex.quote(tab_name)}"
+
+
 def _check_file_stamp(
     doc_id: str, stamp: str, file_path: str, current_version: int | None,
-    body: str | None = None, tab: str | None = None,
+    body: str | None = None, tab_target: str | None = None,
 ) -> bool:
     """Refuse a stamped file whose doc has moved past its stamp.
 
@@ -2068,7 +2083,9 @@ def _check_file_stamp(
         return False
     if body is not None and _doc_matches(doc_id, body):
         return True
-    raise _stale_file_error(doc_id, file_path, stamp, current_version, tab)
+    raise _stale_file_error(
+        doc_id, file_path, stamp, current_version, tab_target,
+    )
 
 
 def _check_write_conflict(
@@ -2217,6 +2234,7 @@ def _raise_on_tab_conflict(
 def _check_tab_write_conflict(
     doc_id: str, tab_id: str, tab_label: str, force: bool,
     file_stamp: str | None = None, file_path: str | None = None,
+    tab_target: str | None = None,
 ) -> None:
     """Conflict detection for a tab-scoped write (per-tab baseline).
 
@@ -2251,7 +2269,7 @@ def _check_tab_write_conflict(
 
         _check_file_stamp(
             doc_id, file_stamp, file_path,
-            get_file_version(doc_id).get("version"), tab=tab_label,
+            get_file_version(doc_id).get("version"), tab_target=tab_target,
         )
         return
     from gdoc.state import load_state
@@ -2340,6 +2358,7 @@ def cmd_write(args) -> int:
         _check_tab_write_conflict(
             doc_id, tab_id, tab_name, force,
             file_stamp=stamp, file_path=file_path,
+            tab_target=_tab_target(doc_id, tab_id, tab_name, tab_from_url),
         )
 
         result = insert_markdown_into_tab(

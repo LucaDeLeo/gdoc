@@ -8,6 +8,7 @@ positive (write tab X twice) — plus the sibling-edit conservatism and the
 --force escape, at both the end-to-end (real state) and decision layers.
 """
 
+import shlex
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -587,8 +588,30 @@ class TestStaleStampedTabWriteRecovery:
         msg = str(exc.value)
         assert exc.value.exit_code == 3
         assert "gdoc cat abc123 --tab X >" in msg
-        assert "gdoc write --tab X abc123" in msg
+        assert "gdoc write abc123 --tab X " in msg
         assert "push" not in msg
+        mock_insert.assert_not_called()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 101})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "t.x")))
+    def test_url_write_recovers_by_url(
+        self, _doc, mock_insert, _ver, _upd, tmp_path,
+    ):
+        """A URL picks its tab by ID; `--tab t.x` would pick the tab titled
+        "t.x" instead, so the recovery repeats the URL."""
+        f = tmp_path / "draft.md"
+        f.write_text("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
+        url = "https://docs.google.com/document/d/abc123/edit?tab=t.x"
+        with pytest.raises(GdocError) as exc:
+            cmd_write(_write_args(url, None, str(f)))
+        msg = str(exc.value)
+        quoted = shlex.quote(url)
+        assert f"gdoc cat {quoted} >" in msg
+        assert f"gdoc write {quoted} " in msg
+        assert "--tab" not in msg
         mock_insert.assert_not_called()
 
 
