@@ -104,6 +104,24 @@ class TestCmdComment:
         assert call_kwargs[1].get("command_version") == 50
 
 
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.drive.get_file_version", return_value=_MOCK_VERSION)
+    @patch("gdoc.api.comments.get_drive_service")
+    @patch("gdoc.api.comments.create_comment", return_value={"id": "c_new"})
+    def test_url_tab_is_noted_as_ignored(
+        self, mock_create, _svc, _ver, _pf, _update, capsys,
+    ):
+        """A comment is document-wide: say so rather than drop ?tab= silently."""
+        args = _make_args(
+            "comment", text="hello",
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.notes",
+        )
+        assert cmd_comment(args) == 0
+        assert mock_create.call_args.args[0] == "abc123"
+        err = capsys.readouterr().err
+        assert "NOTE: ignoring tab 't.notes'" in err and "comment" in err
+
 # --- cmd_reply tests ---
 
 class TestCmdReply:

@@ -833,7 +833,7 @@ class TestWriteTabScoped:
         # The pre-fetched doc is threaded through so it isn't fetched twice.
         mock_insert.assert_called_once_with(
             "abc123", "t.todo", "# New body\n", replace=True,
-            doc=mock_doc.return_value, by_id=True,
+            doc=mock_doc.return_value,
         )
 
     @patch("gdoc.state.load_state", return_value=_read_state())
@@ -925,7 +925,7 @@ class TestWriteUrlTab:
         assert rc == 0
         mock_insert.assert_called_once_with(
             "abc123", "t.second", "# New body\n", replace=True,
-            doc=mock_doc.return_value, by_id=True,
+            doc=mock_doc.return_value,
         )
         mock_update_doc.assert_not_called()
         assert mock_state.call_args.kwargs["full_doc_write"] is False

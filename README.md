@@ -507,7 +507,7 @@ gdoc cat --all-tabs DOC
 
 ### Tabs in the URL
 
-Google's editor deep-links to a tab with a `?tab=<id>` query param (e.g. `.../edit?tab=t.abc123`). `gdoc` honors it: a pasted tab URL acts exactly as if you'd passed `--tab <id>`, so `cat`, `edit`, `write`, `insert`, `toc`, `structure`, `insert-image`, `suggest`, `nest`, and `unnest` all operate on that tab.
+Google's editor deep-links to a tab with a `?tab=<id>` query param (e.g. `.../edit?tab=t.abc123`). `gdoc` honors it: a pasted tab URL acts like `--tab <id>`, so `cat`, `edit`, `write`, `insert`, `toc`, `structure`, `insert-image`, `suggest`, `nest`, and `unnest` all operate on that tab. The URL's value is matched as a tab ID only, so a tab titled like another tab's ID can't capture it; an explicit `--tab` matches titles first, then IDs.
 
 ```bash
 # Reads the "Notes" tab — same as `gdoc cat --tab t.abc123 DOC`
@@ -516,7 +516,7 @@ gdoc cat 'https://docs.google.com/document/d/DOC/edit?tab=t.abc123'
 
 One special case: the editor auto-appends `?tab=t.0` to the address bar for the **first** tab, so it's ambient UI noise rather than an intentional selection. `gdoc` therefore treats `?tab=t.0` as if no tab were given — the common pasted URL stays on the high-fidelity Drive export path. To force the Docs-API read of the literal first tab, pass `--tab t.0` explicitly. Caveat: tab ids are assigned at creation and survive reordering, so after tabs are dragged around, `t.0` may no longer be the first-positioned tab — the rule still drops it, so pass `--tab t.0` when you mean that tab specifically.
 
-Precedence: an explicit `--tab` (or `cat --all-tabs`) always overrides the URL. Combining a URL tab with a whole-document flag is an error (`cat --comments`/`--revision`, `write --force-collapse-tabs`) — the message names the URL so you know to drop `?tab=`. Whole-document commands that can't target a tab (`pull`, `push`, `export`, `diff`, `comments`, `images`) ignore a URL tab but print a one-line `NOTE:` to stderr when they do (silent for `t.0`, and under `--quiet`).
+Precedence: an explicit `--tab` (or `cat --all-tabs`) always overrides the URL. Combining a URL tab with a whole-document flag is an error (`cat --comments`/`--revision`, `write --force-collapse-tabs`) — the message names the URL so you know to drop `?tab=`. Whole-document commands that can't target a tab (`pull`, `push`, `export`, `diff`, `comments`, `comment`, `images`) ignore a URL tab but print a one-line `NOTE:` to stderr when they do (silent for `t.0`, and under `--quiet`).
 
 > **Spreadsheets:** Sheets deep-links use `#gid=<n>`, which `gdoc` does not yet parse — select a worksheet with `--tab`/`--range` instead.
 

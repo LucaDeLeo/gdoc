@@ -744,7 +744,7 @@ class TestInsertMarkdownIntoTab:
         captured = _capture_batch_updates(mock_svc)
 
         result = insert_markdown_into_tab(
-            "doc1", "TODO", "hello\n", position="start", replace=False,
+            "doc1", "t.todo", "hello\n", position="start", replace=False,
         )
 
         assert result["tab_id"] == "t.todo"
@@ -775,7 +775,7 @@ class TestInsertMarkdownIntoTab:
         captured = _capture_batch_updates(mock_svc)
 
         result = insert_markdown_into_tab(
-            "doc1", "TODO", "tail", position="end", replace=False,
+            "doc1", "t.todo", "tail", position="end", replace=False,
         )
 
         assert result["insert_index"] == 19
@@ -795,7 +795,7 @@ class TestInsertMarkdownIntoTab:
         captured = _capture_batch_updates(mock_svc)
 
         insert_markdown_into_tab(
-            "doc1", "TODO", "new content", replace=True,
+            "doc1", "t.todo", "new content", replace=True,
         )
 
         reqs = captured[0]["requests"]
@@ -815,7 +815,7 @@ class TestInsertMarkdownIntoTab:
         captured = _capture_batch_updates(mock_svc)
 
         insert_markdown_into_tab(
-            "doc1", "TODO", "content", replace=True,
+            "doc1", "t.todo", "content", replace=True,
         )
 
         reqs = captured[0]["requests"]
@@ -830,6 +830,16 @@ class TestInsertMarkdownIntoTab:
 
         with pytest.raises(GdocError, match="tab not found"):
             insert_markdown_into_tab("doc1", "Not A Real Tab", "hi")
+
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    def test_title_is_not_a_tab_id(self, mock_get):
+        """Callers pass the tab ID they resolved; a title doesn't match."""
+        from gdoc.api.docs import insert_markdown_into_tab
+
+        mock_get.return_value = self._tabs_doc()
+
+        with pytest.raises(GdocError, match="tab not found"):
+            insert_markdown_into_tab("doc1", "TODO", "hi")
 
     @patch("gdoc.api.docs.get_docs_service")
     @patch("gdoc.api.docs.get_document_with_tabs")
@@ -852,7 +862,7 @@ class TestInsertMarkdownIntoTab:
         captured = _capture_batch_updates(mock_svc)
 
         result = insert_markdown_into_tab(
-            "doc1", "TODO", "new content", replace=True, doc=prefetched,
+            "doc1", "t.todo", "new content", replace=True, doc=prefetched,
         )
 
         mock_get.assert_not_called()

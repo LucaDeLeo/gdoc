@@ -516,3 +516,101 @@ class TestInfoDoesNotAuthorizeTabWrites:
                 with pytest.raises(GdocError, match="no read baseline"):
                     cmd_write(_write_args("abc123", "B", str(f)))
                 mi.assert_not_called()
+
+
+class TestFlagTabKeepsWhitespace:
+    """A non-blank --tab is used as given: titles can carry spaces."""
+
+    def test_value_is_not_stripped(self):
+        from gdoc.cli import _effective_tab
+
+        assert _effective_tab(None, " Notes ") == (" Notes ", False)
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 7})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.a", "Notes"), ("t.b", " Notes ")))
+    def test_spaced_title_targets_its_own_tab(
+        self, _doc, mock_insert, _ver, _upd, tmp_path,
+    ):
+        f = tmp_path / "body.md"
+        f.write_text("# new\n")
+        cmd_write(_write_args("abc123", " Notes ", str(f), force=True))
+        assert mock_insert.call_args.args[1] == "t.b"
+
+
+class TestMissingVersionFailsClosed:
+    """No Drive version means the write can't be shown current: refuse."""
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "Y")))
+    @patch("gdoc.state.load_state",
+           return_value=DocState(tab_read_versions={"t.x": 100}))
+    def test_per_tab_baseline(self, _load, _doc, mock_insert, _ver, _upd, tmp_path):
+        f = tmp_path / "body.md"
+        f.write_text("# new\n")
+        with pytest.raises(GdocError, match="no version"):
+            cmd_write(_write_args("abc123", "X", str(f)))
+        mock_insert.assert_not_called()
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "Y")))
+    def test_stamped_file(self, _doc, mock_insert, _ver, _upd, tmp_path):
+        f = tmp_path / "draft.md"
+        f.write_text("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
+        with pytest.raises(GdocError, match="no version"):
+            cmd_write(_write_args("abc123", "X", str(f)))
+        mock_insert.assert_not_called()
+
+
+class TestStaleStampedTabWriteRecovery:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 101})
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "Y")))
+    def test_recovery_stays_on_the_tab(
+        self, _doc, mock_insert, _ver, _upd, tmp_path,
+    ):
+        """Pushing a fresh pull would collapse the tabs; recover by tab."""
+        f = tmp_path / "draft.md"
+        f.write_text("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
+        with pytest.raises(GdocError) as exc:
+            cmd_write(_write_args("abc123", "X", str(f)))
+        msg = str(exc.value)
+        assert exc.value.exit_code == 3
+        assert "gdoc cat abc123 --tab X >" in msg
+        assert "gdoc write --tab X abc123" in msg
+        assert "push" not in msg
+        mock_insert.assert_not_called()
+
+
+class TestTabScopedChangeWarning:
+    """`edit`/`nest`/image commands warn against the tab they change."""
+
+    def _warn(self, change_info, tab_id, capsys):
+        from gdoc.cli import _warn_if_changed
+
+        _warn_if_changed("abc123", change_info, tab_id)
+        return "WARN: doc changed since last read" in capsys.readouterr().err
+
+    def test_tab_read_counts(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("gdoc.state.STATE_DIR", tmp_path)
+        save_state("abc123", DocState(tab_read_versions={"t.x": 5}))
+        current = ChangeInfo(current_version=5, last_read_version=None)
+        moved = ChangeInfo(current_version=6, last_read_version=None)
+        assert not self._warn(current, "t.x", capsys)
+        assert self._warn(moved, "t.x", capsys)
+        # Another tab, or the whole doc, was never read.
+        assert self._warn(current, "t.y", capsys)
+        assert self._warn(current, None, capsys)
+
+    def test_quiet_never_warns(self, capsys):
+        assert not self._warn(None, "t.x", capsys)

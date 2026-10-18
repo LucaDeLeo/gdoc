@@ -5,10 +5,14 @@ import io
 import os
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from gdoc import __version__
 from gdoc.revdiff import DEFAULT_CONTEXT, DEFAULT_MIN_COMMON
 from gdoc.util import SPREADSHEET_MIME, AuthError, GdocError
+
+if TYPE_CHECKING:
+    from gdoc.state import DocState
 
 # Google's editor auto-appends ``?tab=t.0`` (the first tab) to every doc URL,
 # so a URL tab of ``t.0`` is treated as ambient noise, not an intentional
@@ -67,15 +71,15 @@ def _effective_tab(
       selection. Escape hatch: pass ``--tab t.0`` explicitly.
 
     Returns (effective_tab, from_url) where from_url is True when the
-    returned tab originated from the URL (used to tailor error wording).
+    returned tab came from the URL: it is then a tab ID, to be matched by
+    ID only (`by_id`), and errors name the URL.
     """
     if flag_tab is not None:
         # A blank --tab would win precedence here but read as "no tab" at
         # every truthiness check downstream — a silent wrong-target. Reject.
-        # Return the stripped value: resolve_tab matches titles verbatim,
-        # so stray whitespace would pass this guard then "tab not found".
-        flag_tab = flag_tab.strip()
-        if not flag_tab:
+        # Return the value unstripped: tab titles can carry leading or
+        # trailing spaces, and stripping could match a different tab.
+        if not flag_tab.strip():
             raise GdocError(
                 "--tab requires a non-empty tab title or id", exit_code=3,
             )
@@ -85,6 +89,33 @@ def _effective_tab(
     if url_tab is not None and url_tab != _FIRST_TAB_ID:
         return url_tab, True
     return None, False
+
+
+def _warn_if_changed(
+    doc_id: str, change_info, tab_id: str | None = None,
+) -> None:
+    """Warn (never block) when the doc moved since this machine last read it.
+
+    For a tab-scoped command a read of that tab counts too, as in
+    _check_tab_write_conflict: `cat --tab X` leaves the whole-doc baseline
+    unset, so has_conflict alone would warn after every tab read.
+    """
+    if change_info is None:
+        return
+    if tab_id is None:
+        changed = change_info.has_conflict
+    else:
+        from gdoc.state import load_state
+
+        state = load_state(doc_id)
+        baseline = _max_opt(
+            _global_read_baseline(state), _tab_read_version(state, tab_id),
+        )
+        changed = change_info.current_version is not None and (
+            baseline is None or change_info.current_version != baseline
+        )
+    if changed:
+        print("WARN: doc changed since last read", file=sys.stderr)
 
 
 def _note_discarded_url_tab(
@@ -935,10 +966,8 @@ def cmd_insert(args) -> int:
 
     _check_tab_write_conflict(doc_id, tab_id, tab_name, force)
 
-    # Write the tab the conflict check just cleared, by its ID.
     result = insert_markdown_into_tab(
         doc_id, tab_id, content, position=position, replace=False, doc=doc,
-        by_id=True,
     )
 
     from gdoc.api.drive import get_file_version
@@ -1370,10 +1399,6 @@ def _prepare_text_replacement(
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
 
-    # Conflict warning (warn but don't block, per spec)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
-
     # Get document structure + revision ID
     from gdoc.api.docs import find_text_in_document, get_document
 
@@ -1423,6 +1448,9 @@ def _prepare_text_replacement(
         document = get_document(doc_id)
         revision_id = document.get("revisionId", "")
         search_body = document.get("body", {})
+
+    # Conflict warning (warn but don't block, per spec)
+    _warn_if_changed(doc_id, change_info, tab_id)
 
     if cell is not None:
         from gdoc.api.docs import resolve_cell_range
@@ -1662,8 +1690,6 @@ def cmd_nest(args) -> int:
 
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import (
         StaleRevisionError,
@@ -1681,14 +1707,9 @@ def cmd_nest(args) -> int:
 
     def reread_tab() -> dict | None:
         """This tab in a fresh read, found by ID only (never by title)."""
-        def walk(ts):
-            for t in ts:
-                yield t
-                yield from walk(t.get("childTabs", []))
-        for t in walk(get_document_with_tabs(doc_id).get("tabs", [])):
-            if t.get("tabProperties", {}).get("tabId") == tab_id:
-                return t
-        return None
+        return resolve_raw_tab(
+            get_document_with_tabs(doc_id).get("tabs", []), tab_id, by_id=True,
+        )
 
     doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
@@ -1917,7 +1938,8 @@ def _file_stamp(metadata: dict, doc_id: str) -> str | None:
 
 
 def _stale_file_error(
-    doc_id: str, file_path: str, stamp: str, current_version,
+    doc_id: str, file_path: str, stamp: str, current_version: int,
+    tab: str | None = None,
 ) -> GdocError:
     """Refusal for a stamped file whose doc has moved on.
 
@@ -1928,20 +1950,35 @@ def _stale_file_error(
         f"{file_path} is from doc version {stamp}; the doc is now at "
         f"version {current_version}. Nothing was sent and {file_path} "
         "is unchanged. To recover:\n"
-        + _stale_recovery(doc_id, file_path)
+        + _stale_recovery(doc_id, file_path, tab)
         + "\n  4. Use --force only to discard the newer changes in the doc.",
         exit_code=3,
     )
 
 
-def _stale_recovery(doc_id: str, file_path: str) -> str:
-    """Recovery steps for a stale stamped file, via a new path."""
+def _stale_recovery(
+    doc_id: str, file_path: str, tab: str | None = None,
+) -> str:
+    """Recovery steps for a stale stamped file, via a new path.
+
+    For a tab write the fresh copy is that tab alone: a pull holds every
+    tab, and pushing it would collapse a multi-tab doc.
+    """
     import os
     import shlex
 
     root, ext = os.path.splitext(file_path)
     latest = f"{root}.latest{ext or '.md'}"
     f, new = shlex.quote(file_path), shlex.quote(latest)
+    if tab is not None:
+        t = shlex.quote(tab)
+        return (
+            f"  1. gdoc cat {doc_id} --tab {t} > {new}   "
+            "(fresh copy of the tab)\n"
+            f"  2. diff {f} {new}   (what changed in the tab)\n"
+            f"  3. Carry your edits into {new} and run "
+            f"'gdoc write --tab {t} {doc_id} {new}'."
+        )
     return (
         f"  1. gdoc pull {doc_id} {new}   (fresh copy at the current version)\n"
         f"  2. gdoc diff {doc_id} {f}   (what changed in the doc)\n"
@@ -2011,6 +2048,29 @@ def _warn_stamp_kept(file_path: str, reason: str) -> None:
     )
 
 
+def _check_file_stamp(
+    doc_id: str, stamp: str, file_path: str, current_version: int | None,
+    body: str | None = None, tab: str | None = None,
+) -> bool:
+    """Refuse a stamped file whose doc has moved past its stamp.
+
+    Returns True when the doc moved but already equals `body` (in sync:
+    skip the upload). A missing version refuses too: the file can't be
+    shown current.
+    """
+    if current_version is None:
+        raise GdocError(
+            f"Drive returned no version for {doc_id}, so {file_path} can't "
+            "be confirmed current. Nothing was sent; use --force to write "
+            "anyway.",
+        )
+    if str(current_version) == stamp:
+        return False
+    if body is not None and _doc_matches(doc_id, body):
+        return True
+    raise _stale_file_error(doc_id, file_path, stamp, current_version, tab)
+
+
 def _check_write_conflict(
     doc_id: str, quiet: bool, force: bool, body: str | None = None,
     file_stamp: str | None = None, file_path: str | None = None,
@@ -2042,13 +2102,9 @@ def _check_write_conflict(
             from gdoc.api.drive import get_file_version
 
             current_version = get_file_version(doc_id).get("version")
-        if current_version is not None and str(current_version) != file_stamp:
-            if body is not None and _doc_matches(doc_id, body):
-                return change_info, True
-            raise _stale_file_error(
-                doc_id, file_path or "file", file_stamp, current_version,
-            )
-        return change_info, False
+        return change_info, _check_file_stamp(
+            doc_id, file_stamp, file_path, current_version, body,
+        )
 
     if not quiet:
         if not force:
@@ -2105,18 +2161,18 @@ def _check_write_conflict(
     return None, False
 
 
-def _max_opt(a, b):
+def _max_opt(a: int | None, b: int | None) -> int | None:
     """max of two Optional[int]s, treating None as absent."""
     vals = [v for v in (a, b) if v is not None]
     return max(vals) if vals else None
 
 
-def _tab_read_version(state, tab_id: str):
+def _tab_read_version(state: "DocState | None", tab_id: str) -> int | None:
     """This tab's stamped read baseline from state, or None."""
     return state.tab_read_versions.get(tab_id) if state else None
 
 
-def _global_read_baseline(state):
+def _global_read_baseline(state: "DocState | None") -> int | None:
     """Global last_read_version, gated on whole-doc provenance.
 
     Pre-0.23 state files stored a `cat --tab A` version in
@@ -2129,8 +2185,10 @@ def _global_read_baseline(state):
     return state.last_read_version
 
 
-def _raise_on_tab_conflict(tab_label: str, baseline, current_version) -> None:
-    """Raise GdocError(exit_code=3) if a tab write can't be safely made."""
+def _raise_on_tab_conflict(
+    tab_label: str, baseline: int | None, current_version: int | None,
+) -> None:
+    """Raise GdocError if a tab write can't be safely made."""
     if baseline is None:
         raise GdocError(
             f"no read baseline for tab {tab_label!r}. "
@@ -2138,7 +2196,13 @@ def _raise_on_tab_conflict(tab_label: str, baseline, current_version) -> None:
             "the whole doc) first, or use --force to overwrite.",
             exit_code=3,
         )
-    if current_version is not None and current_version != baseline:
+    if current_version is None:
+        raise GdocError(
+            f"Drive returned no version, so tab {tab_label!r} can't be "
+            "confirmed current. Nothing was sent; use --force to write "
+            "anyway.",
+        )
+    if current_version != baseline:
         # "may" is honest: Drive versions are doc-global, so a sibling tab's
         # edit also trips this. Conservative, and no worse than pre-per-tab.
         raise GdocError(
@@ -2185,11 +2249,10 @@ def _check_tab_write_conflict(
     if file_stamp is not None:
         from gdoc.api.drive import get_file_version
 
-        current_version = get_file_version(doc_id).get("version")
-        if current_version is not None and str(current_version) != file_stamp:
-            raise _stale_file_error(
-                doc_id, file_path or "file", file_stamp, current_version,
-            )
+        _check_file_stamp(
+            doc_id, file_stamp, file_path,
+            get_file_version(doc_id).get("version"), tab=tab_label,
+        )
         return
     from gdoc.state import load_state
 
@@ -2279,9 +2342,8 @@ def cmd_write(args) -> int:
             file_stamp=stamp, file_path=file_path,
         )
 
-        # Write the tab the conflict check just cleared, by its ID.
         result = insert_markdown_into_tab(
-            doc_id, tab_id, content, replace=True, doc=doc, by_id=True,
+            doc_id, tab_id, content, replace=True, doc=doc,
         )
         # Note: this version is fetched AFTER the batchUpdate — unlike the
         # whole-doc path, whose files.update returns its own version
@@ -3139,8 +3201,9 @@ def _try_anchored_comment(doc_id: str, text: str, quote: str) -> str:
 
 def cmd_comment(args) -> int:
     """Handler for `gdoc comment`."""
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
+    _note_discarded_url_tab(url_tab, "comment", quiet)
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)
@@ -3661,7 +3724,7 @@ def _cleanup_temp_image(temp_file_id: str | None) -> None:
 
 
 def _resolve_image_target_tab(
-    doc: dict, tab_name: str | None, by_id: bool = False,
+    doc: dict, tab_name: str | None, *, by_id: bool,
 ) -> dict | None:
     """Pick the tab an image operation targets; None = legacy body.
 
@@ -3740,8 +3803,6 @@ def cmd_insert_image(args) -> int:
 
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import get_document_with_tabs
 
@@ -3750,6 +3811,7 @@ def cmd_insert_image(args) -> int:
     tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     tab = _resolve_image_target_tab(doc, tab_name, by_id=tab_from_url)
     tab_id = tab["id"] if tab else None
+    _warn_if_changed(doc_id, change_info, tab_id)
     body = tab["body"] if tab else doc.get("body", {})
 
     insert_at = _resolve_insert_index(
@@ -3813,8 +3875,6 @@ def cmd_replace_image(args) -> int:
 
     change_info = pre_flight(doc_id, quiet=quiet)
     _require_doc(doc_id, change_info)
-    if change_info and change_info.has_conflict:
-        print("WARN: doc changed since last read", file=sys.stderr)
 
     from gdoc.api.docs import find_object_tab, get_document_with_tabs
 
@@ -3826,6 +3886,7 @@ def cmd_replace_image(args) -> int:
             f"image object not found: {object_id} (see `gdoc images`)",
             exit_code=3,
         )
+    _warn_if_changed(doc_id, change_info, tab_id)
 
     uri, temp_file_id = _resolve_image_source(args.image)
 

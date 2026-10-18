@@ -290,19 +290,6 @@ def extract_doc_ref(input_str: str) -> tuple[str, str | None]:
     raise ValueError(f"Cannot extract document ID from: {input_str}")
 
 
-def extract_doc_id(input_str: str) -> str:
-    """Extract document ID from a URL or bare ID string.
-
-    Accepts:
-    - Full Google Docs URL: https://docs.google.com/document/d/ID/edit
-    - Full Drive URL with query: https://drive.google.com/open?id=ID
-    - Bare document ID: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ
-
-    Raises ValueError if no valid ID can be extracted.
-    """
-    return extract_doc_ref(input_str)[0]
-
-
 def find_overlapping(text: str, key: str):
     """Yield the start of every occurrence of *key* in *text*, overlaps included.
 

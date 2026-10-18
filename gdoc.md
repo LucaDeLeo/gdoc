@@ -209,8 +209,8 @@ Tab writes (`write --tab X`, `insert --tab X`, or a `?tab=` URL) check a baselin
 for tab X: a whole-doc `gdoc cat DOC` or a `gdoc cat DOC --tab X` sets it, and a
 read of another tab doesn't. Without one they refuse with `no read baseline for
 tab 'X'`. Drive's version is per document, so an edit in any tab still trips the
-check. A file from `gdoc pull` is checked against its `gdoc-version` stamp
-instead.
+check. `write` from a file `gdoc pull` stamped (`gdoc-version`) checks the stamp
+instead of the baseline.
 
 ### `--quiet` Flag
 
@@ -362,7 +362,7 @@ Regex: `r'/d/([a-zA-Z0-9_-]+)'` extracts the ID from any Google Docs/Drive URL.
 ### Tab URLs (`?tab=`)
 
 Google's editor adds `?tab=<id>` to the URL of an open tab. A pasted tab URL acts
-like `--tab <id>` for `cat`, `edit` (incl. `--cell`), `write`, `insert`, `toc`,
+like `--tab <id>` (matched by ID only) for `cat`, `edit` (incl. `--cell`), `write`, `insert`, `toc`,
 `structure`, `insert-image`, `suggest`, `nest` and `unnest`:
 
 ```bash
@@ -375,7 +375,7 @@ gdoc nest "https://docs.google.com/document/d/DOC/edit?tab=t.abc123" "Bravo"
   choice. Pass `--tab t.0` to target that tab on purpose.
 - A URL tab plus a whole-doc flag (`cat --comments`, `cat --revision`,
   `write --force-collapse-tabs`) is an error, exit 3.
-- Whole-doc commands (`pull`, `push`, `export`, `diff`, `comments`, `images`)
+- Whole-doc commands (`pull`, `push`, `export`, `diff`, `comments`, `comment`, `images`)
   ignore a URL tab and print a stderr `NOTE:` saying so.
 
 ## Error Handling

@@ -419,7 +419,9 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
     return "".join(parts)
 
 
-def resolve_tab(tabs: list[dict], tab_name: str, by_id: bool = False) -> dict:
+def resolve_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict:
     """Resolve a tab by title (case-insensitive) or ID.
 
     Args:
@@ -1333,15 +1335,15 @@ def get_document_structure(
 
 
 def resolve_raw_tab(
-    tabs: list[dict], tab_name: str, by_id: bool = False,
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
 ) -> dict | None:
     """Find a raw tab dict by title (case-insensitive) or tab ID.
 
     Unlike resolve_tab (which returns a flattened summary), this returns
     the tab's raw API dict — tabProperties, documentTab, childTabs —
     searching the whole tree. Title matches win over ID matches,
-    mirroring resolve_tab (and its by_id). Returns None when nothing
-    matches.
+    mirroring resolve_tab; by_id skips the title pass, as there.
+    Returns None when nothing matches.
     """
     def walk(ts: list[dict]):
         for t in ts:
@@ -1498,12 +1500,11 @@ def _strip_trailing_newline_unless_hr(parsed) -> None:
 
 def insert_markdown_into_tab(
     doc_id: str,
-    tab_name: str,
+    tab_id: str,
     markdown: str,
     position: str = "start",
     replace: bool = False,
     doc: dict | None = None,
-    by_id: bool = False,
 ) -> dict:
     """Insert (or replace) markdown content in a tab via Docs API.
 
@@ -1512,7 +1513,8 @@ def insert_markdown_into_tab(
 
     Args:
         doc_id: Document ID.
-        tab_name: Tab title (case-insensitive) or tab ID.
+        tab_id: ID of the tab to write (callers resolve titles first, so
+            the tab written is the tab they checked).
         markdown: Markdown source to insert (frontmatter should be
             stripped by the caller).
         position: "start" or "end". Ignored when replace=True.
@@ -1523,7 +1525,6 @@ def insert_markdown_into_tab(
             tab for its conflict check, pass it here to avoid a second fetch.
             Its revisionId still pins writeControl, so a concurrent edit
             between the fetch and this write is still rejected.
-        by_id: tab_name is a tab ID; match it as one (see resolve_tab).
 
     Returns:
         Dict with "tab_id", "tab_title", "insert_index".
@@ -1534,7 +1535,7 @@ def insert_markdown_into_tab(
         doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
     tabs = flatten_tabs(doc.get("tabs", []))
-    tab_match = resolve_tab(tabs, tab_name, by_id=by_id)
+    tab_match = resolve_tab(tabs, tab_id, by_id=True)
     tab_id = tab_match["id"]
     body = tab_match["body"]
 

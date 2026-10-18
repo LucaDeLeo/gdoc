@@ -15,13 +15,15 @@ All notable changes to `gdoc` are documented here. This project follows
   `--no-notify` with `--domain` or `--anyone` (link shares, which never
   send email) is rejected with exit 3 before any API call.
 - **Document URLs honor their `?tab=` deep link.** Google's editor appends
-  `?tab=<id>` when you open a tab, so a pasted tab URL now acts exactly like
+  `?tab=<id>` when you open a tab, so a pasted tab URL now acts like
   `--tab <id>` for `cat`, `edit` (incl. `--cell`), `write`, `insert`, `toc`,
-  `structure`, `insert-image`, `suggest` (0.21.0's suggested-edit
-  command), and `nest`/`unnest` (0.22.0), the last two wired in via this
-  release's merges — previously the tab was silently dropped
-  and the command operated on the first tab (or whole doc). An explicit
-  `--tab`/`--all-tabs` still overrides the URL.
+  `structure`, `insert-image`, `suggest` and `nest`/`unnest` — previously
+  the tab was silently dropped and the command operated on the first tab
+  (or whole doc). The URL's value is matched as a tab ID only, so a tab
+  titled like another tab's ID can't capture it (an explicit `--tab` still
+  matches titles first). An explicit `--tab`/`--all-tabs` overrides the
+  URL. `comment`, like the other whole-document commands, notes on stderr
+  that it ignores a URL tab.
 
 
 ### Fixed
@@ -63,7 +65,14 @@ All notable changes to `gdoc` are documented here. This project follows
   single-tab rule `cat --tab` already follows), so a following
   whole-document `write`/`push` doesn't conflict with the CLI's own edit.
 - **Blank `--tab` values are rejected** (exit 3) instead of silently
-  reading as "no tab" and mutating the default target.
+  reading as "no tab" and mutating the default target. A non-blank value
+  is used as given, so titles with leading or trailing spaces still match.
+- **`edit`, `nest`/`unnest`, `insert-image` and `replace-image` stop
+  warning "doc changed since last read" after a read of the tab they
+  change**: the warning now counts that tab's read baseline, not only a
+  whole-doc read.
+- **Write guards refuse when Drive reports no version** instead of letting
+  the write through unchecked (stamped files and per-tab baselines).
 
   A plain `cat`/`pull` still covers every tab (its Drive export is the whole
   document), so the common read-then-write flow is unchanged. On a single-tab

@@ -66,7 +66,6 @@ class TestInsertBasic:
         mock_insert.assert_called_once_with(
             "abc123", "t.todo", "# Hello",
             position="start", replace=False, doc=mock_doc.return_value,
-            by_id=True,
         )
 
     @patch("gdoc.state.load_state", return_value=_read_state())
@@ -113,7 +112,6 @@ class TestInsertBasic:
         mock_insert.assert_called_once_with(
             "abc123", "t.todo", "tail",
             position="end", replace=False, doc=mock_doc.return_value,
-            by_id=True,
         )
 
 
@@ -184,7 +182,6 @@ class TestInsertUrlTab:
         mock_insert.assert_called_once_with(
             "abc123", "t.second", "# Hello",
             position="start", replace=False, doc=mock_doc.return_value,
-            by_id=True,
         )
 
     def test_no_tab_anywhere_errors(self, tmp_path):
