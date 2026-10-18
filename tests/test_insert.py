@@ -64,8 +64,9 @@ class TestInsertBasic:
         out = capsys.readouterr().out
         assert 'OK inserted into "TODO"' in out
         mock_insert.assert_called_once_with(
-            "abc123", "TODO", "# Hello",
+            "abc123", "t.todo", "# Hello",
             position="start", replace=False, doc=mock_doc.return_value,
+            by_id=True,
         )
 
     @patch("gdoc.state.load_state", return_value=_read_state())
@@ -110,8 +111,9 @@ class TestInsertBasic:
         args = _make_args(file=str(f), position="end")
         cmd_insert(args)
         mock_insert.assert_called_once_with(
-            "abc123", "TODO", "tail",
+            "abc123", "t.todo", "tail",
             position="end", replace=False, doc=mock_doc.return_value,
+            by_id=True,
         )
 
 
@@ -182,6 +184,7 @@ class TestInsertUrlTab:
         mock_insert.assert_called_once_with(
             "abc123", "t.second", "# Hello",
             position="start", replace=False, doc=mock_doc.return_value,
+            by_id=True,
         )
 
     def test_no_tab_anywhere_errors(self, tmp_path):
@@ -227,7 +230,7 @@ class TestInsertUrlTab:
             tab="Explicit",
         )
         cmd_insert(args)
-        assert mock_insert.call_args.args[1] == "Explicit"
+        assert mock_insert.call_args.args[1] == "t.e"  # the "Explicit" tab
 
 
 class TestInsertConflict:

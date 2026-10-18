@@ -120,6 +120,12 @@ class TestResolveRawTab:
         tab = resolve_raw_tab(tabs, "t1")
         assert tab["tabProperties"]["tabId"] == "x9"
 
+    def test_by_id_ignores_titles(self):
+        tabs = [_tab("t1", "Main"), _tab("x9", "t1")]
+        tab = resolve_raw_tab(tabs, "t1", by_id=True)
+        assert tab["tabProperties"]["tabId"] == "t1"
+        assert resolve_raw_tab(tabs, "Main", by_id=True) is None
+
     def test_not_found_returns_none(self):
         assert resolve_raw_tab(_DOC["tabs"], "missing") is None
 

@@ -224,7 +224,8 @@ class TestTocTab:
         mock_headings.return_value = _headings((1, "h.abc", "Title"))
         rc = cmd_toc(_make_args(doc=f"{BASE_URL}?tab=t.o50waw95wxfc"))
         assert rc == 0
-        mock_resolve.assert_called_once_with([tab], "t.o50waw95wxfc")
+        # A URL value is a tab ID, matched as one.
+        mock_resolve.assert_called_once_with([tab], "t.o50waw95wxfc", by_id=True)
         mock_headings.assert_called_once_with(DOC_ID, body=tab["body"])
         out = capsys.readouterr().out
         assert f"{BASE_URL}?tab=t.o50waw95wxfc#heading=h.abc" in out

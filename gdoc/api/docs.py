@@ -419,12 +419,15 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
     return "".join(parts)
 
 
-def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
+def resolve_tab(tabs: list[dict], tab_name: str, by_id: bool = False) -> dict:
     """Resolve a tab by title (case-insensitive) or ID.
 
     Args:
         tabs: Flattened list of tab dicts from flatten_tabs().
         tab_name: Tab title or ID to match.
+        by_id: Match the ID only. For values known to be IDs (a URL's
+            ?tab=, an ID resolved earlier): a tab titled like another
+            tab's ID would otherwise win.
 
     Returns:
         The matched tab dict.
@@ -432,9 +435,10 @@ def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
     Raises:
         GdocError: If no matching tab is found.
     """
-    for t in tabs:
-        if t["title"].lower() == tab_name.lower():
-            return t
+    if not by_id:
+        for t in tabs:
+            if t["title"].lower() == tab_name.lower():
+                return t
     for t in tabs:
         if str(t["id"]) == tab_name:
             return t
@@ -820,7 +824,7 @@ def _insert_table(
                 documentId=doc_id, includeTabsContent=True,
             ).execute()
             tabs = flatten_tabs(doc.get("tabs", []))
-            tab_match = resolve_tab(tabs, tab_id)
+            tab_match = resolve_tab(tabs, tab_id, by_id=True)
             cell_indices = _find_table_cell_indices(
                 None, index, body=tab_match["body"],
             )
@@ -1328,23 +1332,27 @@ def get_document_structure(
         _translate_http_error(e, doc_id)
 
 
-def resolve_raw_tab(tabs: list[dict], tab_name: str) -> dict | None:
+def resolve_raw_tab(
+    tabs: list[dict], tab_name: str, by_id: bool = False,
+) -> dict | None:
     """Find a raw tab dict by title (case-insensitive) or tab ID.
 
     Unlike resolve_tab (which returns a flattened summary), this returns
     the tab's raw API dict — tabProperties, documentTab, childTabs —
     searching the whole tree. Title matches win over ID matches,
-    mirroring resolve_tab. Returns None when nothing matches.
+    mirroring resolve_tab (and its by_id). Returns None when nothing
+    matches.
     """
     def walk(ts: list[dict]):
         for t in ts:
             yield t
             yield from walk(t.get("childTabs", []))
 
-    for t in walk(tabs):
-        props = t.get("tabProperties", {})
-        if props.get("title", "").lower() == tab_name.lower():
-            return t
+    if not by_id:
+        for t in walk(tabs):
+            props = t.get("tabProperties", {})
+            if props.get("title", "").lower() == tab_name.lower():
+                return t
     for t in walk(tabs):
         if str(t.get("tabProperties", {}).get("tabId", "")) == tab_name:
             return t
@@ -1495,6 +1503,7 @@ def insert_markdown_into_tab(
     position: str = "start",
     replace: bool = False,
     doc: dict | None = None,
+    by_id: bool = False,
 ) -> dict:
     """Insert (or replace) markdown content in a tab via Docs API.
 
@@ -1514,6 +1523,7 @@ def insert_markdown_into_tab(
             tab for its conflict check, pass it here to avoid a second fetch.
             Its revisionId still pins writeControl, so a concurrent edit
             between the fetch and this write is still rejected.
+        by_id: tab_name is a tab ID; match it as one (see resolve_tab).
 
     Returns:
         Dict with "tab_id", "tab_title", "insert_index".
@@ -1524,7 +1534,7 @@ def insert_markdown_into_tab(
         doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
     tabs = flatten_tabs(doc.get("tabs", []))
-    tab_match = resolve_tab(tabs, tab_name)
+    tab_match = resolve_tab(tabs, tab_name, by_id=by_id)
     tab_id = tab_match["id"]
     body = tab_match["body"]
 
@@ -1684,7 +1694,7 @@ def replace_formatted(
         if tab_id:
             doc = get_document_with_tabs(doc_id)
             tabs = flatten_tabs(doc.get("tabs", []))
-            tab_match = resolve_tab(tabs, tab_id)
+            tab_match = resolve_tab(tabs, tab_id, by_id=True)
             fetch_body = tab_match["body"]
         else:
             doc = service.documents().get(documentId=doc_id).execute()

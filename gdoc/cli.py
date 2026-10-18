@@ -531,7 +531,7 @@ def cmd_cat(args) -> int:
         want_md = not getattr(args, "plain", False)
 
         if tab:
-            match = resolve_tab(tabs, tab)
+            match = resolve_tab(tabs, tab, by_id=tab_from_url)
             # On a multi-tab doc a `--tab` read covers only that tab, so it
             # stamps just that tab's baseline. On a single-tab doc the one tab
             # IS the whole document, so the read advances the whole-doc
@@ -717,7 +717,7 @@ def cmd_toc(args) -> int:
     """Handler for `gdoc toc`."""
     doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
-    tab, _ = _effective_tab(url_tab, getattr(args, "tab", None))
+    tab, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     max_depth = getattr(args, "max_depth", 0)
     no_links = getattr(args, "no_links", False)
 
@@ -734,7 +734,7 @@ def cmd_toc(args) -> int:
         from gdoc.api.docs import get_document_tabs, resolve_tab
 
         tabs = get_document_tabs(doc_id)
-        tab_match = resolve_tab(tabs, tab)
+        tab_match = resolve_tab(tabs, tab, by_id=tab_from_url)
         body = tab_match["body"]
         tab_id = tab_match["id"]
 
@@ -880,7 +880,7 @@ def cmd_insert(args) -> int:
     doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
     force = getattr(args, "force", False)
-    tab_name, _ = _effective_tab(url_tab, getattr(args, "tab", None))
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     if not tab_name:
         if url_tab == _FIRST_TAB_ID:
             raise GdocError(
@@ -928,13 +928,17 @@ def cmd_insert(args) -> int:
         _require_doc(doc_id, change_info)
 
     doc = get_document_with_tabs(doc_id)
-    tab_match = resolve_tab(flatten_tabs(doc.get("tabs", [])), tab_name)
+    tab_match = resolve_tab(
+        flatten_tabs(doc.get("tabs", [])), tab_name, by_id=tab_from_url,
+    )
     tab_id = tab_match["id"]
 
     _check_tab_write_conflict(doc_id, tab_id, tab_name, force)
 
+    # Write the tab the conflict check just cleared, by its ID.
     result = insert_markdown_into_tab(
-        doc_id, tab_name, content, position=position, replace=False, doc=doc,
+        doc_id, tab_id, content, position=position, replace=False, doc=doc,
+        by_id=True,
     )
 
     from gdoc.api.drive import get_file_version
@@ -1373,7 +1377,7 @@ def _prepare_text_replacement(
     # Get document structure + revision ID
     from gdoc.api.docs import find_text_in_document, get_document
 
-    tab_name, _ = _effective_tab(url_tab, getattr(args, "tab", None))
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     tab_id = None
 
     if suggest:
@@ -1401,7 +1405,10 @@ def _prepare_text_replacement(
         tabs = flatten_tabs(doc.get("tabs", []))
         if not tabs:
             raise GdocError(f"document has no tabs: {doc_id}")
-        tab_match = resolve_tab(tabs, tab_name) if tab_name else tabs[0]
+        tab_match = (
+            resolve_tab(tabs, tab_name, by_id=tab_from_url)
+            if tab_name else tabs[0]
+        )
         tab_id = tab_match["id"]
         search_body = tab_match["body"]
     elif tab_name:
@@ -1409,7 +1416,7 @@ def _prepare_text_replacement(
         doc = get_document_with_tabs(doc_id)
         revision_id = doc.get("revisionId", "")
         tabs = flatten_tabs(doc.get("tabs", []))
-        tab_match = resolve_tab(tabs, tab_name)
+        tab_match = resolve_tab(tabs, tab_name, by_id=tab_from_url)
         tab_id = tab_match["id"]
         search_body = tab_match["body"]
     else:
@@ -1645,7 +1652,7 @@ def cmd_nest(args) -> int:
     rewritten. See gdoc/listnest.py for the method and what is refused.
     """
     doc_id, url_tab = _resolve_doc_ref(args.doc)
-    tab_name, _ = _effective_tab(url_tab, getattr(args, "tab", None))
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     if args.levels < 1:
         raise GdocError("--levels must be at least 1", exit_code=3)
     delta = args.levels if args.command == "nest" else -args.levels
@@ -1696,7 +1703,7 @@ def cmd_nest(args) -> int:
         )
     tabs = doc.get("tabs", [])
     if tab_name:
-        raw_tab = resolve_raw_tab(tabs, tab_name)
+        raw_tab = resolve_raw_tab(tabs, tab_name, by_id=tab_from_url)
         if raw_tab is None:
             raise GdocError(f"tab not found: {tab_name}", exit_code=3)
     elif tabs:
@@ -2264,7 +2271,7 @@ def cmd_write(args) -> int:
 
         doc = get_document_with_tabs(doc_id)
         all_tabs = flatten_tabs(doc.get("tabs", []))
-        tab_match = resolve_tab(all_tabs, tab_name)
+        tab_match = resolve_tab(all_tabs, tab_name, by_id=tab_from_url)
         tab_id = tab_match["id"]
 
         _check_tab_write_conflict(
@@ -2272,8 +2279,9 @@ def cmd_write(args) -> int:
             file_stamp=stamp, file_path=file_path,
         )
 
+        # Write the tab the conflict check just cleared, by its ID.
         result = insert_markdown_into_tab(
-            doc_id, tab_name, content, replace=True, doc=doc,
+            doc_id, tab_id, content, replace=True, doc=doc, by_id=True,
         )
         # Note: this version is fetched AFTER the batchUpdate — unlike the
         # whole-doc path, whose files.update returns its own version
@@ -3652,7 +3660,9 @@ def _cleanup_temp_image(temp_file_id: str | None) -> None:
         )
 
 
-def _resolve_image_target_tab(doc: dict, tab_name: str | None) -> dict | None:
+def _resolve_image_target_tab(
+    doc: dict, tab_name: str | None, by_id: bool = False,
+) -> dict | None:
     """Pick the tab an image operation targets; None = legacy body.
 
     A multi-tab document with no --tab is ambiguous — refuse rather than
@@ -3662,7 +3672,7 @@ def _resolve_image_target_tab(doc: dict, tab_name: str | None) -> dict | None:
 
     tabs = flatten_tabs(doc.get("tabs", []))
     if tab_name:
-        return resolve_tab(tabs, tab_name)
+        return resolve_tab(tabs, tab_name, by_id=by_id)
     if len(tabs) > 1:
         raise GdocError(
             f"document has {len(tabs)} tabs; specify --tab", exit_code=3,
@@ -3737,8 +3747,8 @@ def cmd_insert_image(args) -> int:
 
     doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
-    tab_name, _ = _effective_tab(url_tab, getattr(args, "tab", None))
-    tab = _resolve_image_target_tab(doc, tab_name)
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
+    tab = _resolve_image_target_tab(doc, tab_name, by_id=tab_from_url)
     tab_id = tab["id"] if tab else None
     body = tab["body"] if tab else doc.get("body", {})
 
@@ -3862,7 +3872,7 @@ def cmd_structure(args) -> int:
 
     doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
-    tab_name, _ = _effective_tab(url_tab, getattr(args, "tab", None))
+    tab_name, tab_from_url = _effective_tab(url_tab, getattr(args, "tab", None))
     fields = getattr(args, "fields", None)
     svm = getattr(args, "suggestions_view_mode", None)
     svm = svm.upper() if svm else None
@@ -3886,7 +3896,7 @@ def cmd_structure(args) -> int:
     if tab_name:
         from gdoc.api.docs import flatten_tabs, resolve_raw_tab
 
-        tab = resolve_raw_tab(doc.get("tabs", []), tab_name)
+        tab = resolve_raw_tab(doc.get("tabs", []), tab_name, by_id=tab_from_url)
         if tab is None:
             raise GdocError(
                 f"tab not found: {tab_name} "

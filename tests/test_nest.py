@@ -793,6 +793,21 @@ class TestCommand:
         url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
         assert cmd_nest(_args(doc=url)) == 0
 
+    def test_url_tab_is_matched_by_id_not_title(self, api):
+        """A tab titled like the URL's tab ID must not be picked instead."""
+        decoy = {"tabProperties": {"tabId": "t.0", "title": TAB},
+                 "documentTab": _tab(*STD)}
+        first = _doc(_tab(*STD))
+        first["tabs"].insert(0, decoy)
+        second = _doc(NESTED)
+        second["tabs"].insert(0, decoy)
+        api.get.side_effect = [first, second]
+        url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
+        assert cmd_nest(_args(doc=url)) == 0
+        written = str(api.write.call_args)
+        assert f"'tabId': '{TAB}'" in written
+        assert "'tabId': 't.0'" not in written
+
     def test_tab_flag_beats_url_tab(self, api):
         url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
         with pytest.raises(GdocError, match="tab not found") as exc:
