@@ -1498,6 +1498,30 @@ def _strip_trailing_newline_unless_hr(parsed) -> None:
                 s.end = old_len - 1
 
 
+def _keep_boundary_paragraph_styles(parsed) -> None:
+    """Drop the implicit NORMAL_TEXT from paragraphs that join existing text.
+
+    A replacement's first paragraph merges into the paragraph holding the
+    start of the match, and its last into the one holding the end. A
+    paragraph-style request covers the whole paragraph, and setting
+    ``namedStyleType`` re-resolves the character formatting of every run in
+    it — so the bare NORMAL_TEXT that plain lines carry would strip bold and
+    italic from text outside the match and demote a heading. Explicit block
+    Markdown (headings, blockquotes, rules) keeps its paragraph style.
+    Wholly new middle paragraphs keep NORMAL_TEXT too. Call after
+    ``_strip_trailing_newline_unless_hr``. Mutates ``parsed`` in place.
+    """
+    end = len(parsed.plain_text)
+    parsed.styles = [
+        s for s in parsed.styles
+        if not (
+            s.type == "paragraph_style"
+            and s.style == {"namedStyleType": "NORMAL_TEXT"}
+            and (s.start == 0 or s.end == end)
+        )
+    ]
+
+
 def insert_markdown_into_tab(
     doc_id: str,
     tab_id: str,
@@ -1670,6 +1694,7 @@ def replace_formatted(
     _reject_overlapping_matches(matches)
 
     _strip_trailing_newline_unless_hr(parsed)
+    _keep_boundary_paragraph_styles(parsed)
 
     sorted_matches, all_requests = _build_replacement_requests(
         parsed, matches, tab_id=tab_id,

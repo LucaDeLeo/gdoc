@@ -6,6 +6,18 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- **`edit` no longer strips formatting outside the matched text.** Every
+  plain line of the replacement carried an explicit `NORMAL_TEXT`
+  paragraph style, and that request covers the whole paragraph the
+  replacement lands in: setting a named style re-resolves every run's
+  character formatting, so bold and italic elsewhere in the paragraph were
+  lost (links survived) and an edit inside a heading demoted it to normal
+  text. The replacement's first and last paragraphs join existing text, so
+  they no longer get the implicit `NORMAL_TEXT`; wholly new middle
+  paragraphs and explicit block Markdown (`# Heading`, `> quote`) are
+  styled as before.
+
 ## [0.23.0] — 2026-10-16
 
 ### Added
