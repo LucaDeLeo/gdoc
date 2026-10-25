@@ -6,6 +6,18 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- **`write --tab` and `insert` keep nested Markdown lists nested** (#67).
+  Every child item used to land at its parent's level. Levels are now
+  relative to the enclosing item, as in CommonMark, so `- a` then
+  `    - b` is one level deep, as are sub-items under `1.` and `10.`.
+  Bullets nested under numbered items join the numbered list (shown as
+  "a.", as when Tab indents them in the Docs editor).
+- **A numbered list that resumes after other paragraphs keeps its
+  numbers.** `10.` below a heading used to restart at 1; it now continues
+  the numbered list above it. Lists separated by a table or a bullet list
+  stay separate.
+
 ## [0.23.0] — 2026-10-16
 
 ### Added

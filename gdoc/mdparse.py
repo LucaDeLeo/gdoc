@@ -80,7 +80,7 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 
 # List item patterns (capture leading indentation for nesting)
 _BULLET_RE = re.compile(r"^([ \t]*)[-*]\s+(.+)$")
-_NUMBERED_RE = re.compile(r"^([ \t]*)\d+\.\s+(.+)$")
+_NUMBERED_RE = re.compile(r"^([ \t]*)(\d+)\.\s+(.+)$")
 
 # Block patterns
 _BLOCKQUOTE_RE = re.compile(r"^ {0,3}>\s?(.*)$")
@@ -246,13 +246,21 @@ def _scan(text: str, masked: str) -> tuple[str, list[StyleRange]]:
     return "".join(plain_parts), styles
 
 
-def _list_level(indent: str) -> int:
+def _list_level(indent: str, open_items: list[int]) -> int:
     """Nesting level from a list item's leading whitespace.
 
-    Two columns (or one tab) per level; capped at 8 (Docs' max).
+    ``open_items`` holds the indent columns of the enclosing items, outermost
+    first, and is updated in place. An item indented at least two columns
+    past the item above it is that item's child, so ``- a`` then
+    ``    - b`` is one level deep, as in CommonMark, and so are sub-items under
+    ``1.`` (three columns) and ``10.`` (four). A tab is four columns. Capped
+    at 8 (Docs' max).
     """
-    columns = len(indent.replace("\t", "  "))
-    return min(columns // 2, 8)
+    columns = len(indent.expandtabs(4))
+    while open_items and columns < open_items[-1] + 2:
+        open_items.pop()
+    open_items.append(columns)
+    return min(len(open_items) - 1, 8)
 
 
 def parse_markdown(text: str) -> ParsedMarkdown:
@@ -271,6 +279,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
     all_tables: list[TableData] = []
     offset = 0
     removed_tabs = 0  # running count of leading list-indent tabs (see below)
+    open_items: list[int] = []  # indents of the enclosing list items
 
     def emit_paragraph(
         content: str,
@@ -278,6 +287,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         para_style: dict,
         bullet_preset: str | None = None,
         leading_tabs: int = 0,
+        list_start: int | None = None,
     ) -> None:
         """Append one paragraph (content + newline) and its style ranges.
 
@@ -303,14 +313,16 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             para_start, offset, para_style, "paragraph_style",
         ))
         if bullet_preset is not None:
-            all_styles.append(StyleRange(
-                para_start, offset,
-                {"bulletPreset": bullet_preset}, "bullets",
-            ))
+            bullet = {"bulletPreset": bullet_preset}
+            if list_start is not None:
+                bullet["start"] = list_start
+            all_styles.append(StyleRange(para_start, offset, bullet, "bullets"))
 
     i = 0
     while i < len(lines):
         line = lines[i]
+        if line.strip() and not (_BULLET_RE.match(line) or _NUMBERED_RE.match(line)):
+            open_items.clear()
 
         # Fenced code block: ``` (or ~~~) ... ```
         fence_m = _FENCE_RE.match(line)
@@ -425,7 +437,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 inline_text, inline_styles,
                 {"namedStyleType": "NORMAL_TEXT"},
                 bullet_preset="BULLET_DISC_CIRCLE_SQUARE",
-                leading_tabs=_list_level(bullet_m.group(1)),
+                leading_tabs=_list_level(bullet_m.group(1), open_items),
             )
             i += 1
             continue
@@ -433,12 +445,13 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         # Numbered list item (indent-aware)
         numbered_m = _NUMBERED_RE.match(line)
         if numbered_m:
-            inline_text, inline_styles = _parse_inline(numbered_m.group(2))
+            inline_text, inline_styles = _parse_inline(numbered_m.group(3))
             emit_paragraph(
                 inline_text, inline_styles,
                 {"namedStyleType": "NORMAL_TEXT"},
                 bullet_preset="NUMBERED_DECIMAL_ALPHA_ROMAN",
-                leading_tabs=_list_level(numbered_m.group(1)),
+                leading_tabs=_list_level(numbered_m.group(1), open_items),
+                list_start=int(numbered_m.group(2)),
             )
             i += 1
             continue
@@ -542,27 +555,118 @@ def to_docs_requests(
     #    - ordered lists only number continuously (1, 2, 3) when each item is
     #      created after the one above it — reverse order makes each item start
     #      its own list at 1 (and can drop bullets entirely).
-    #    So process top-to-bottom and subtract the tabs that earlier items in
-    #    this same batch have already removed.
+    #    - the nesting level is the item's leading tabs minus the fewest
+    #      leading tabs in the request's range (see listnest.py), so an item
+    #      bulleted on its own always lands at its neighbour's level. Each run
+    #      of adjacent list items is therefore bulleted in one request.
+    #    - a numbered list that resumes after other paragraphs ("10." below a
+    #      heading) must be the same Docs list as the one it continues: the
+    #      API cannot set a start number. Such a chain of runs is bulleted in
+    #      one request, then the paragraphs between its runs are taken out of
+    #      the list again, with their indent restored.
+    #    So process runs top-to-bottom and subtract the tabs that earlier runs
+    #    in this same batch have already removed.
     text = parsed.plain_text
     removed = 0
-    bullet_ranges = [sr for sr in parsed.styles if sr.type == "bullets"]
-    for sr in sorted(bullet_ranges, key=lambda s: s.start):
-        leading = 0
-        while sr.start + leading < len(text) and text[sr.start + leading] == "\t":
-            leading += 1
+    bullet_ranges = sorted(
+        (sr for sr in parsed.styles if sr.type == "bullets"),
+        key=lambda s: s.start,
+    )
+    para_styles = [sr for sr in parsed.styles if sr.type == "paragraph_style"]
+    runs = _list_runs(bullet_ranges, text)
+    table_offsets = [t.plain_text_offset for t in parsed.tables]
+    for chain in _numbering_chains(runs, table_offsets):
+        start, end = chain[0][0].start, chain[-1][-1].end
         requests.append({
             "createParagraphBullets": {
                 "range": _range(
-                    utf16[sr.start] + insert_index - removed,
-                    utf16[sr.end] + insert_index - removed,
+                    utf16[start] + insert_index - removed,
+                    utf16[end] + insert_index - removed,
                 ),
-                "bulletPreset": sr.style["bulletPreset"],
+                "bulletPreset": chain[0][0].style["bulletPreset"],
             }
         })
-        removed += leading
+        for prev, run in zip(chain, chain[1:]):
+            removed += sum(_leading_tabs(text, sr.start) for sr in prev)
+            gap_start, gap_end = prev[-1].end, run[0].start
+            shift = insert_index - removed
+            requests.append({
+                "deleteParagraphBullets": {
+                    "range": _range(utf16[gap_start] + shift, utf16[gap_end] + shift),
+                }
+            })
+            for sr in para_styles:
+                if gap_start <= sr.start and sr.end <= gap_end:
+                    zero = {"magnitude": 0, "unit": "PT"}
+                    indent = {
+                        "indentStart": sr.style.get("indentStart", zero),
+                        "indentFirstLine": sr.style.get("indentFirstLine", zero),
+                    }
+                    requests.append({
+                        "updateParagraphStyle": {
+                            "range": _range(
+                                utf16[sr.start] + shift, utf16[sr.end] + shift,
+                            ),
+                            "paragraphStyle": indent,
+                            "fields": "indentStart,indentFirstLine",
+                        }
+                    })
+        removed += sum(_leading_tabs(text, sr.start) for sr in chain[-1])
 
     return requests
+
+
+def _leading_tabs(text: str, start: int) -> int:
+    n = 0
+    while start + n < len(text) and text[start + n] == "\t":
+        n += 1
+    return n
+
+
+def _list_runs(bullet_ranges: list[StyleRange], text: str) -> list[list[StyleRange]]:
+    """Group list paragraphs into runs that become one Docs list each.
+
+    A run is a sequence of adjacent list paragraphs; a top-level item of the
+    other kind (numbered vs bullet) starts a new run. Nested items take the
+    run's preset, as the Docs editor does when Tab indents a bullet under a
+    numbered item (it shows as "a.").
+    """
+    runs: list[list[StyleRange]] = []
+    for sr in bullet_ranges:
+        if runs:
+            prev = runs[-1][-1]
+            same_kind = sr.style["bulletPreset"] == runs[-1][0].style["bulletPreset"]
+            if sr.start == prev.end and (same_kind or _leading_tabs(text, sr.start)):
+                runs[-1].append(sr)
+                continue
+        runs.append([sr])
+    return runs
+
+
+def _numbering_chains(
+    runs: list[list[StyleRange]], table_offsets: list[int],
+) -> list[list[list[StyleRange]]]:
+    """Join each numbered run that starts above 1 to the numbered run before it.
+
+    Docs numbers every item of one list in sequence, even with other
+    paragraphs between them, so "1. a", a heading, then "2. b" stays 1, 2
+    only if both runs are one list. Runs separated by a table or by a bullet
+    list are not joined.
+    """
+    chains: list[list[list[StyleRange]]] = []
+    for run in runs:
+        if chains and _numbered(run) and run[0].style.get("start", 1) > 1 \
+                and _numbered(chains[-1][-1]):
+            gap_start, gap_end = chains[-1][-1][-1].end, run[0].start
+            if not any(gap_start <= off < gap_end for off in table_offsets):
+                chains[-1].append(run)
+                continue
+        chains.append([run])
+    return chains
+
+
+def _numbered(run: list[StyleRange]) -> bool:
+    return run[0].style["bulletPreset"].startswith("NUMBERED")
 
 
 def utf16_len(text: str) -> int:
