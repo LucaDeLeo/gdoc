@@ -163,18 +163,26 @@ def update_doc_content(doc_id: str, content: str) -> int:
     """Overwrite a Google Doc's content with markdown.
 
     Uploads markdown content via files.update with media, triggering
-    automatic conversion to Google Docs format.
+    automatic conversion to Google Docs format. That import also resets the
+    document's style (pageless becomes paged, and margins, page size and
+    background go to their defaults), so the style is read first and restored
+    afterwards.
 
     Args:
         doc_id: The document ID.
         content: Markdown content string to upload.
 
     Returns:
-        The new document version (int) from the API response.
+        The new document version (int), including any style restore.
     """
     import io
 
     from googleapiclient.http import MediaIoBaseUpload
+
+    from gdoc.api.docs import get_document_style
+
+    # Nothing has been written yet, so a failed read safely aborts the write.
+    style = get_document_style(doc_id)
 
     try:
         service = get_drive_service()
@@ -198,9 +206,41 @@ def update_doc_content(doc_id: str, content: str) -> int:
             )
             .execute()
         )
-        return int(result["version"])
+        version = int(result["version"])
     except HttpError as e:
         _translate_http_error(e, doc_id)
+    return _restore_style_after_import(doc_id, style, version)
+
+
+def _restore_style_after_import(doc_id: str, style: dict, version: int) -> int:
+    """Restore a document's pre-import style; return its current version.
+
+    Best-effort: the content is already written, so a failure here must not
+    stop the caller from recording that write. It warns and returns the
+    import's version.
+
+    A restore bumps the version, so it is read again. Like a tab write, this
+    can fold an edit landing in that sub-second window into the baseline, but
+    only for a doc whose style needed restoring.
+    """
+    import sys
+
+    from gdoc.api.docs import restore_document_style
+
+    try:
+        if not restore_document_style(doc_id, style):
+            return version
+    except Exception as e:
+        print(
+            "WARN: content written, but the document style (page mode, "
+            f"margins) could not be restored: {e}",
+            file=sys.stderr,
+        )
+        return version
+    try:
+        return get_file_version(doc_id).get("version", version)
+    except Exception:
+        return version
 
 
 def get_file_version(doc_id: str) -> dict:

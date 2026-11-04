@@ -215,6 +215,96 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
         _translate_http_error(e, doc_id)
 
 
+# documentStyle fields updateDocumentStyle can write. The others, such as
+# defaultHeaderId and useCustomHeaderFooterMargins, are read-only.
+_WRITABLE_STYLE_FIELDS = (
+    "documentFormat",
+    "background",
+    "pageSize",
+    "flipPageOrientation",
+    "marginTop",
+    "marginBottom",
+    "marginLeft",
+    "marginRight",
+    "marginHeader",
+    "marginFooter",
+    "pageNumberStart",
+    "useFirstPageHeaderFooter",
+    "useEvenPageHeaderFooter",
+)
+_WHITE = {"rgbColor": {"red": 1, "green": 1, "blue": 1}}
+
+
+def get_document_style(doc_id: str) -> dict:
+    """Return a document's documentStyle (page mode, margins, page size...)."""
+    try:
+        service = get_docs_service()
+        document = (
+            service.documents()
+            .get(documentId=doc_id, fields="documentStyle")
+            .execute()
+        )
+        return document.get("documentStyle", {})
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def _is_blank_background(background: dict | None) -> bool:
+    """Whether a background is unset or white, which look the same on screen.
+
+    A blank doc reports white and a markdown import reports unset. Without
+    this, every whole-doc write to a default doc would need a style write.
+    """
+    color = (background or {}).get("color", {}).get("color")
+    return color is None or color == _WHITE
+
+
+def restore_document_style(doc_id: str, style: dict) -> bool:
+    """Write back the fields of *style* that the document no longer has.
+
+    Args:
+        doc_id: The document ID.
+        style: A documentStyle from get_document_style.
+
+    Returns:
+        True if anything had changed (a write that bumps the Drive version),
+        False if the document already matched and no write was made.
+    """
+    current = get_document_style(doc_id)
+    changed = [
+        name for name in _WRITABLE_STYLE_FIELDS
+        if style.get(name) != current.get(name)
+        and not (
+            name == "background"
+            and _is_blank_background(style.get(name))
+            and _is_blank_background(current.get(name))
+        )
+    ]
+    if not changed:
+        return False
+    try:
+        get_docs_service().documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "updateDocumentStyle": {
+                            # A masked field absent here resets to its default.
+                            "documentStyle": {
+                                name: style[name]
+                                for name in changed if name in style
+                            },
+                            "fields": ",".join(changed),
+                        }
+                    }
+                ]
+            },
+        ).execute()
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+    return True
+
+
 def _extract_paragraphs_text(content: list[dict]) -> str:
     """Extract concatenated text from body content paragraph elements."""
     parts = []
