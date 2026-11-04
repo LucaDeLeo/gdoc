@@ -194,6 +194,17 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
         pageless: If True, set PAGELESS; otherwise PAGES (paged).
     """
     mode = "PAGELESS" if pageless else "PAGES"
+    _update_document_style(
+        doc_id, {"documentFormat": {"documentMode": mode}},
+        "documentFormat.documentMode",
+    )
+
+
+def _update_document_style(doc_id: str, style: dict, fields: str) -> None:
+    """Apply an updateDocumentStyle, retrying transient failures.
+
+    Retrying is safe because setting a style is idempotent.
+    """
     try:
         service = get_docs_service()
         service.documents().batchUpdate(
@@ -202,15 +213,13 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
                 "requests": [
                     {
                         "updateDocumentStyle": {
-                            "documentStyle": {
-                                "documentFormat": {"documentMode": mode},
-                            },
-                            "fields": "documentFormat.documentMode",
+                            "documentStyle": style,
+                            "fields": fields,
                         }
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=_STYLE_RETRIES)
     except HttpError as e:
         _translate_http_error(e, doc_id)
 
@@ -233,6 +242,7 @@ _WRITABLE_STYLE_FIELDS = (
     "useEvenPageHeaderFooter",
 )
 _WHITE = {"rgbColor": {"red": 1, "green": 1, "blue": 1}}
+_STYLE_RETRIES = 2
 
 
 def get_document_style(doc_id: str) -> dict:
@@ -242,7 +252,7 @@ def get_document_style(doc_id: str) -> dict:
         document = (
             service.documents()
             .get(documentId=doc_id, fields="documentStyle")
-            .execute()
+            .execute(num_retries=_STYLE_RETRIES)
         )
         return document.get("documentStyle", {})
     except HttpError as e:
@@ -282,26 +292,12 @@ def restore_document_style(doc_id: str, style: dict) -> bool:
     ]
     if not changed:
         return False
-    try:
-        get_docs_service().documents().batchUpdate(
-            documentId=doc_id,
-            body={
-                "requests": [
-                    {
-                        "updateDocumentStyle": {
-                            # A masked field absent here resets to its default.
-                            "documentStyle": {
-                                name: style[name]
-                                for name in changed if name in style
-                            },
-                            "fields": ",".join(changed),
-                        }
-                    }
-                ]
-            },
-        ).execute()
-    except HttpError as e:
-        _translate_http_error(e, doc_id)
+    # A masked field absent from the style resets to its default.
+    _update_document_style(
+        doc_id,
+        {name: style[name] for name in changed if name in style},
+        ",".join(changed),
+    )
     return True
 
 

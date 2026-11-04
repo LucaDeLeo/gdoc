@@ -2364,9 +2364,10 @@ def cmd_write(args) -> int:
         result = insert_markdown_into_tab(
             doc_id, tab_id, content, replace=True, doc=doc,
         )
-        # Note: this version is fetched AFTER the batchUpdate — unlike the
-        # whole-doc path, whose files.update returns its own version
-        # atomically. A concurrent edit landing in that sub-second window
+        # Note: this version is fetched AFTER the batchUpdate, as it is on
+        # the whole-doc path when a style restore follows its files.update;
+        # otherwise that path's version comes atomically from files.update.
+        # A concurrent edit landing in that sub-second window
         # would be folded into the stamped tab baseline — and on a
         # single-tab doc, via full_doc_write below, into the whole-doc
         # baseline too, exposing a later `push` to the same window.

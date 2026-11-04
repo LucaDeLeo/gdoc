@@ -217,12 +217,15 @@ def _restore_style_after_import(doc_id: str, style: dict, version: int) -> int:
 
     Best-effort: the content is already written, so a failure here must not
     stop the caller from recording that write. It warns and returns the
-    import's version.
+    import's version. The warning carries the old style, because the next
+    write would otherwise take the reset style as the one to keep.
 
     A restore bumps the version, so it is read again. Like a tab write, this
-    can fold an edit landing in that sub-second window into the baseline, but
-    only for a doc whose style needed restoring.
+    can fold an edit landing in that sub-second window into the baseline. It
+    applies to any doc whose style differs from the import's defaults, which
+    includes every pageless doc.
     """
+    import json
     import sys
 
     from gdoc.api.docs import restore_document_style
@@ -232,14 +235,19 @@ def _restore_style_after_import(doc_id: str, style: dict, version: int) -> int:
             return version
     except Exception as e:
         print(
-            "WARN: content written, but the document style (page mode, "
-            f"margins) could not be restored: {e}",
+            f"WARN: content written, but the document style could not be "
+            f"restored: {e}. It was: {json.dumps(style)}",
             file=sys.stderr,
         )
         return version
     try:
         return get_file_version(doc_id).get("version", version)
-    except Exception:
+    except Exception as e:
+        print(
+            f"WARN: could not read the version after restoring the document "
+            f"style: {e}. The next command may report this write as an edit.",
+            file=sys.stderr,
+        )
         return version
 
 
