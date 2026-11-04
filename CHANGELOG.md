@@ -6,6 +6,17 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- **Whole-doc `write`, `push` and the sync hook keep the document's style.**
+  These re-import markdown through Drive, and that import resets
+  `documentStyle`: a pageless doc came back paged, and margins, page size,
+  orientation, background and page numbering went to their defaults. The style
+  is now read before the import and any field that changed is written back.
+  If that read fails the write stops with nothing changed, including under
+  `--force-collapse-tabs`, which made no Docs API call before. If the restore
+  fails, the command warns and still succeeds, since the content is already
+  written. The import still drops headers and footers.
+
 ## [0.23.0] — 2026-10-16
 
 ### Added
