@@ -243,7 +243,7 @@ class TestGetFileInfo:
             get_file_info("abc")
 
 
-@patch("gdoc.api.docs.restore_document_style", return_value=False)
+@patch("gdoc.api.docs.restore_document_style")
 @patch("gdoc.api.docs.get_document_style", return_value={})
 @patch("gdoc.api.drive.get_drive_service")
 class TestUpdateDocContent:

@@ -259,46 +259,41 @@ def get_document_style(doc_id: str) -> dict:
         _translate_http_error(e, doc_id)
 
 
-def _is_blank_background(background: dict | None) -> bool:
-    """Whether a background is unset or white, which look the same on screen.
+def _comparable_style_value(name: str, value):
+    """A style value for comparing, with an unset and a white background equal.
 
-    A blank doc reports white and a markdown import reports unset. Without
-    this, every whole-doc write to a default doc would need a style write.
+    A blank doc reports white and a markdown import reports unset, which look
+    the same on screen. Without this, every whole-doc write to a default doc
+    would need a style write.
     """
-    color = (background or {}).get("color", {}).get("color")
-    return color is None or color == _WHITE
+    if name == "background":
+        color = (value or {}).get("color", {}).get("color")
+        return None if color == _WHITE else color
+    return value
 
 
-def restore_document_style(doc_id: str, style: dict) -> bool:
+def restore_document_style(doc_id: str, style: dict) -> None:
     """Write back the fields of *style* that the document no longer has.
 
     Args:
         doc_id: The document ID.
         style: A documentStyle from get_document_style.
 
-    Returns:
-        True if anything had changed (a write that bumps the Drive version),
-        False if the document already matched and no write was made.
     """
     current = get_document_style(doc_id)
     changed = [
         name for name in _WRITABLE_STYLE_FIELDS
-        if style.get(name) != current.get(name)
-        and not (
-            name == "background"
-            and _is_blank_background(style.get(name))
-            and _is_blank_background(current.get(name))
-        )
+        if _comparable_style_value(name, style.get(name))
+        != _comparable_style_value(name, current.get(name))
     ]
     if not changed:
-        return False
+        return
     # A masked field absent from the style resets to its default.
     _update_document_style(
         doc_id,
         {name: style[name] for name in changed if name in style},
         ",".join(changed),
     )
-    return True
 
 
 def _extract_paragraphs_text(content: list[dict]) -> str:

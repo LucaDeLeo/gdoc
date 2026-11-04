@@ -23,7 +23,6 @@ from gdoc.util import GdocError
 DOC = "abc123"
 PAGELESS = {"documentFormat": {"documentMode": "PAGELESS"}}
 IMPORT_VERSION = 11
-RESTORED_VERSION = 12
 
 
 def _http_error(status):
@@ -109,12 +108,13 @@ class TestUpdateDocContent:
 
         assert doc.style["documentFormat"] == {"documentMode": "PAGELESS"}
 
-    def test_returns_version_after_the_restore(self, fake_doc):
-        fake_doc(dict(PAGELESS))
+    def test_returns_the_uploads_own_version(self, fake_doc):
+        doc = fake_doc(dict(PAGELESS))
 
-        # Returning the import's version would make the next command report
-        # our own restore as somebody else's edit.
-        assert update_doc_content(DOC, "# Hello") == RESTORED_VERSION
+        # A file stamp must not come from a later read, which could return a
+        # collaborator's version and bless an edit the file doesn't contain.
+        assert update_doc_content(DOC, "# Hello") == IMPORT_VERSION
+        doc.drive.files.return_value.get.assert_not_called()
 
     def test_restores_other_style_fields(self, fake_doc):
         background = {"color": {"color": {"rgbColor": {"red": 1}}}}
@@ -170,8 +170,8 @@ class TestUpdateDocContent:
             "background": background,
         })
 
-        # A default doc keeps the version files.update returned atomically.
-        assert update_doc_content(DOC, "# Hello") == IMPORT_VERSION
+        update_doc_content(DOC, "# Hello")
+
         assert doc.style_writes == []
 
     def test_black_background_is_not_mistaken_for_blank(self, fake_doc):
@@ -202,16 +202,21 @@ class TestUpdateDocContent:
         assert "could not be restored" in err
         assert "PAGELESS" in err
 
-    def test_failed_version_read_warns_and_uses_the_import(
-        self, fake_doc, capsys,
-    ):
+    def test_style_calls_retry_transient_failures(self, fake_doc):
         doc = fake_doc(dict(PAGELESS))
-        get = doc.drive.files.return_value.get.return_value
-        get.execute.side_effect = _http_error(500)
+        documents = doc.docs.documents.return_value
+        writes = []
+        documents.batchUpdate.side_effect = lambda **kwargs: MagicMock(
+            execute=lambda **execute_kwargs: writes.append(execute_kwargs),
+        )
 
-        assert update_doc_content(DOC, "# Hello") == IMPORT_VERSION
-        assert doc.style["documentFormat"] == {"documentMode": "PAGELESS"}
-        assert "may report this write as an edit" in capsys.readouterr().err
+        update_doc_content(DOC, "# Hello")
+
+        assert writes == [{"num_retries": 2}]
+        read_calls = documents.get.return_value.execute.call_args_list
+        assert read_calls and all(
+            call.kwargs == {"num_retries": 2} for call in read_calls
+        )
 
 
 def _stamped_file(tmp_path, version=10):
@@ -246,8 +251,8 @@ class TestCommandsKeepPageless:
     def _assert_kept(self, doc, path):
         assert doc.style["documentFormat"] == {"documentMode": "PAGELESS"}
         recorded = doc.record_state.call_args.kwargs["command_version"]
-        assert recorded == RESTORED_VERSION
-        assert _stamp_of(path) == str(RESTORED_VERSION)
+        assert recorded == IMPORT_VERSION
+        assert _stamp_of(path) == str(IMPORT_VERSION)
 
     def test_write(self, pageless_doc, tmp_path):
         path = _stamped_file(tmp_path)
