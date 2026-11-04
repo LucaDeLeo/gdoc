@@ -75,7 +75,7 @@ class _FakeGoogleDoc:
                 self.style[name] = request["documentStyle"][name]
             else:
                 self.style.pop(name, None)
-        self.version += 1
+        # No version bump: Drive doesn't count a style write straight away.
         return {}
 
 
@@ -201,6 +201,17 @@ class TestUpdateDocContent:
         err = capsys.readouterr().err
         assert "could not be restored" in err
         assert "PAGELESS" in err
+
+    def test_failed_read_after_the_import_warns(self, fake_doc, capsys):
+        doc = fake_doc(dict(PAGELESS))
+        get = doc.docs.documents.return_value.get.return_value
+        get.execute.side_effect = [
+            {"documentStyle": dict(PAGELESS)},
+            _http_error(403),
+        ]
+
+        assert update_doc_content(DOC, "# Hello") == IMPORT_VERSION
+        assert "could not be restored" in capsys.readouterr().err
 
     def test_style_calls_retry_transient_failures(self, fake_doc):
         doc = fake_doc(dict(PAGELESS))
