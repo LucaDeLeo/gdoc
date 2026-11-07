@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -250,10 +251,13 @@ def _write_private(path: Path, content: str) -> None:
     os.open's mode only applies on creation, so writing in place would leave
     a pre-existing world-readable file world-readable. Write a fresh 0600
     temp file in the same directory and atomically swap it in instead.
+
+    The temp file's name is unique to this write. With one fixed name,
+    processes refreshing the same expired token at once collide on it: all
+    but one fail, and get_credentials reports them as not authenticated.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.unlink(missing_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w") as f:
