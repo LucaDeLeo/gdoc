@@ -4426,8 +4426,11 @@ def cmd_suggestions(args) -> int:
             )
         return _show_suggestion(args)
 
-    doc_id = _resolve_doc_id(args.doc)
+    doc_id, url_tab = _resolve_doc_ref(args.doc)
     quiet = getattr(args, "quiet", False)
+    # Like `comments`, the listing covers every tab (each entry names its
+    # tab); a URL's ?tab= is noted as ignored rather than dropped silently.
+    _note_discarded_url_tab(url_tab, "suggestions", quiet)
 
     from gdoc.notify import pre_flight
     change_info = pre_flight(doc_id, quiet=quiet)

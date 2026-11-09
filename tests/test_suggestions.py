@@ -999,6 +999,34 @@ class TestCmdSuggestions:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
+    def test_url_tab_is_noted_as_ignored(self, mock_get, _pf, _u, capsys):
+        """The listing spans all tabs: say so rather than drop ?tab= silently."""
+        url = "https://docs.google.com/document/d/abc123/edit?tab=t.draft"
+        assert cmd_suggestions(
+            _args("suggestions", all=False, doc=url, quiet=False)
+        ) == 0
+        assert mock_get.call_args.args[0] == "abc123"
+        captured = capsys.readouterr()
+        assert "NOTE: ignoring tab 't.draft'" in captured.err
+        assert "suggestions" in captured.err
+        # Not filtered: suggestions on other tabs are still listed.
+        assert "@Tab 1" in captured.out and "@Draft" in captured.out
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
+    def test_ambient_first_tab_and_quiet_are_silent(self, _get, _pf, _u, capsys):
+        url = "https://docs.google.com/document/d/abc123/edit?tab=t.0"
+        cmd_suggestions(_args("suggestions", all=False, doc=url, quiet=False))
+        cmd_suggestions(_args(
+            "suggestions", all=False, quiet=True,
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.draft",
+        ))
+        assert "NOTE" not in capsys.readouterr().err
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_document_threads", return_value=_DOC)
     def test_all_includes_decided_threads_without_location(self, _get, _pf, _u, capsys):
         cmd_suggestions(_args("suggestions", all=True))
         out = capsys.readouterr().out

@@ -13,7 +13,8 @@ All notable changes to `gdoc` are documented here. This project follows
   - `suggestions DOC [SUGGESTION_ID] [--all]` lists Google's suggestion
     threads, or shows one, with the tab and UTF-16 range(s) each touches
     (derived from the `SUGGESTIONS_INLINE` structure, kept apart from the
-    raw thread in `--json`).
+    raw thread in `--json`). The listing covers every tab; like
+    `comments`, it notes on stderr that it ignores a URL's `?tab=`.
   - `suggestion DOC ID --accept | --reject | --delete [--force]` decides
     one suggestion. Accept is always pinned to `requiredRevisionId`;
     reject/delete are pinned when the read returned a revision.
