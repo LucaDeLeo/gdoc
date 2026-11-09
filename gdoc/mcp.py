@@ -72,6 +72,7 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "write": False,
     "cells": False,
     "add-tab": False,
+    "rename-tab": False,
     "comment": False,
     "reply": False,
     "resolve": False,

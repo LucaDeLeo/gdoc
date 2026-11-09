@@ -1,4 +1,4 @@
-"""Tests for the `gdoc tabs` and `gdoc add-tab` subcommands."""
+"""Tests for the `gdoc tabs`, `gdoc add-tab` and `gdoc rename-tab` subcommands."""
 
 import json
 from types import SimpleNamespace
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gdoc.cli import cmd_add_tab, cmd_tabs
+from gdoc.cli import cmd_add_tab, cmd_rename_tab, cmd_tabs
 from gdoc.notify import ChangeInfo
 from gdoc.util import GdocError
 
@@ -287,3 +287,174 @@ class TestAddTab:
         mock_add.side_effect = GdocError("Document not found: abc123")
         with pytest.raises(GdocError, match="Document not found"):
             cmd_add_tab(_make_add_tab_args())
+
+
+# ── rename-tab command ───────────────────────────────────────────
+
+
+def _make_rename_tab_args(**overrides):
+    defaults = {
+        "command": "rename-tab",
+        "doc": "abc123",
+        "tab": "Tab 1",
+        "title": "Calls",
+        "json": False,
+        "verbose": False,
+        "plain": False,
+        "quiet": False,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+_RENAME_TABS = [
+    {"id": "t.0", "title": "Tab 1", "index": 0, "nesting_level": 0,
+     "body": {}, "lists": {}},
+    {"id": "t.abc", "title": "Notes", "index": 1, "nesting_level": 0,
+     "body": {}, "lists": {}},
+]
+
+
+@pytest.fixture
+def rename_mocks(mocker):
+    """Mock the API layer for cmd_rename_tab; state is mocked too."""
+    return SimpleNamespace(
+        tabs=mocker.patch(
+            "gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS,
+        ),
+        rename=mocker.patch("gdoc.api.docs.rename_tab"),
+        pre_flight=mocker.patch("gdoc.notify.pre_flight", return_value=None),
+        version=mocker.patch(
+            "gdoc.api.drive.get_file_version", return_value={"version": 10},
+        ),
+        update=mocker.patch("gdoc.state.update_state_after_command"),
+    )
+
+
+class TestRenameTab:
+    def test_rename_by_title_terse(self, rename_mocks, capsys):
+        rc = cmd_rename_tab(_make_rename_tab_args())
+        assert rc == 0
+        rename_mocks.rename.assert_called_once_with("abc123", "t.0", "Calls")
+        out = capsys.readouterr().out
+        assert "t.0\tCalls\t" in out
+        assert "https://docs.google.com/document/d/abc123/edit?tab=t.0" in out
+
+    def test_rename_by_id(self, rename_mocks):
+        rc = cmd_rename_tab(_make_rename_tab_args(tab="t.abc", title="Log"))
+        assert rc == 0
+        rename_mocks.rename.assert_called_once_with("abc123", "t.abc", "Log")
+
+    def test_rename_json(self, rename_mocks, capsys):
+        rc = cmd_rename_tab(_make_rename_tab_args(json=True))
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["ok"] is True
+        assert data["id"] == "t.0"
+        assert data["title"] == "Calls"
+        assert data["old_title"] == "Tab 1"
+        assert data["url"] == (
+            "https://docs.google.com/document/d/abc123/edit?tab=t.0"
+        )
+
+    def test_rename_plain(self, rename_mocks, capsys):
+        rc = cmd_rename_tab(_make_rename_tab_args(plain=True))
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "id\tt.0" in out
+        assert "title\tCalls" in out
+        assert "old_title\tTab 1" in out
+
+    def test_rename_preflight_and_state(self, rename_mocks):
+        change_info = ChangeInfo(current_version=7)
+        rename_mocks.pre_flight.return_value = change_info
+        rc = cmd_rename_tab(_make_rename_tab_args())
+        assert rc == 0
+        rename_mocks.pre_flight.assert_called_once_with("abc123", quiet=False)
+        # A rename touches no content: the state update is metadata-only,
+        # so a current read baseline is carried past our own version bump.
+        rename_mocks.update.assert_called_once_with(
+            "abc123", change_info, command="rename-tab", quiet=False,
+            command_version=10, metadata_only_write=True,
+        )
+
+    def test_version_refresh_failure_still_reports_the_rename(
+        self, rename_mocks, capsys,
+    ):
+        rename_mocks.version.side_effect = GdocError("backend error")
+        rc = cmd_rename_tab(_make_rename_tab_args())
+        assert rc == 0
+        rename_mocks.rename.assert_called_once_with("abc123", "t.0", "Calls")
+        captured = capsys.readouterr()
+        assert "t.0\tCalls\t" in captured.out
+        assert "WARN: tab renamed (Tab 1 -> Calls)" in captured.err
+        assert "backend error" in captured.err
+        # No unverified version is recorded.
+        rename_mocks.update.assert_not_called()
+
+    def test_unknown_tab(self, rename_mocks):
+        with pytest.raises(GdocError, match="tab not found: Missing") as exc:
+            cmd_rename_tab(_make_rename_tab_args(tab="Missing"))
+        assert exc.value.exit_code == 3
+        rename_mocks.rename.assert_not_called()
+
+    def test_empty_title_rejected(self, rename_mocks):
+        with pytest.raises(GdocError, match="cannot be empty") as exc:
+            cmd_rename_tab(_make_rename_tab_args(title="   "))
+        assert exc.value.exit_code == 3
+        rename_mocks.pre_flight.assert_not_called()
+        rename_mocks.rename.assert_not_called()
+
+
+class TestRenameTabBaselines:
+    """Real state files: a rename must not cost the read baselines."""
+
+    def _run(self, mocker, tmp_path, state, preflight_version, post_version):
+        from gdoc.state import load_state, save_state
+
+        mocker.patch("gdoc.state.STATE_DIR", tmp_path)
+        save_state("abc123", state)
+        mocker.patch(
+            "gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS,
+        )
+        mocker.patch("gdoc.api.docs.rename_tab")
+        mocker.patch(
+            "gdoc.notify.pre_flight",
+            return_value=ChangeInfo(
+                current_version=preflight_version,
+                last_read_version=state.last_read_version,
+            ),
+        )
+        mocker.patch(
+            "gdoc.api.drive.get_file_version",
+            return_value={"version": post_version},
+        )
+        assert cmd_rename_tab(_make_rename_tab_args()) == 0
+        return load_state("abc123")
+
+    def test_current_tab_baselines_carry_forward(self, mocker, tmp_path):
+        from gdoc.state import DocState
+
+        state = DocState(last_version=7, tab_read_versions={"t.abc": 7})
+        after = self._run(mocker, tmp_path, state, 7, 8)
+        assert after.last_version == 8
+        assert after.tab_read_versions == {"t.abc": 8}
+
+    def test_current_whole_doc_baseline_carries_forward(self, mocker, tmp_path):
+        from gdoc.state import DocState
+
+        state = DocState(last_version=7, last_read_version=7)
+        after = self._run(mocker, tmp_path, state, 7, 8)
+        assert after.last_read_version == 8
+
+    def test_concurrent_edit_leaves_baselines_alone(self, mocker, tmp_path):
+        from gdoc.state import DocState
+
+        # Post-rename version jumped by 2: someone else edited in between.
+        state = DocState(
+            last_version=7, last_read_version=7, tab_read_versions={"t.abc": 7},
+        )
+        after = self._run(mocker, tmp_path, state, 7, 9)
+        assert after.last_version == 9
+        assert after.last_read_version == 7
+        assert after.tab_read_versions == {"t.abc": 7}

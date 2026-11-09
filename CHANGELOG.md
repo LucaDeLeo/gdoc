@@ -7,6 +7,14 @@ All notable changes to `gdoc` are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- **`gdoc rename-tab DOC TAB TITLE`.** Retitles an existing tab, named by
+  its current title or ID, via the Docs API's
+  `updateDocumentTabProperties` request; content and position are
+  untouched. Output matches `add-tab` (tab ID, new title and a `?tab=`
+  URL; `--json`/`--plain` also report the old title). The main use is
+  renaming the default "Tab 1" of a doc made with `gdoc new`, which was
+  otherwise only possible in the Docs UI. Exposed over MCP as
+  `gdoc_rename_tab` (a write tool).
 - **Native comment and suggestion threads (Docs API developer preview).**
   Three new commands, `suggestions`, `suggestion` and `edit-comment`, plus
   native options on `comment`, `reply` and `delete-comment`:

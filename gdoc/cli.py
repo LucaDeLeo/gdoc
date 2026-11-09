@@ -866,6 +866,82 @@ def cmd_add_tab(args) -> int:
     return 0
 
 
+def cmd_rename_tab(args) -> int:
+    """Handler for `gdoc rename-tab`."""
+    doc_id = _resolve_doc_id(args.doc)
+    quiet = getattr(args, "quiet", False)
+    title = args.title
+    if not title.strip():
+        raise GdocError("tab title cannot be empty", exit_code=3)
+
+    from gdoc.notify import pre_flight
+    change_info = pre_flight(doc_id, quiet=quiet)
+    _require_doc(doc_id, change_info)
+
+    from gdoc.api.docs import get_document_tabs, rename_tab, resolve_tab
+    tab = resolve_tab(get_document_tabs(doc_id), args.tab)
+    tab_id = tab["id"]
+    old_title = tab["title"]
+    rename_tab(doc_id, tab_id, title)
+
+    # The rename is done at this point. A failure of the follow-up version
+    # lookup must not report it as failed (a retry by the old title would
+    # then find no such tab): report success, warn, and leave state alone
+    # rather than record a version we could not read.
+    from gdoc.api.drive import get_file_version
+
+    version_error = None
+    command_version = None
+    try:
+        command_version = get_file_version(doc_id).get("version")
+    except Exception as e:  # noqa: BLE001 — post-mutation; any failure here
+        # (GdocError from the API layer, or a transport error) must not
+        # hide the completed rename.
+        version_error = e
+
+    from gdoc.util import build_doc_url
+    url = build_doc_url(doc_id, tab_id=tab_id)
+
+    from gdoc.format import format_json, get_output_mode
+    mode = get_output_mode(args)
+    if mode == "json":
+        print(format_json(
+            id=tab_id, title=title, old_title=old_title,
+            doc_id=doc_id, url=url,
+        ))
+    elif mode == "verbose":
+        print(f"Renamed tab: {old_title} -> {title}")
+        print(f"ID: {tab_id}")
+        print(f"URL: {url}")
+    elif mode == "plain":
+        print(f"id\t{tab_id}")
+        print(f"title\t{title}")
+        print(f"old_title\t{old_title}")
+        print(f"url\t{url}")
+    else:
+        print(f"{tab_id}\t{title}\t{url}")
+
+    if version_error is not None:
+        print(
+            f"WARN: tab renamed ({old_title} -> {title}) but the document "
+            f"version could not be refreshed: {version_error}; awareness "
+            "state not updated",
+            file=sys.stderr,
+        )
+        return 0
+
+    # A rename bumps the version without touching content, so a read
+    # baseline (whole-doc or per-tab) that was current at pre-flight is
+    # carried past our own bump instead of turning into a false conflict.
+    from gdoc.state import update_state_after_command
+    update_state_after_command(
+        doc_id, change_info, command="rename-tab", quiet=quiet,
+        command_version=command_version, metadata_only_write=True,
+    )
+
+    return 0
+
+
 def _print_tab_write_result(
     mode: str, doc_id: str, result: dict, version, verb: str,
 ) -> None:
@@ -5660,6 +5736,19 @@ def build_parser() -> GdocArgumentParser:
         "--quiet", action="store_true", help="Skip pre-flight checks",
     )
     add_tab_p.set_defaults(func=cmd_add_tab)
+
+    # rename-tab
+    rename_tab_p = sub.add_parser(
+        "rename-tab", parents=[output_parent],
+        help="Rename a tab in a document",
+    )
+    rename_tab_p.add_argument("doc", help="Document ID or URL")
+    rename_tab_p.add_argument("tab", help="Current tab title or ID")
+    rename_tab_p.add_argument("title", help="New title for the tab")
+    rename_tab_p.add_argument(
+        "--quiet", action="store_true", help="Skip pre-flight checks",
+    )
+    rename_tab_p.set_defaults(func=cmd_rename_tab)
 
     # edit
     edit_p = sub.add_parser(
