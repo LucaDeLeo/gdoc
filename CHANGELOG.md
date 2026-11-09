@@ -6,6 +6,8 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-11-09
+
 ### Added
 
 - Native read–modify–write supports structural Markdown changes through the same
