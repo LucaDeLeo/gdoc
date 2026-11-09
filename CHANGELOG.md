@@ -40,6 +40,14 @@ All notable changes to `gdoc` are documented here. This project follows
   `edit-comment` are writes, and `suggestion --delete` and
   `delete-comment` require `force: true`.
 
+### Changed
+- **`gdoc mcp` warms up at startup.** While the client initializes, a
+  background thread imports the Google client, refreshes the access token,
+  builds the Drive and Docs services and opens the Drive connection. The
+  first tool call of a session waits for it instead of repeating that work;
+  on a hosted server this saves about 0.5 s on that call. The warm-up is
+  skipped when the account has no token and never reports errors itself.
+
 ### Fixed
 - **`cat`, `pull`, `diff`, `push` and revision exports no longer show
   `&nbsp;` for empty paragraphs.** The Drive markdown export renders every

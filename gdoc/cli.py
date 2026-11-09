@@ -5351,6 +5351,7 @@ def cmd_mcp(args) -> int:
         allow=allow,
         account=getattr(args, "account", None),
     )
+    server.start_warm_up()
     return server.serve()
 
 
