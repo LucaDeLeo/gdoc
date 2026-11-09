@@ -10,6 +10,7 @@ from googleapiclient.errors import HttpError
 
 from gdoc.api.drive import export_doc_bytes
 from gdoc.cli import cmd_export
+from gdoc.notify import ChangeInfo
 from gdoc.util import GdocError
 
 PDF_MIME = "application/pdf"
@@ -187,3 +188,39 @@ class TestCmdExport:
         args = _make_args(out=str(tmp_path / "r.pdf"))
         cmd_export(args)
         assert mock_update.call_args.kwargs["command"] == "export"
+
+
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Hi\n")
+class TestExportUrlTabNote:
+    # Exports render the whole document, so a URL's tab deep link is
+    # discarded with the same stderr NOTE convention as pull/push.
+    @patch(
+        "gdoc.notify.pre_flight",
+        return_value=ChangeInfo(current_version=42),
+    )
+    def test_notes_discarded_url_tab(self, _pf, _export, _update, capsys):
+        args = _make_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.second",
+            format="md",
+            quiet=False,
+        )
+        rc = cmd_export(args)
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "NOTE" in err
+        assert "t.second" in err
+
+    @patch(
+        "gdoc.notify.pre_flight",
+        return_value=ChangeInfo(current_version=42),
+    )
+    def test_t0_url_tab_is_silent(self, _pf, _export, _update, capsys):
+        args = _make_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.0",
+            format="md",
+            quiet=False,
+        )
+        rc = cmd_export(args)
+        assert rc == 0
+        assert "NOTE" not in capsys.readouterr().err

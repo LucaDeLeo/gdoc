@@ -116,9 +116,24 @@ def test_html_diff_format_is_not_offered():
     assert "color" in props["format"]["enum"]
 
 
-def test_required_options_are_marked_required():
+def test_insert_tab_is_optional_via_url():
     schema = mcp.build_tools(allow={"insert"})["gdoc_insert"]["inputSchema"]
-    # `insert --tab` is required=True in the CLI parser.
+    # `insert --tab` is no longer parser-required: a `doc` URL carrying
+    # `?tab=` satisfies it (cmd_insert errors at runtime when neither is
+    # given).
+    assert "tab" not in schema.get("required", [])
+    assert "doc" in schema["required"]
+
+
+def test_parser_required_flag_is_marked_required():
+    # No exposed command carries required=True on an option anymore, so pin
+    # the action.required derivation branch with a synthetic parser.
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("doc")
+    parser.add_argument("--tab", required=True)
+    schema = mcp._schema_for("insert", parser)
     assert "tab" in schema["required"]
 
 

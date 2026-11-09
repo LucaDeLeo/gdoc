@@ -639,6 +639,17 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
         pageless: If True, set PAGELESS; otherwise PAGES (paged).
     """
     mode = "PAGELESS" if pageless else "PAGES"
+    _update_document_style(
+        doc_id, {"documentFormat": {"documentMode": mode}},
+        "documentFormat.documentMode",
+    )
+
+
+def _update_document_style(doc_id: str, style: dict, fields: str) -> None:
+    """Apply an updateDocumentStyle, retrying transient failures.
+
+    Retrying is safe because setting a style is idempotent.
+    """
     try:
         service = get_docs_service()
         service.documents().batchUpdate(
@@ -647,17 +658,87 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
                 "requests": [
                     {
                         "updateDocumentStyle": {
-                            "documentStyle": {
-                                "documentFormat": {"documentMode": mode},
-                            },
-                            "fields": "documentFormat.documentMode",
+                            "documentStyle": style,
+                            "fields": fields,
                         }
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=_STYLE_RETRIES)
     except HttpError as e:
         _translate_http_error(e, doc_id)
+
+
+# documentStyle fields updateDocumentStyle can write. The others, such as
+# defaultHeaderId and useCustomHeaderFooterMargins, are read-only.
+_WRITABLE_STYLE_FIELDS = (
+    "documentFormat",
+    "background",
+    "pageSize",
+    "flipPageOrientation",
+    "marginTop",
+    "marginBottom",
+    "marginLeft",
+    "marginRight",
+    "marginHeader",
+    "marginFooter",
+    "pageNumberStart",
+    "useFirstPageHeaderFooter",
+    "useEvenPageHeaderFooter",
+)
+_WHITE = {"rgbColor": {"red": 1, "green": 1, "blue": 1}}
+_STYLE_RETRIES = 2
+
+
+def get_document_style(doc_id: str) -> dict:
+    """Return a document's documentStyle (page mode, margins, page size...)."""
+    try:
+        service = get_docs_service()
+        document = (
+            service.documents()
+            .get(documentId=doc_id, fields="documentStyle")
+            .execute(num_retries=_STYLE_RETRIES)
+        )
+        return document.get("documentStyle", {})
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def _comparable_style_value(name: str, value):
+    """A style value for comparing, with an unset and a white background equal.
+
+    A blank doc reports white and a markdown import reports unset, which look
+    the same on screen. Without this, every whole-doc write to a default doc
+    would need a style write.
+    """
+    if name == "background":
+        color = (value or {}).get("color", {}).get("color")
+        return None if color == _WHITE else color
+    return value
+
+
+def restore_document_style(doc_id: str, style: dict) -> None:
+    """Write back the fields of *style* that the document no longer has.
+
+    Args:
+        doc_id: The document ID.
+        style: A documentStyle from get_document_style.
+
+    """
+    current = get_document_style(doc_id)
+    changed = [
+        name for name in _WRITABLE_STYLE_FIELDS
+        if _comparable_style_value(name, style.get(name))
+        != _comparable_style_value(name, current.get(name))
+    ]
+    if not changed:
+        return
+    # A masked field absent from the style resets to its default.
+    _update_document_style(
+        doc_id,
+        {name: style[name] for name in changed if name in style},
+        ",".join(changed),
+    )
 
 
 def _extract_paragraphs_text(content: list[dict]) -> str:
@@ -864,12 +945,17 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
     return "".join(parts)
 
 
-def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
+def resolve_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict:
     """Resolve a tab by title (case-insensitive) or ID.
 
     Args:
         tabs: Flattened list of tab dicts from flatten_tabs().
         tab_name: Tab title or ID to match.
+        by_id: Match the ID only. For values known to be IDs (a URL's
+            ?tab=, an ID resolved earlier): a tab titled like another
+            tab's ID would otherwise win.
 
     Returns:
         The matched tab dict.
@@ -877,9 +963,10 @@ def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
     Raises:
         GdocError: If no matching tab is found.
     """
-    for t in tabs:
-        if t["title"].lower() == tab_name.lower():
-            return t
+    if not by_id:
+        for t in tabs:
+            if t["title"].lower() == tab_name.lower():
+                return t
     for t in tabs:
         if str(t["id"]) == tab_name:
             return t
@@ -1265,7 +1352,7 @@ def _insert_table(
                 documentId=doc_id, includeTabsContent=True,
             ).execute()
             tabs = flatten_tabs(doc.get("tabs", []))
-            tab_match = resolve_tab(tabs, tab_id)
+            tab_match = resolve_tab(tabs, tab_id, by_id=True)
             cell_indices = _find_table_cell_indices(
                 None, index, body=tab_match["body"],
             )
@@ -1773,23 +1860,27 @@ def get_document_structure(
         _translate_http_error(e, doc_id)
 
 
-def resolve_raw_tab(tabs: list[dict], tab_name: str) -> dict | None:
+def resolve_raw_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict | None:
     """Find a raw tab dict by title (case-insensitive) or tab ID.
 
     Unlike resolve_tab (which returns a flattened summary), this returns
     the tab's raw API dict — tabProperties, documentTab, childTabs —
     searching the whole tree. Title matches win over ID matches,
-    mirroring resolve_tab. Returns None when nothing matches.
+    mirroring resolve_tab; by_id skips the title pass, as there.
+    Returns None when nothing matches.
     """
     def walk(ts: list[dict]):
         for t in ts:
             yield t
             yield from walk(t.get("childTabs", []))
 
-    for t in walk(tabs):
-        props = t.get("tabProperties", {})
-        if props.get("title", "").lower() == tab_name.lower():
-            return t
+    if not by_id:
+        for t in walk(tabs):
+            props = t.get("tabProperties", {})
+            if props.get("title", "").lower() == tab_name.lower():
+                return t
     for t in walk(tabs):
         if str(t.get("tabProperties", {}).get("tabId", "")) == tab_name:
             return t
@@ -1935,10 +2026,11 @@ def _strip_trailing_newline_unless_hr(parsed) -> None:
 
 def insert_markdown_into_tab(
     doc_id: str,
-    tab_name: str,
+    tab_id: str,
     markdown: str,
     position: str = "start",
     replace: bool = False,
+    doc: dict | None = None,
 ) -> dict:
     """Insert (or replace) markdown content in a tab via Docs API.
 
@@ -1947,22 +2039,29 @@ def insert_markdown_into_tab(
 
     Args:
         doc_id: Document ID.
-        tab_name: Tab title (case-insensitive) or tab ID.
+        tab_id: ID of the tab to write (callers resolve titles first, so
+            the tab written is the tab they checked).
         markdown: Markdown source to insert (frontmatter should be
             stripped by the caller).
         position: "start" or "end". Ignored when replace=True.
         replace: If True, delete the tab body first then insert at the
             body start.
+        doc: Optional pre-fetched get_document_with_tabs() response. When a
+            caller (e.g. `write --tab`) already fetched the doc to resolve the
+            tab for its conflict check, pass it here to avoid a second fetch.
+            Its revisionId still pins writeControl, so a concurrent edit
+            between the fetch and this write is still rejected.
 
     Returns:
         Dict with "tab_id", "tab_title", "insert_index".
     """
     from gdoc.mdparse import parse_markdown, to_docs_requests, utf16_len
 
-    doc = get_document_with_tabs(doc_id)
+    if doc is None:
+        doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
     tabs = flatten_tabs(doc.get("tabs", []))
-    tab_match = resolve_tab(tabs, tab_name)
+    tab_match = resolve_tab(tabs, tab_id, by_id=True)
     tab_id = tab_match["id"]
     body = tab_match["body"]
 
@@ -2122,7 +2221,7 @@ def replace_formatted(
         if tab_id:
             doc = get_document_with_tabs(doc_id)
             tabs = flatten_tabs(doc.get("tabs", []))
-            tab_match = resolve_tab(tabs, tab_id)
+            tab_match = resolve_tab(tabs, tab_id, by_id=True)
             fetch_body = tab_match["body"]
         else:
             doc = service.documents().get(documentId=doc_id).execute()

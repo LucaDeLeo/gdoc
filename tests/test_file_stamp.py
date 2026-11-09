@@ -21,6 +21,7 @@ from gdoc.frontmatter import parse_frontmatter
 from gdoc.notify import ChangeInfo
 from gdoc.state import DocState
 from gdoc.util import GdocError
+from tests.conftest import doc_with_tabs as _doc_with_tabs
 
 DOC = "abc123"
 
@@ -126,6 +127,30 @@ class TestStaleFileRefused:
             cmd_write(_write_args(f))
         assert exc.value.exit_code == 3
         mock_upload.assert_not_called()
+
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.0", "Main"), ("t.n", "Notes")))
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 2})
+    @patch("gdoc.notify.pre_flight", return_value=_machine_read(2))
+    def test_write_tab(self, _pf, _ver, _doc, mock_insert, tmp_path):
+        """The stamp beats the per-tab baseline: `cat --tab Notes` at v2
+        must not bless a file pulled at v1."""
+        from gdoc.state import save_state
+
+        save_state(DOC, DocState(
+            last_read_version=2, last_version=2,
+            tab_read_versions={"t.n": 2}, global_read_covers_doc=True,
+        ))
+        f = tmp_path / "draft.md"
+        f.write_text(_stamped(1))
+        before = f.read_bytes()
+        with pytest.raises(GdocError) as exc:
+            cmd_write(_write_args(f, tab="Notes"))
+        assert exc.value.exit_code == 3
+        assert "Nothing was sent" in str(exc.value)
+        mock_insert.assert_not_called()
+        assert f.read_bytes() == before
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.update_doc_content", return_value=3)
@@ -285,10 +310,16 @@ class TestCurrentStampUploads:
         assert _stamp_of(target) == "6"
 
     @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 9})
+    # The stamp check reads v5; the read after the write sees v9.
+    @patch("gdoc.api.drive.get_file_version",
+           side_effect=[{"version": 5}, {"version": 9}])
     @patch("gdoc.api.docs.insert_markdown_into_tab", return_value={})
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.0", "Main"), ("t.n", "Notes")))
     @patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=5))
-    def test_tab_write_leaves_stamp(self, _pf, _tab, _ver, _state, tmp_path, capsys):
+    def test_tab_write_leaves_stamp(
+        self, _pf, _doc, _tab, _ver, _state, tmp_path, capsys,
+    ):
         """A tab write's post-upload version comes from a separate read,
         which could bless someone else's edit, so the stamp stays put."""
         f = tmp_path / "draft.md"
