@@ -575,7 +575,7 @@ def to_docs_requests(
     para_styles = [sr for sr in parsed.styles if sr.type == "paragraph_style"]
     runs = _list_runs(bullet_ranges, text)
     table_offsets = [t.plain_text_offset for t in parsed.tables]
-    for chain in _numbering_chains(runs, table_offsets):
+    for chain in _numbering_chains(runs, table_offsets, text):
         start, end = chain[0][0].start, chain[-1][-1].end
         requests.append({
             "createParagraphBullets": {
@@ -644,21 +644,41 @@ def _list_runs(bullet_ranges: list[StyleRange], text: str) -> list[list[StyleRan
 
 
 def _numbering_chains(
-    runs: list[list[StyleRange]], table_offsets: list[int],
+    runs: list[list[StyleRange]], table_offsets: list[int], text: str,
 ) -> list[list[list[StyleRange]]]:
-    """Join each numbered run that starts above 1 to the numbered run before it.
+    """Join runs that belong to the list above them into one chain.
 
-    Docs numbers every item of one list in sequence, even with other
-    paragraphs between them, so "1. a", a heading, then "2. b" stays 1, 2
-    only if both runs are one list. Runs separated by a table or by a bullet
-    list are not joined.
+    Two kinds of run join the chain before them:
+
+    - a nested run: its first item has leading tabs. Only blank paragraphs
+      can separate it from the item above (any other line ends the list
+      nesting in parse_markdown), as in a loose list ("- a", blank, "  - b").
+      Bulleted on its own, its level would be computed against itself and
+      come out as 0.
+    - a resumed numbered run (starting above 1) after a numbered chain.
+      Docs numbers every item of one list in sequence, even with other
+      paragraphs between them, so "1. a", a heading, then "2. b" stays 1, 2
+      only if both runs are one list. The chain's first run decides whether
+      it is numbered, since a nested bullet run can end a numbered chain and
+      takes its preset.
+
+    Runs are never joined across a table, or across a gap paragraph that
+    starts with a tab (such as an indented line in a code block): the
+    chain's createParagraphBullets would strip that tab from content that
+    is not a list item. Runs separated by a bullet list are not joined.
     """
     chains: list[list[list[StyleRange]]] = []
     for run in runs:
-        if chains and _numbered(run) and run[0].style.get("start", 1) > 1 \
-                and _numbered(chains[-1][-1]):
+        if chains:
+            nested = _leading_tabs(text, run[0].start) > 0
+            resumed = (
+                _numbered(run) and run[0].style.get("start", 1) > 1
+                and _numbered(chains[-1][0])
+            )
             gap_start, gap_end = chains[-1][-1][-1].end, run[0].start
-            if not any(gap_start <= off < gap_end for off in table_offsets):
+            tabbed_gap = "\n\t" in "\n" + text[gap_start:gap_end]
+            in_table = any(gap_start <= off < gap_end for off in table_offsets)
+            if (nested or resumed) and not tabbed_gap and not in_table:
                 chains[-1].append(run)
                 continue
         chains.append([run])

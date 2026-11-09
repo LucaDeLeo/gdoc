@@ -899,6 +899,47 @@ class TestNumberingAcrossParagraphs:
         style = reqs[2]["updateParagraphStyle"]["paragraphStyle"]
         assert style["indentStart"]["magnitude"] > 0
 
+    @staticmethod
+    def _span(r):
+        body = next(iter(r.values()))
+        return body["range"]["startIndex"], body["range"]["endIndex"]
+
+    def test_loose_nested_list_stays_nested(self):
+        # text "a\n\n\tb\n": bulleted alone, "\tb" would be level 0.
+        reqs = self._bullet_reqs("- a\n\n  - b")
+        kinds = [next(iter(r)) for r in reqs]
+        assert kinds == [
+            "createParagraphBullets", "deleteParagraphBullets",
+            "updateParagraphStyle",
+        ]
+        assert self._span(reqs[0]) == (1, 7)
+        assert reqs[0]["createParagraphBullets"]["bulletPreset"] == (
+            "BULLET_DISC_CIRCLE_SQUARE"
+        )
+        assert self._span(reqs[1]) == (3, 4)  # the blank line, unbulleted
+
+    def test_loose_nested_bullet_keeps_the_numbering(self):
+        # text "a\n\n\tb\n\nc\n": one numbered list, so "2. c" stays 2.
+        reqs = self._bullet_reqs("1. a\n\n   - b\n\n2. c")
+        creates = [r for r in reqs if "createParagraphBullets" in r]
+        assert len(creates) == 1
+        assert self._span(creates[0]) == (1, 10)
+        assert creates[0]["createParagraphBullets"]["bulletPreset"] == (
+            "NUMBERED_DECIMAL_ALPHA_ROMAN"
+        )
+        deletes = [
+            self._span(r) for r in reqs if "deleteParagraphBullets" in r
+        ]
+        # Second blank sits after the nested item's tab is removed.
+        assert deletes == [(3, 4), (6, 7)]
+
+    def test_tab_indented_gap_paragraph_keeps_lists_separate(self):
+        # text "a\n\n\tcode\n\nb\n": joining would strip the code tab.
+        reqs = self._bullet_reqs("1. a\n\n```\n\tcode\n```\n\n2. b")
+        assert [next(iter(r)) for r in reqs] == ["createParagraphBullets"] * 2
+        assert self._span(reqs[0]) == (1, 3)
+        assert self._span(reqs[1]) == (11, 13)
+
 
 class TestTableTabAdjustment:
     def test_removed_tabs_before_counts_preceding_nest_tabs(self):

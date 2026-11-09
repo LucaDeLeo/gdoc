@@ -12,11 +12,12 @@ All notable changes to `gdoc` are documented here. This project follows
   relative to the enclosing item, as in CommonMark, so `- a` then
   `    - b` is one level deep, as are sub-items under `1.` and `10.`.
   Bullets nested under numbered items join the numbered list (shown as
-  "a.", as when Tab indents them in the Docs editor).
+  "a.", as when Tab indents them in the Docs editor). This holds for loose
+  lists too (blank lines between items).
 - **A numbered list that resumes after other paragraphs keeps its
   numbers.** `10.` below a heading used to restart at 1; it now continues
-  the numbered list above it. Lists separated by a table or a bullet list
-  stay separate.
+  the numbered list above it. Lists separated by a table, a bullet list or
+  a line starting with a tab (such as an indented code line) stay separate.
 - **`cat`, `pull`, `diff`, `push` and revision exports no longer show
   `&nbsp;` for empty paragraphs.** The Drive markdown export renders every
   empty paragraph as a line holding only `&nbsp;`. Agents that read a doc
