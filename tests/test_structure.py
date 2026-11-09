@@ -114,11 +114,11 @@ class TestResolveRawTab:
         tab = resolve_raw_tab(_DOC["tabs"], "Appendix")
         assert tab["tabProperties"]["tabId"] == "t2c"
 
-    def test_title_beats_id(self):
-        # A tab titled "t1" must win over the tab whose ID is "t1".
+    def test_id_beats_title(self):
+        # The tab whose ID is "t1" must win over a tab titled "t1".
         tabs = [_tab("t1", "Main"), _tab("x9", "t1")]
         tab = resolve_raw_tab(tabs, "t1")
-        assert tab["tabProperties"]["tabId"] == "x9"
+        assert tab["tabProperties"]["tabId"] == "t1"
 
     def test_by_id_ignores_titles(self):
         tabs = [_tab("t1", "Main"), _tab("x9", "t1")]
@@ -195,7 +195,7 @@ class TestCmdStructure:
     def test_state_updated_as_structure(self, mock_get, mock_update):
         args = _make_args()
         cmd_structure(args)
-        assert mock_update.call_args.kwargs["command"] == "structure"
+        assert mock_update.call_args.kwargs["command"] == "structure-content"
 
     def test_spreadsheet_rejected(self, mock_get, _update):
         change_info = ChangeInfo(mime_type=SPREADSHEET_MIME)
@@ -207,6 +207,31 @@ class TestCmdStructure:
         mock_get.assert_not_called()
 
 
+@pytest.mark.parametrize("selector", [{"heading": "Target"}, {"table": 1}])
+def test_direct_structure_selection_is_partial(mocker, capsys, selector):
+    from gdoc.state import load_state
+
+    document = {
+        "documentId": "synthetic", "revisionId": "r1", "tabs": [{
+            "tabProperties": {"tabId": "main", "title": "Main"},
+            "documentTab": {"body": {"content": [
+                {"paragraph": {"paragraphStyle": {"namedStyleType": "HEADING_2"},
+                               "elements": [{"textRun": {"content": "Target\n"}}]}},
+                {"paragraph": {"elements": [{"textRun": {"content": "Unrelated\n"}}]}},
+                {"table": {"rows": 1, "columns": 1, "tableRows": []}},
+            ]}},
+        }],
+    }
+    mocker.patch("gdoc.api.docs.get_document_structure", return_value=document)
+    mocker.patch("gdoc.notify.pre_flight", return_value=ChangeInfo(
+        mime_type="application/vnd.google-apps.document",
+    ))
+    cmd_structure(_make_args(doc="synthetic", json=True, **selector))
+    result = json.loads(capsys.readouterr().out)["document"]
+    assert result["revisionId"] == "r1"
+    assert result["scope"] == {"tab_ids": ["main"], "complete": False}
+    assert "Unrelated" not in json.dumps(result)
+    assert load_state("synthetic").read_revision_ids == {}
 @patch("gdoc.state.update_state_after_command")
 @patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
 class TestStructureUrlTab:
@@ -237,51 +262,51 @@ class TestStructureUrlTab:
         assert json.loads(capsys.readouterr().out) == _DOC
 
 
+def _covered():
+    from gdoc.state import load_state
+
+    state = load_state("doc123")
+    return state.read_revision_ids if state else {}
+
+
 @patch("gdoc.state.update_state_after_command")
 @patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
 class TestStructureTabBaseline:
-    def test_multi_tab_read_stamps_tab_baseline(self, mock_get, mock_update):
-        args = _make_args(tab="Notes")
-        cmd_structure(args)
-        assert mock_update.call_args.kwargs["read_tab_id"] == "t2"
+    """An unmasked structure read covers the tabs it returned, at its
+    revision (in 0.23.0 these stamped Drive-version baselines)."""
 
-    def test_whole_doc_read_keeps_global_baseline(self, mock_get, mock_update):
-        args = _make_args()
-        cmd_structure(args)
-        assert mock_update.call_args.kwargs["read_tab_id"] is None
+    def test_multi_tab_read_covers_that_tab(self, mock_get, mock_update):
+        cmd_structure(_make_args(tab="Notes"))
+        assert _covered() == {"t2": "rev7", "t2c": "rev7"}
+
+    def test_whole_doc_read_covers_every_tab(self, mock_get, mock_update):
+        cmd_structure(_make_args())
+        assert _covered() == {"t1": "rev7", "t2": "rev7", "t2c": "rev7"}
 
     def test_single_tab_read_is_whole_doc(self, mock_get, mock_update):
         # One tab IS the whole document (same rule as `cat --tab`).
         mock_get.return_value = {
-            "documentId": "doc123",
+            "documentId": "doc123", "revisionId": "rev7",
             "tabs": [_tab("t1", "Main")],
         }
-        args = _make_args(tab="Main")
-        cmd_structure(args)
-        assert mock_update.call_args.kwargs["read_tab_id"] is None
+        cmd_structure(_make_args(tab="Main"))
+        assert _covered() == {"t1": "rev7"}
 
 
 @patch("gdoc.state.update_state_after_command")
 @patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
 class TestStructureFieldsBaseline:
-    """F1: a --fields-masked response can't prove a full read, so it must
-    not advance any read baseline (global or per-tab)."""
+    """A --fields-masked response can't prove a full read, so it records
+    no read coverage (whole document or tab)."""
 
     def test_fields_read_is_partial(self, mock_get, mock_update):
-        args = _make_args(fields="tabs(tabProperties)")
-        cmd_structure(args)
-        kw = mock_update.call_args.kwargs
-        assert kw["command"] == "structure-partial"
-        assert kw.get("read_tab_id") is None
+        cmd_structure(_make_args(fields="tabs(tabProperties)"))
+        assert _covered() == {}
 
     def test_fields_with_tab_stamps_nothing(self, mock_get, mock_update):
-        args = _make_args(tab="Notes", fields="tabs(tabProperties),revisionId")
-        cmd_structure(args)
-        kw = mock_update.call_args.kwargs
-        assert kw["command"] == "structure-partial"
-        assert kw.get("read_tab_id") is None
+        cmd_structure(_make_args(tab="Notes", fields="tabs(tabProperties),revisionId"))
+        assert _covered() == {}
 
     def test_unmasked_read_still_counts(self, mock_get, mock_update):
-        args = _make_args()
-        cmd_structure(args)
-        assert mock_update.call_args.kwargs["command"] == "structure"
+        cmd_structure(_make_args())
+        assert _covered() != {}

@@ -103,8 +103,10 @@ class TestResolveCellRange:
             _table([[("Dup\n", 5), ("first\n", 20)]]),
             _table([[("Dup\n", 40), ("second\n", 55)]]),
         ]}
-        # No --table → scan all tables; first match (table 0) wins.
-        assert resolve_cell_range(two, "Dup") == {"startIndex": 20, "endIndex": 25}
+        # An unqualified label must identify one row across all tables.
+        with pytest.raises(GdocError, match="ambiguous cell label") as exc:
+            resolve_cell_range(two, "Dup")
+        assert exc.value.exit_code == 3
         # --table 1 selects the matching cell in the second table.
         assert resolve_cell_range(two, "Dup", table_index=1) == {
             "startIndex": 55, "endIndex": 61,

@@ -259,62 +259,103 @@ class TestGetFileInfo:
             get_file_info("abc")
 
 
-@patch("gdoc.api.docs.restore_document_style")
-@patch("gdoc.api.docs.get_document_style", return_value={})
-@patch("gdoc.api.drive.get_drive_service")
+@patch("gdoc.api.docs.get_docs_service")
 class TestUpdateDocContent:
-    def test_success(self, mock_get_service, _read, _restore):
+    @pytest.fixture(autouse=True)
+    def _import_preflight(self, mocker):
+        mocker.patch("gdoc.api.drive.get_file_version", return_value={"version": 1})
+        mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
+            "revisionId": "rev1",
+            "tabs": [
+                {"tabProperties": {"tabId": "a", "title": "A"}},
+                {"tabProperties": {"tabId": "b", "title": "B"}},
+            ],
+        })
+
+    def test_success(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
-        mock_service.files().update().execute.return_value = {
+        mock_service.documents().batchUpdate().execute.return_value = {
             "version": "42",
         }
 
         result = update_doc_content("abc123", "# Hello")
-        assert result == 42
+        assert result == 1
 
-    def test_request_params(self, mock_get_service, _read, _restore):
+    def test_request_params(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
-        mock_service.files().update().execute.return_value = {
+        mock_service.documents().batchUpdate().execute.return_value = {
             "version": "10",
         }
 
         update_doc_content("abc123", "# Hello")
 
-        call_kwargs = mock_service.files().update.call_args
+        call_kwargs = mock_service.documents().batchUpdate.call_args
         assert call_kwargs is not None
         body = call_kwargs.kwargs.get("body", call_kwargs[1].get("body"))
-        assert body["mimeType"] == (
-            "application/vnd.google-apps.document"
-        )
+        assert body["writeControl"] == {"requiredRevisionId": "rev1"}
+        assert any("insertText" in request for request in body["requests"])
 
-    def test_http_error_401(self, mock_get_service, _read, _restore):
+    def test_http_error_401(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
-        mock_service.files().update().execute.side_effect = (
+        mock_service.documents().batchUpdate().execute.side_effect = (
             _make_http_error(401)
         )
 
         with pytest.raises(AuthError, match="Authentication expired"):
             update_doc_content("abc123", "content")
 
-    def test_http_error_403(self, mock_get_service, _read, _restore):
+    def test_http_error_403(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
-        mock_service.files().update().execute.side_effect = (
+        mock_service.documents().batchUpdate().execute.side_effect = (
             _make_http_error(403, reason="forbidden")
         )
 
         with pytest.raises(GdocError, match="Permission denied"):
             update_doc_content("abc123", "content")
 
-    def test_http_error_404(self, mock_get_service, _read, _restore):
+    def test_http_error_404(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
-        mock_service.files().update().execute.side_effect = (
+        mock_service.documents().batchUpdate().execute.side_effect = (
             _make_http_error(404)
         )
 
         with pytest.raises(GdocError, match="Document not found"):
             update_doc_content("abc123", "content")
+
+
+class TestRequireWriteVersion:
+    """Drive's version can move without a content change (a new document's
+    settles after creation); the Docs revision decides."""
+
+    def _run(self, mocker, version, revision):
+        from gdoc.api.drive import require_write_version
+
+        mocker.patch("gdoc.api.drive.get_file_version",
+                     return_value={"version": version})
+        structure = mocker.patch("gdoc.api.docs.get_document_structure",
+                                 return_value={"revisionId": revision})
+        require_write_version("doc", 5, "rev-a")
+        return structure
+
+    def test_same_version_needs_no_revision_read(self, mocker):
+        assert not self._run(mocker, 5, "rev-b").called
+
+    def test_moved_version_with_the_same_revision_proceeds(self, mocker):
+        structure = self._run(mocker, 6, "rev-a")
+        structure.assert_called_once_with("doc", fields="revisionId")
+
+    def test_moved_revision_is_a_conflict(self, mocker):
+        with pytest.raises(GdocError, match="changed while preparing"):
+            self._run(mocker, 6, "rev-b")
+
+    def test_without_a_revision_a_moved_version_is_a_conflict(self, mocker):
+        from gdoc.api.drive import require_write_version
+
+        mocker.patch("gdoc.api.drive.get_file_version", return_value={"version": 6})
+        with pytest.raises(GdocError, match="changed while preparing"):
+            require_write_version("doc", 5)

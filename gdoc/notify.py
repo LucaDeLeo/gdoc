@@ -209,7 +209,6 @@ def _print_banner(info: ChangeInfo, state) -> None:
         return
 
     if not info.has_changes:
-        print("--- no changes ---", file=sys.stderr)
         return
 
     # Build change lines
@@ -223,7 +222,7 @@ def _print_banner(info: ChangeInfo, state) -> None:
             version_str = f" (v{info.old_version} \u2192 v{info.new_version})"
         print(f" \u270e doc edited by {info.editor}{version_str}", file=sys.stderr)
 
-    for c in info.new_comments:
+    for c in info.new_comments[:3]:
         author = c.get("author", {})
         name = author.get("emailAddress") or author.get("displayName", "")
         content = c.get("content", "")
@@ -232,7 +231,7 @@ def _print_banner(info: ChangeInfo, state) -> None:
             content = content[:57] + "..."
         print(f' \U0001f4ac new comment #{cid} by {name}: "{content}"', file=sys.stderr)
 
-    for c in info.new_replies:
+    for c in info.new_replies[:3]:
         cid = c.get("id", "")
         replies = c.get("replies", [])
         if replies:
@@ -244,7 +243,7 @@ def _print_banner(info: ChangeInfo, state) -> None:
                 content = content[:57] + "..."
             print(f' \u21a9 new reply on #{cid} by {name}: "{content}"', file=sys.stderr)
 
-    for c in info.newly_resolved:
+    for c in info.newly_resolved[:3]:
         cid = c.get("id", "")
         replies = c.get("replies", [])
         resolver = ""
@@ -257,7 +256,7 @@ def _print_banner(info: ChangeInfo, state) -> None:
             resolver = "unknown"
         print(f" \u2713 comment #{cid} resolved by {resolver}", file=sys.stderr)
 
-    for c in info.newly_reopened:
+    for c in info.newly_reopened[:3]:
         cid = c.get("id", "")
         replies = c.get("replies", [])
         reopener = ""
@@ -270,6 +269,14 @@ def _print_banner(info: ChangeInfo, state) -> None:
             reopener = "unknown"
         print(f" \u21ba comment #{cid} reopened by {reopener}", file=sys.stderr)
 
+    omitted = sum(max(0, len(items) - 3) for items in (
+        info.new_comments, info.new_replies, info.newly_resolved, info.newly_reopened,
+    ))
+    if omitted:
+        print(
+            f" {omitted} more comment updates; use `gdoc comments` for details",
+            file=sys.stderr,
+        )
     print("---", file=sys.stderr)
 
 

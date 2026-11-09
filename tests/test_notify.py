@@ -162,7 +162,7 @@ class TestPreFlightChanges:
         result = pre_flight("doc1")
         assert not result.has_changes
         err = capsys.readouterr().err
-        assert "no changes" in err
+        assert err == ""
 
     @patch("gdoc.api.comments.list_comments", return_value=[])
     @patch("gdoc.api.drive.get_file_version")
@@ -372,3 +372,16 @@ class TestFormatTimeAgo:
         mock_dt.now.return_value = now
         mock_dt.fromisoformat = datetime.fromisoformat
         assert _format_time_ago("2025-01-20T14:30:00Z") == "1 day ago"
+
+
+def test_comment_banner_is_bounded_without_losing_change_counts(capsys):
+    info = ChangeInfo(new_comments=[
+        {"id": str(i), "content": "Comment", "author": {"displayName": "Writer"}}
+        for i in range(100)
+    ])
+    _print_banner(info, None)
+    output = capsys.readouterr().err
+    assert output.count("new comment #") == 3
+    assert "97 more comment updates" in output
+    assert "gdoc comments" in output
+    assert len(info.new_comments) == 100

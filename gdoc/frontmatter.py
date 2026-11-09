@@ -2,7 +2,28 @@
 
 import re
 
-_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
+# An empty metadata block. Markdown whose body starts with a `---` line is
+# written after one, so the body's leading rule is never read as metadata.
+_EMPTY_FRONTMATTER_RE = re.compile(r"^---\r?\n---\r?\n")
+_LEADING_RULE_RE = re.compile(r"^---\r?\n")
+# A metadata key line: a key, then a colon followed by a space or the line
+# end. A plain identifier key may also be followed directly by a value
+# (`key:value`) unless that value starts a path or URL (`/`, `\\`). Keys
+# hold no Markdown link, code, table or escape characters (`[ ] ( ) < > ` |
+# \\`), no strikethrough (`~`), do not start or end with emphasis marks
+# (`*`, `_`), and are not list items or quotes.
+_PLAIN_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
+_KEY_LINE_RE = re.compile(
+    r"(?![-+*>]\s|\d+[.)]\s)"
+    r"([^\s:#\[\]()<>`|\\~*_][^:\[\]()<>`|\\~]*?(?<![*_\s]))[ \t]*"
+    r"(?::(?=\s|$)|(?<=[A-Za-z0-9_.-]):(?![/\\])(?=\S))"
+)
+
+
+def protect_body(body: str) -> str:
+    """Return *body* as Markdown input whose metadata block cannot absorb it."""
+    return "---\n---\n" + body if _LEADING_RULE_RE.match(body) else body
 
 
 def parse_frontmatter(content: str) -> tuple[dict, str]:
@@ -10,37 +31,161 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
 
     Returns (metadata_dict, body_without_frontmatter).
     If no valid frontmatter, returns ({}, content).
-    Only supports flat key: value pairs.
+    Only supports flat key: value pairs. A leading UTF-8 byte-order mark,
+    which some editors add on save, is ignored.
 
-    A leading `---\\n...\\n---\\n` block is only treated as frontmatter
-    when at least one `key: value` line parses out of it. Empty blocks
-    or blocks containing only prose (for example, a thematic break
-    followed by another `---`) are left in place to avoid silently
-    eating content.
+    Markdown input carries at most one leading metadata block: either an
+    empty block (`---` on two consecutive lines, which `protect_body` adds
+    before a body that starts with a rule) or a YAML-style block. A block
+    is metadata when its first line after any `#` comments is a key line
+    and so is every unindented line with a colon (see `_KEY_LINE_RE`):
+    Markdown-shaped lines (links, code, tables, list items, quotes,
+    emphasis-wrapped keys, paths and URLs such as `https://…`) are not key
+    lines. Comments, nested YAML and colon-free lines are skipped. Any other
+    block, including one opening with a blank line, stays in the body as
+    rules and paragraphs. A prose line shaped like `Note: keep me` is a key
+    line; a body meant to start `---`, `Note: keep me`, `---` is written
+    after the empty block, as `cat` prints it, or escapes the colon
+    (`Note\\:`).
     """
+    content = content.removeprefix("\ufeff")
+    empty = _EMPTY_FRONTMATTER_RE.match(content)
+    if empty:
+        return {}, content[empty.end():]
     match = _FRONTMATTER_RE.match(content)
     if not match:
         return {}, content
 
     raw = match.group(1)
+    lines = raw.splitlines()
+    first = next((line for line in lines if not line.startswith("#")), "")
+    if not _KEY_LINE_RE.match(first):
+        return {}, content
     metadata: dict[str, str] = {}
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
+    for line in lines:
+        # Nested YAML (indented lines, list items) and comments are skipped.
+        if line[:1] in (" ", "\t") or line.startswith(("#", "-")):
             continue
-        colon = line.find(":")
-        if colon == -1:
+        if ":" not in line:
             continue
-        key = line[:colon].strip()
-        value = line[colon + 1 :].strip()
-        if key:
-            metadata[key] = value
+        key_line = _KEY_LINE_RE.match(line)
+        if not key_line or (
+            not line[key_line.end():][:1].isspace() and line[key_line.end():]
+            and not _PLAIN_KEY_RE.fullmatch(key_line[1])
+        ):
+            return {}, content
+        key = key_line[1].strip()
+        if len(key) > 1 and key[0] == key[-1] and key[0] in "\"'":
+            key = key[1:-1]
+        metadata[key] = line[key_line.end():].strip()
 
     if not metadata:
         return {}, content
 
     body = content[match.end() :]
     return metadata, body
+
+
+# A line holding a gdoc key (`gdoc`, `gdoc-*`, maybe quoted, then a colon and
+# a space or the line end) after any run of characters other than letters and
+# digits, and of numbered-list markers: `gdoc: ID`, `> - gdoc-revision: R`,
+# `1. gdoc: ID`, `"gdoc": ID`. `cat`'s `gdoc-image:ID` and
+# `<!-- gdoc:TITLE -->` tokens are not keys.
+_GDOC_KEY_LINE_RE = re.compile(
+    r"(?:[\W_]|\d+[.)])*gdoc(?:-[\w.-]*)?[\"']?[ \t]*:(?=\s|$)")
+# A gdoc key spelled as `pull` writes it.
+_PULLED_KEY_RE = re.compile(r"gdoc(?:-[a-z0-9-]+)?:(?: |$)")
+
+
+def _gdoc_key_lines(text: str) -> list[str]:
+    """The lines of *text* holding a gdoc key, as read after NFKC, with
+    format characters and combining marks removed, in lower case."""
+    import unicodedata
+
+    text = "".join(char for char in unicodedata.normalize("NFKC", text)
+                   if unicodedata.category(char) != "Cf"
+                   and unicodedata.category(char)[0] != "M").lower()
+    return [line for line in text.splitlines()
+            if _GDOC_KEY_LINE_RE.match(line)]
+
+
+def _pulled_line(line: str) -> bool:
+    """Whether *line* can stand in a header as `pull` writes it: a key line,
+    whose gdoc key, if any, is spelled in lower case at the line start."""
+    return bool(line and _KEY_LINE_RE.match(line)
+                and (not _gdoc_key_lines(line) or _PULLED_KEY_RE.match(line)))
+
+
+def _pulled_header(content: str) -> bool:
+    """Whether *content* starts, after at most one byte-order mark, with a
+    header as `pull` writes it: `---`, `key: value` lines naming the document
+    (`gdoc: ID`), each gdoc key spelled in lower case at the line start, and
+    `---`."""
+    content = content.removeprefix("\ufeff")
+    match = _FRONTMATTER_RE.match(content)
+    if not match or not parse_frontmatter(content)[0].get("gdoc"):
+        return False
+    return all(_pulled_line(line) for line in re.split(r"\r?\n", match[1]))
+
+
+# A key line only `pull` writes, so a file holding one was pulled.
+_STAMP_KEY_LINE_RE = re.compile(
+    r"(?:[\W_]|\d+[.)])*gdoc-(?:revision|version)[\"']?[ \t]*:")
+
+
+def provenance_header_problem(
+        content: str) -> tuple[str, str | None, bool] | None:
+    """Why *content* can't be written safely as a pulled file, or None.
+
+    A file that starts with a header as `pull` writes it (see
+    `_pulled_header`) is a pulled file, and its stale-file checks run. Any
+    other file holding a `gdoc` or `gdoc-*` key line anywhere, after any
+    prefix of characters other than letters and digits (spaces, `>`, `-`,
+    backticks, `<!--`) and ignoring case, invisible characters and accents,
+    is refused: it may be a pulled file whose header gdoc can't read, so its
+    stale-file checks couldn't run and the header would be written as text.
+
+    Returns where the header stops being read, the fix that makes it read
+    (None for text before the header in a file that may never have been
+    pulled, where that text may be the document's own), and whether the file
+    holds a `gdoc-revision` or `gdoc-version` key, which only `pull` writes.
+    """
+    if _pulled_header(content):
+        return None
+    found = _gdoc_key_lines(content)
+    if not found:
+        return None
+    stamped = any(_STAMP_KEY_LINE_RE.match(line) for line in found)
+    lines = re.split(r"\r?\n", content.removeprefix("\ufeff"))
+    if len(lines) > 1 and not lines[-1]:
+        lines.pop()  # The final line break ends a line; it starts none.
+    first = next((number for number, line in enumerate(lines, 1)
+                  if _gdoc_key_lines(line)), 1)
+    if lines[0] == "---":
+        for number, line in enumerate(lines[1:], 2):
+            if line == "---":
+                break
+            if not _pulled_line(line):
+                return (f"line {number} ({line[:60]!r}) stops the header "
+                        "being read", f"correct line {number} to `---`"
+                        if line.strip() == "---" else
+                        f"correct or remove line {number}", stamped)
+        else:
+            return ("the header has no closing `---` line",
+                    "restore the closing `---` line", stamped)
+        if first < number:  # Such as `gdoc:` naming no document.
+            return f"gdoc can't read the header ending at line {number}", None, stamped
+    if first == 1:
+        return (f"line 1 ({lines[0].strip()[:60]!r}) has no `---` line above "
+                "it", "restore the header's opening `---`" if stamped else None,
+                stamped)
+    if first == 2 and lines[0].strip(" \t\ufeff") == "---":
+        return (f"line 1 ({lines[0][:60]!r}) stops the header being read",
+                "correct line 1 to `---`", stamped)
+    return (f"text comes before its gdoc header line, line {first} "
+            f"({lines[first - 1].strip()[:60]!r})",
+            "delete the text above the header's opening `---`"
+            if stamped else None, stamped)
 
 
 def add_frontmatter(body: str, metadata: dict) -> str:
@@ -67,25 +212,117 @@ def add_frontmatter(body: str, metadata: dict) -> str:
     return "\n".join(lines) + body
 
 
-def set_frontmatter_value(content: str, key: str, value: str) -> str:
-    """Set one key in content's frontmatter, leaving everything else as is.
+def update_frontmatter_value(content: str, key: str, value: str) -> str:
+    """Update one flat field without reserializing unrelated frontmatter.
 
-    Replaces every `key:` line in the leading frontmatter block, or
-    appends one when the key is absent. The body and the other keys are
-    kept byte-for-byte. Raises ValueError when content has no
-    frontmatter block.
+    A leading UTF-8 byte-order mark is kept, as parse_frontmatter ignores it.
     """
+    if content.startswith("\ufeff"):
+        return "\ufeff" + update_frontmatter_value(content[1:], key, value)
     match = _FRONTMATTER_RE.match(content)
     if not match:
-        raise ValueError("no frontmatter block")
-    value = " ".join(str(value).splitlines())
-    lines = match.group(1).split("\n")
-    found = False
-    for i, line in enumerate(lines):
-        name, sep, _ = line.partition(":")
-        if sep and name.strip() == key:
-            lines[i] = f"{key}: {value}"
-            found = True
-    if not found:
-        lines.append(f"{key}: {value}")
-    return "---\n" + "\n".join(lines) + "\n---\n" + content[match.end():]
+        return content
+    raw = match[1]
+    replacement = f"{key}: {' '.join(str(value).splitlines())}"
+    pattern = re.compile(r"^" + re.escape(key) + r":[^\r\n]*(?=\r?$)", re.MULTILINE)
+    raw = (
+        pattern.sub(lambda _: replacement, raw)
+        if pattern.search(raw)
+        else raw + ("\r\n" if "\r\n" in content else "\n") + replacement
+    )
+    return content[: match.start(1)] + raw + content[match.end(1) :]
+
+
+def preserve_and_replace(
+    path: str, content: str, *, expected: str | None = None
+) -> bool:
+    """Publish a file without discarding any concurrently edited inode.
+
+    Move the previous inode to a retained recovery file before publishing with
+    exclusive hard-link creation. Editors with an already-open descriptor keep
+    writing to that recovery file; editors saving a new inode at the original
+    path win the race. This is recovery-backed publication, not filesystem CAS.
+    """
+    import os
+    import sys
+    import tempfile
+    from pathlib import Path
+    from uuid import uuid4
+
+    target = Path(path)
+    if target.is_symlink():
+        # Replace the linked file and keep the link itself.
+        target = Path(os.path.realpath(target))
+    if expected is not None and read_local_text(target) != expected:
+        print(f"WARN: local file changed; left {path} untouched", file=sys.stderr)
+        return False
+    try:
+        if target.read_bytes() == content.encode("utf-8"):
+            return True  # Already published: no move, no recovery copy.
+    except FileNotFoundError:
+        pass
+    fd, staging = tempfile.mkstemp(prefix=".gdoc-publish-", dir=target.parent)
+    backup = target.with_name(target.name + ".gdoc-backup-" + uuid4().hex)
+    moved = False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Publication needs hard links; check before the original moves.
+        probe = staging + ".link"
+        try:
+            os.link(staging, probe)
+        except OSError as error:
+            raise OSError(
+                f"{target.parent} does not support hard links; {path} left "
+                f"unchanged ({error})"
+            ) from error
+        os.unlink(probe)
+        if target.exists():
+            os.chmod(staging, target.stat().st_mode & 0o777)
+            os.rename(target, backup)
+            moved = True
+            print(f"LOCAL: previous file retained at {backup}", file=sys.stderr)
+            if expected is not None and read_local_text(backup) != expected:
+                try:
+                    os.link(backup, target)
+                except FileExistsError:
+                    pass
+                print("WARN: local file changed; replacement skipped", file=sys.stderr)
+                return False
+        if not moved:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(staging, 0o666 & ~umask)
+        try:
+            os.link(staging, target)
+        except FileExistsError:
+            print(
+                f"WARN: concurrent local save at {path}; replacement skipped",
+                file=sys.stderr,
+            )
+            return False
+        return True
+    except Exception:
+        if moved and not target.exists():
+            try:
+                os.link(backup, target)
+            except FileExistsError:
+                pass
+        raise
+    finally:
+        os.unlink(staging)
+
+
+def body_fingerprint(body: str) -> str:
+    """Identify exactly the local body last pulled or acknowledged."""
+    import hashlib
+
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def read_local_text(path) -> str:
+    """Read source bytes as UTF-8 without normalizing frontmatter newlines."""
+    with open(path, encoding="utf-8", newline="") as stream:
+        return stream.read()

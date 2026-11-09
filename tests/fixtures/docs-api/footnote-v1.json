@@ -1,0 +1,83 @@
+{
+  "fixture_schema": 1,
+  "fixture_version": 1,
+  "capture": {
+    "kind": "synthetic-equivalent",
+    "api": "docs/v1",
+    "api_shape": "document-body-v1",
+    "method": "documents.get",
+    "includeTabsContent": false,
+    "constructed_on": "2026-09-09",
+    "provenance": "Anonymous reconstruction from public API schema and upstream synthetic tests; not a fresh API capture."
+  },
+  "document": {
+    "body": {
+      "content": [
+        {
+          "endIndex": 1,
+          "sectionBreak": {
+            "sectionStyle": {}
+          }
+        },
+        {
+          "startIndex": 1,
+          "endIndex": 12,
+          "paragraph": {
+            "elements": [
+              {
+                "startIndex": 1,
+                "endIndex": 5,
+                "textRun": {
+                  "content": "Left",
+                  "textStyle": {}
+                }
+              },
+              {
+                "startIndex": 5,
+                "endIndex": 6,
+                "footnoteReference": {
+                  "footnoteId": "footnote-1",
+                  "footnoteNumber": "1"
+                }
+              },
+              {
+                "startIndex": 6,
+                "endIndex": 12,
+                "textRun": {
+                  "content": "Right\n",
+                  "textStyle": {}
+                }
+              }
+            ],
+            "paragraphStyle": {
+              "namedStyleType": "NORMAL_TEXT"
+            }
+          }
+        }
+      ]
+    },
+    "footnotes": {
+      "footnote-1": {
+        "footnoteId": "footnote-1",
+        "content": [
+          {
+            "startIndex": 0,
+            "endIndex": 6,
+            "paragraph": {
+              "elements": [
+                {
+                  "startIndex": 0,
+                  "endIndex": 6,
+                  "textRun": {
+                    "content": "Note.\n",
+                    "textStyle": {}
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

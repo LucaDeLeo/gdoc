@@ -1,0 +1,114 @@
+{
+  "fixture_schema": 1,
+  "fixture_version": 1,
+  "capture": {
+    "kind": "synthetic-equivalent",
+    "api": "docs/v1",
+    "api_shape": "document-body-v1",
+    "method": "documents.get",
+    "includeTabsContent": false,
+    "constructed_on": "2026-09-09",
+    "provenance": "Anonymous reconstruction from public API schema and upstream synthetic tests; not a fresh API capture."
+  },
+  "document": {
+    "body": {
+      "content": [
+        {
+          "endIndex": 1,
+          "sectionBreak": {
+            "sectionStyle": {}
+          }
+        },
+        {
+          "startIndex": 1,
+          "endIndex": 14,
+          "paragraph": {
+            "elements": [
+              {
+                "startIndex": 1,
+                "endIndex": 7,
+                "textRun": {
+                  "content": "Left😀",
+                  "textStyle": {}
+                }
+              },
+              {
+                "startIndex": 7,
+                "endIndex": 8,
+                "inlineObjectElement": {
+                  "inlineObjectId": "inline-1",
+                  "textStyle": {}
+                }
+              },
+              {
+                "startIndex": 8,
+                "endIndex": 14,
+                "textRun": {
+                  "content": "Right\n",
+                  "textStyle": {}
+                }
+              }
+            ],
+            "paragraphStyle": {
+              "namedStyleType": "NORMAL_TEXT"
+            },
+            "positionedObjectIds": [
+              "positioned-1"
+            ]
+          }
+        }
+      ]
+    },
+    "inlineObjects": {
+      "inline-1": {
+        "objectId": "inline-1",
+        "inlineObjectProperties": {
+          "embeddedObject": {
+            "size": {
+              "width": {
+                "magnitude": 72,
+                "unit": "PT"
+              },
+              "height": {
+                "magnitude": 36,
+                "unit": "PT"
+              }
+            },
+            "imageProperties": {}
+          }
+        }
+      }
+    },
+    "positionedObjects": {
+      "positioned-1": {
+        "objectId": "positioned-1",
+        "positionedObjectProperties": {
+          "embeddedObject": {
+            "size": {
+              "width": {
+                "magnitude": 72,
+                "unit": "PT"
+              },
+              "height": {
+                "magnitude": 36,
+                "unit": "PT"
+              }
+            },
+            "embeddedDrawingProperties": {}
+          },
+          "positioning": {
+            "layout": "WRAP_TEXT",
+            "leftOffset": {
+              "magnitude": 0,
+              "unit": "PT"
+            },
+            "topOffset": {
+              "magnitude": 0,
+              "unit": "PT"
+            }
+          }
+        }
+      }
+    }
+  }
+}

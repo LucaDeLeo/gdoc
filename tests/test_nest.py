@@ -809,7 +809,8 @@ class TestCommand:
         assert "'tabId': 't.0'" not in written
 
     def test_stale_tab_read_warns(self, api, mocker, capsys):
-        """The target tab moved since it was read: warn, as edit does."""
+        """The target tab moved since it was read: warn. A read records
+        coverage at the native revision it saw (rev0); the doc is at rev1."""
         from gdoc.notify import ChangeInfo
         from gdoc.state import DocState
 
@@ -819,7 +820,7 @@ class TestCommand:
         )
         mocker.patch(
             "gdoc.state.load_state",
-            return_value=DocState(tab_read_versions={TAB: 8}),
+            return_value=DocState(read_revision_ids={TAB: "rev0"}),
         )
         assert cmd_nest(_args(quiet=False)) == 0
         assert "WARN: doc changed since last read" in capsys.readouterr().err
@@ -834,7 +835,7 @@ class TestCommand:
         )
         mocker.patch(
             "gdoc.state.load_state",
-            return_value=DocState(tab_read_versions={TAB: 9}),
+            return_value=DocState(read_revision_ids={TAB: "rev1"}),
         )
         assert cmd_nest(_args(quiet=False)) == 0
         assert "WARN" not in capsys.readouterr().err

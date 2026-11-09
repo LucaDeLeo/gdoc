@@ -1,397 +1,233 @@
-"""Per-tab write-conflict baselines (0.23.0).
+"""Per-tab write baselines and `?tab=` URL targeting.
 
-The lenient effective-baseline rule: a `write --tab X` is allowed when
-max(whole-doc last_read_version, tab_read_versions[X]) equals the current doc
-version. These tests cover the two defects per-tab state fixes — the
-cross-tab false negative (read tab A, write tab B) and the same-tab false
-positive (write tab X twice) — plus the sibling-edit conservatism and the
---force escape, at both the end-to-end (real state) and decision layers.
+0.23.0 (#56) tracked a Drive-version read baseline per tab. The native
+Markdown writer replaces that with per-tab read coverage at an exact Docs
+revision (gdoc.state.record_content_read / require_content_baseline): a
+tab-scoped write needs a complete read of that tab at the revision being
+written. These tests pin #56's scenarios on that mechanism: the cross-tab
+false negative (read tab A, write tab B), the same-tab false positive (write
+tab X twice), the sibling-edit conservatism with its --force escape, URL tab
+parity, and the URL-aware recovery steps for stale stamped files.
 """
 
 import shlex
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
+from gdoc import state
 from gdoc.cli import cmd_cat, cmd_write
 from gdoc.notify import ChangeInfo
-from gdoc.state import DocState, load_state, save_state
 from gdoc.util import GdocError
-from tests.conftest import doc_with_tabs as _doc_with_tabs
 
-DOC_MIME = "application/vnd.google-apps.document"
+DOC = "abc123"
+URL = "https://docs.google.com/document/d/abc123/edit"
 
 
-def _tab_dict(tab_id, title):
+def _native_tab(tab_id, title, text="Remote notes\n"):
+    end = 1 + len(text.encode("utf-16-le")) // 2
     return {
-        "id": tab_id, "title": title, "index": 0,
-        "nesting_level": 0, "body": {"content": []},
+        "tabProperties": {"tabId": tab_id, "title": title},
+        "documentTab": {"body": {"content": [{
+            "startIndex": 1, "endIndex": end,
+            "paragraph": {"elements": [{
+                "startIndex": 1, "endIndex": end,
+                "textRun": {"content": text},
+            }]},
+        }]}},
     }
 
 
-def _cat_args(doc, tab):
-    return SimpleNamespace(
+def _cat_args(doc, tab=None, **over):
+    d = dict(
         command="cat", doc=doc, plain=False, comments=False, all=False,
         tab=tab, all_tabs=False, no_images=False, json=False, verbose=False,
         quiet=False, revision=None, range=None, max_bytes=0,
-    )
-
-
-def _write_args(doc, tab, file, **over):
-    d = dict(
-        command="write", doc=doc, file=file, force=False, json=False,
-        verbose=False, quiet=True, tab=tab, force_collapse_tabs=False,
     )
     d.update(over)
     return SimpleNamespace(**d)
 
 
-def _run_cat_tab(doc, tab_title, tab_id, version):
-    """Run `gdoc cat --tab TITLE` non-quiet against a MULTI-tab doc; persists
-    state under the caller's STATE_DIR patch. Stamps tab_read_versions[tab_id]
-    = version. The mock carries a sibling tab on purpose: on a single-tab doc a
-    `--tab` read would instead advance the whole-doc baseline."""
-    change_info = ChangeInfo(current_version=version, mime_type=DOC_MIME)
-    with patch("gdoc.notify.pre_flight", return_value=change_info), \
-         patch("gdoc.api.docs.get_document_tabs",
-               return_value=[
-                   _tab_dict(tab_id, tab_title),
-                   _tab_dict("t.sibling", "Sibling"),
-               ]), \
-         patch("gdoc.api.docs.get_tab_text", return_value="body\n"), \
-         patch("gdoc.api.docs.get_docs_service"):
-        assert cmd_cat(_cat_args(doc, tab_title)) == 0
+def _write_args(doc, tab, file, **over):
+    d = dict(
+        command="write", doc=doc, file=file, force=False, json=False,
+        verbose=False, plain=False, quiet=False, tab=tab,
+        force_collapse_tabs=False, allow_lossy=False,
+    )
+    d.update(over)
+    return SimpleNamespace(**d)
+
+
+@pytest.fixture
+def docs(mocker, tmp_path):
+    """A live document whose revision moves on each acknowledged write.
+
+    Only the API boundary is mocked; reads, coverage and the write guard
+    run for real against the tmp state directory.
+    """
+    live = {"revisionId": "r1", "tabs": [
+        _native_tab("t.x", "X"), _native_tab("t.y", "Y"),
+    ]}
+    mocker.patch("gdoc.api.docs.get_document_with_tabs",
+                 side_effect=lambda *a, **k: live)
+    mocker.patch("gdoc.notify.pre_flight",
+                 side_effect=lambda *a, quiet=False: None if quiet else
+                 ChangeInfo(current_version=10, last_read_version=None))
+    mocker.patch("gdoc.api.drive.get_file_version",
+                 return_value={"version": 10})
+
+    def write_tab(doc_id, tab_id, content, **kwargs):
+        before = live["revisionId"]
+        live["revisionId"] = f"r{int(before[1:]) + 1}"
+        return {"tab_id": tab_id, "input_revision_id": before,
+                "acknowledged_revision_id": live["revisionId"],
+                "rebased": False}
+
+    insert = mocker.patch("gdoc.api.docs.insert_markdown_into_tab",
+                          side_effect=write_tab)
+    body = tmp_path / "body.md"
+    body.write_text("# new\n")
+
+    def collaborator_edit():
+        live["revisionId"] = f"r{int(live['revisionId'][1:]) + 1}"
+
+    return SimpleNamespace(live=live, insert=insert, body=str(body),
+                           collaborator_edit=collaborator_edit)
 
 
 class TestTabBaselineWorkflow:
-    """End-to-end read -> write cycles against real (tmp) state, so the tab id
-    cat stamps is exactly the key write checks."""
+    """End-to-end read -> write cycles against real (tmp) state, so the tab
+    the read covers is exactly the tab the write checks."""
 
-    def test_write_same_tab_twice_both_succeed(self, tmp_path):
-        """False-positive fix: the writer's own output advances the tab
-        baseline, so a second write to the same tab isn't blocked."""
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            _run_cat_tab("abc123", "X", "t.x", 100)
-            st = load_state("abc123")
-            assert st.last_read_version is None  # tab read, not whole-doc
-            assert st.tab_read_versions == {"t.x": 100}
+    def test_write_same_tab_twice_both_succeed(self, docs):
+        """False-positive fix: the writer's own output advances the tab's
+        coverage, so a second write to the same tab isn't blocked."""
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        assert state.load_state(DOC).read_revision_ids == {"t.x": "r1"}
+        assert cmd_write(_write_args(DOC, "X", docs.body)) == 0
+        assert cmd_write(_write_args(DOC, "X", docs.body)) == 0
+        assert docs.insert.call_count == 2
+        assert state.load_state(DOC).read_revision_ids == {"t.x": "r3"}
 
-            # Model the doc version advancing on each (mocked) write.
-            doc_version = [100]
+    def test_read_tab_a_then_write_tab_b_blocked(self, docs):
+        """False-negative fix: reading tab X gives no baseline for tab Y."""
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        with pytest.raises(GdocError, match="no complete read baseline") as exc:
+            cmd_write(_write_args(DOC, "Y", docs.body))
+        assert exc.value.exit_code == 3
+        docs.insert.assert_not_called()
 
-            def fake_ver(doc_id):
-                return {"version": doc_version[0]}
+    def test_all_tabs_cat_then_write_tab_succeeds(self, docs):
+        """A read of every tab covers each of them. (#56 credited a plain
+        `cat` with this; a plain `cat` now reads only the first tab.)"""
+        assert cmd_cat(_cat_args(DOC, all_tabs=True)) == 0
+        assert cmd_write(_write_args(DOC, "Y", docs.body)) == 0
+        docs.insert.assert_called_once()
 
-            def fake_insert(*a, **k):
-                doc_version[0] += 1
-                return {"tab_id": "t.x", "tab_title": "X", "insert_index": 1}
+    def test_plain_cat_covers_only_the_first_tab(self, docs):
+        assert cmd_cat(_cat_args(DOC)) == 0
+        assert state.load_state(DOC).read_revision_ids == {"t.x": "r1"}
+        with pytest.raises(GdocError, match="no complete read baseline"):
+            cmd_write(_write_args(DOC, "Y", docs.body))
+        docs.insert.assert_not_called()
 
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.x", "X"),
-                                                   ("t.y", "Y"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab",
-                       side_effect=fake_insert), \
-                 patch("gdoc.api.drive.get_file_version", side_effect=fake_ver):
-                assert cmd_write(_write_args("abc123", "X", str(f))) == 0
-                assert cmd_write(_write_args("abc123", "X", str(f))) == 0
-
-            st = load_state("abc123")
-            assert st.tab_read_versions["t.x"] == doc_version[0]
-            assert st.last_read_version is None  # never became a whole-doc read
-
-    def test_read_tab_a_then_write_tab_b_blocked(self, tmp_path):
-        """False-negative fix: reading tab A gives no baseline for tab B."""
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            _run_cat_tab("abc123", "A", "t.a", 100)
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.a", "A"), ("t.b", "B"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab") as mock_insert, \
-                 patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 100}):
-                with pytest.raises(
-                    GdocError, match="no read baseline for tab 'B'",
-                ) as exc:
-                    cmd_write(_write_args("abc123", "B", str(f)))
-                assert exc.value.exit_code == 3
-                mock_insert.assert_not_called()
-
-    def test_plain_cat_then_write_tab_succeeds(self, tmp_path):
-        """Lenient rule: a whole-doc cat is a genuine read of every tab, so
-        its global baseline covers a subsequent tab write."""
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            change_info = ChangeInfo(current_version=100, mime_type=DOC_MIME)
-            with patch("gdoc.notify.pre_flight", return_value=change_info), \
-                 patch("gdoc.api.drive.export_doc", return_value="whole\n"):
-                assert cmd_cat(_cat_args("abc123", None)) == 0
-            assert load_state("abc123").last_read_version == 100
-
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.b", "B"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab",
-                       return_value={"tab_id": "t.b", "tab_title": "B",
-                                     "insert_index": 1}), \
-                 patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 100}):
-                assert cmd_write(_write_args("abc123", "B", str(f))) == 0
-
-    def test_single_tab_cat_then_whole_doc_write_succeeds(self, tmp_path):
-        """R1 fix: on a single-tab doc, `cat --tab X` reads the whole document,
-        so it advances the whole-doc baseline and a following whole-document
-        `write DOC` is not blocked. (When tab reads stopped advancing the
-        global baseline, this briefly errored 'no read baseline'.)"""
-        f = tmp_path / "body.md"
-        f.write_text("# edited\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            # Single-tab cat --tab is a whole-doc read: advances last_read.
-            change_info = ChangeInfo(current_version=100, mime_type=DOC_MIME)
-            with patch("gdoc.notify.pre_flight", return_value=change_info), \
-                 patch("gdoc.api.docs.get_document_tabs",
-                       return_value=[_tab_dict("t.only", "Only")]), \
-                 patch("gdoc.api.docs.get_tab_text", return_value="body\n"), \
-                 patch("gdoc.api.docs.get_docs_service"):
-                assert cmd_cat(_cat_args("abc123", "Only")) == 0
-            st = load_state("abc123")
-            assert st.last_read_version == 100
-            assert st.tab_read_versions == {}  # not a per-tab stamp
-
-            # Whole-doc write at the same version passes on that baseline.
-            with patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 100}), \
-                 patch("gdoc.api.docs.count_document_tabs", return_value=1), \
-                 patch("gdoc.api.drive.update_doc_content", return_value=101):
-                assert cmd_write(_write_args("abc123", None, str(f))) == 0
+    def test_single_tab_cat_then_whole_doc_write_succeeds(self, docs):
+        """On a single-tab document `cat --tab X` reads the tab a default
+        `write` replaces, so that write is not blocked."""
+        del docs.live["tabs"][1]
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        assert cmd_write(_write_args(DOC, None, docs.body)) == 0
+        assert docs.insert.call_args.args[1] == "t.x"
 
 
 class TestTabBaselineDecision:
-    """Focused conflict decisions with an injected state, pinning the sibling
-    -edit conservatism, its message, and the --force escape."""
+    """The sibling-edit conservatism and the --force escape. The revision
+    is document-wide, so an edit to any tab moves it."""
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 101})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs")
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.notify.pre_flight")
-    def test_sibling_edit_blocks_tab_write(
-        self, mock_pf, mock_load, mock_doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        # Tab X read at v100; the doc has since moved to v101 (a sibling edit).
-        mock_load.return_value = DocState(
-            last_read_version=None, tab_read_versions={"t.x": 100},
-        )
-        mock_pf.return_value = ChangeInfo(
-            current_version=101, last_read_version=None,
-        )
-        mock_doc.return_value = _doc_with_tabs(("t.x", "X"))
-        with pytest.raises(
-            GdocError, match=r"tab 'X' may have changed .*v100 -> v101",
-        ) as exc:
-            cmd_write(_write_args("abc123", "X", str(f), quiet=False))
+    def test_sibling_edit_blocks_tab_write(self, docs):
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        docs.collaborator_edit()
+        with pytest.raises(GdocError, match="changed since last read") as exc:
+            cmd_write(_write_args(DOC, "X", docs.body))
         assert exc.value.exit_code == 3
-        mock_insert.assert_not_called()
+        docs.insert.assert_not_called()
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 100})
-    @patch("gdoc.api.docs.insert_markdown_into_tab",
-           return_value={"tab_id": "t.x", "tab_title": "X", "insert_index": 1})
-    @patch("gdoc.api.docs.get_document_with_tabs")
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.notify.pre_flight")
-    def test_nonquiet_write_succeeds_on_own_tab_baseline(
-        self, mock_pf, mock_load, mock_doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        """Non-quiet flagship happy path: with no whole-doc baseline, tab X
-        read at v100 and the doc still at v100, `write --tab X` succeeds — the
-        per-tab entry alone satisfies the guard. The non-quiet branch sources
-        the global part from pre_flight (None here) and the per-tab part from
-        state, so this locks that split, which the quiet success tests don't."""
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        mock_load.return_value = DocState(
-            last_read_version=None, tab_read_versions={"t.x": 100},
-        )
-        mock_pf.return_value = ChangeInfo(
-            current_version=100, last_read_version=None,
-        )
-        mock_doc.return_value = _doc_with_tabs(("t.x", "X"))
-        rc = cmd_write(_write_args("abc123", "X", str(f), quiet=False))
-        assert rc == 0
-        mock_insert.assert_called_once()
+    def test_force_bypasses_sibling_edit(self, docs):
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        docs.collaborator_edit()
+        assert cmd_write(_write_args(DOC, "X", docs.body, force=True)) == 0
+        docs.insert.assert_called_once()
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 101})
-    @patch("gdoc.api.docs.insert_markdown_into_tab",
-           return_value={"tab_id": "t.x", "tab_title": "X", "insert_index": 1})
-    @patch("gdoc.api.docs.get_document_with_tabs")
-    @patch("gdoc.state.load_state")
-    @patch("gdoc.notify.pre_flight")
-    def test_force_bypasses_sibling_edit(
-        self, mock_pf, mock_load, mock_doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        mock_load.return_value = DocState(
-            last_read_version=None, tab_read_versions={"t.x": 100},
-        )
-        mock_pf.return_value = ChangeInfo(
-            current_version=101, last_read_version=None,
-        )
-        mock_doc.return_value = _doc_with_tabs(("t.x", "X"))
-        rc = cmd_write(_write_args("abc123", "X", str(f), quiet=False, force=True))
-        assert rc == 0
-        mock_insert.assert_called_once()
-
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 101})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs")
-    @patch("gdoc.state.load_state")
-    def test_quiet_sibling_edit_blocks_tab_write(
-        self, mock_load, mock_doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        """The --quiet path reads the same per-tab baseline from state."""
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        mock_load.return_value = DocState(
-            last_read_version=None, tab_read_versions={"t.x": 100},
-        )
-        mock_doc.return_value = _doc_with_tabs(("t.x", "X"))
-        with pytest.raises(
-            GdocError, match=r"tab 'X' may have changed .*v100 -> v101",
-        ) as exc:
-            cmd_write(_write_args("abc123", "X", str(f), quiet=True))
-        assert exc.value.exit_code == 3
-        mock_insert.assert_not_called()
+    def test_quiet_sibling_edit_blocks_tab_write(self, docs):
+        """--quiet skips pre-flight but never the coverage check."""
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        docs.collaborator_edit()
+        with pytest.raises(GdocError, match="changed since last read"):
+            cmd_write(_write_args(DOC, "X", docs.body, quiet=True))
+        docs.insert.assert_not_called()
 
 
 class TestTabBaselineUrlParity:
-    """A ?tab= URL drives the same per-tab conflict check as --tab."""
+    """A ?tab= URL drives the same per-tab check as --tab."""
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 100})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs")
-    @patch("gdoc.state.load_state")
-    def test_url_tab_blocked_without_baseline(
-        self, mock_load, mock_doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        mock_load.return_value = None  # no prior read of anything
-        mock_doc.return_value = _doc_with_tabs(("t.second", "Second"))
-        args = _write_args(
-            "https://docs.google.com/document/d/abc123/edit?tab=t.second",
-            None, str(f), quiet=True,
-        )
-        with pytest.raises(
-            GdocError, match="no read baseline for tab 't.second'",
-        ) as exc:
-            cmd_write(args)
+    def test_url_tab_blocked_without_baseline(self, docs):
+        with pytest.raises(GdocError, match="no complete read baseline") as exc:
+            cmd_write(_write_args(f"{URL}?tab=t.y", None, docs.body))
         assert exc.value.exit_code == 3
-        mock_insert.assert_not_called()
-        # With no baseline the write is rejected regardless of version, so
-        # the quiet path must not spend a get_file_version call to learn it.
-        _ver.assert_not_called()
+        docs.insert.assert_not_called()
+
+    def test_url_read_then_url_write(self, docs):
+        assert cmd_cat(_cat_args(f"{URL}?tab=t.y")) == 0
+        assert state.load_state(DOC).read_revision_ids == {"t.y": "r1"}
+        assert cmd_write(_write_args(f"{URL}?tab=t.y", None, docs.body)) == 0
+        assert docs.insert.call_args.args[1] == "t.y"
+
+    def test_url_tab_is_matched_by_id_only(self, docs):
+        """A tab titled like the URL's tab ID must not capture it."""
+        docs.live["tabs"][0]["tabProperties"]["title"] = "t.z"
+        with pytest.raises(GdocError, match="tab not found: t.z"):
+            cmd_cat(_cat_args(f"{URL}?tab=t.z"))
+
+    def test_url_tab_with_collapse_is_refused(self, docs):
+        with pytest.raises(GdocError, match="the URL targets tab 't.y'") as exc:
+            cmd_write(_write_args(f"{URL}?tab=t.y", None, docs.body,
+                                  force_collapse_tabs=True))
+        assert exc.value.exit_code == 3
+        docs.insert.assert_not_called()
 
 
-class TestLegacyBaselineProvenance:
-    """F18: a pre-0.23 state file's last_read_version is ambiguous (it may
-    record a tab-scoped read) and must not authorize a tab write."""
+class TestStateFromOtherVersions:
+    """State files written by 0.23.0 (#56's Drive-version baselines) or
+    earlier carry no native read coverage: they load, and a tab write still
+    needs a fresh read."""
 
-    def test_legacy_global_baseline_is_not_trusted(self, tmp_path):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            # Simulates a pre-0.23 file: field filtered in as default False.
-            save_state("abc123", DocState(last_version=100,
-                                          last_read_version=100))
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.x", "X"),
-                                                   ("t.y", "Y"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab"), \
-                 patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 100}):
-                with pytest.raises(GdocError, match="no read baseline"):
-                    cmd_write(_write_args("abc123", "X", str(f)))
+    def test_0_23_0_state_file_loads_and_does_not_authorize(self, docs):
+        import json
 
-    def test_marked_global_baseline_is_trusted(self, tmp_path):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            save_state("abc123", DocState(
-                last_version=100, last_read_version=100,
-                global_read_covers_doc=True,
-            ))
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.x", "X"),
-                                                   ("t.y", "Y"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab",
-                       return_value={"tab_id": "t.x", "tab_title": "X",
-                                     "insert_index": 1}), \
-                 patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 100}):
-                assert cmd_write(_write_args("abc123", "X", str(f))) == 0
-
-    def test_whole_doc_cat_sets_provenance_marker(self, tmp_path):
-        from gdoc.state import update_state_after_command
-
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=100), command="cat",
-                quiet=False,
-            )
-            st = load_state("abc123")
-            assert st.last_read_version == 100
-            assert st.global_read_covers_doc is True
-
-    def test_tab_read_does_not_set_marker(self, tmp_path):
-        from gdoc.state import update_state_after_command
-
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=100), command="cat",
-                quiet=False, read_tab_id="t.x",
-            )
-            st = load_state("abc123")
-            assert st.last_read_version is None
-            assert st.global_read_covers_doc is False
+        state.STATE_DIR.mkdir(parents=True, exist_ok=True)
+        (state.STATE_DIR / f"{DOC}.json").write_text(json.dumps({
+            "last_version": 10, "last_read_version": 10,
+            "tab_read_versions": {"t.x": 10}, "global_read_covers_doc": True,
+        }))
+        loaded = state.load_state(DOC)
+        assert loaded is not None and loaded.last_read_version == 10
+        with pytest.raises(GdocError, match="no complete read baseline"):
+            cmd_write(_write_args(DOC, "X", docs.body))
+        docs.insert.assert_not_called()
 
 
 class TestSoleTabWholeDocRule:
-    """F21: replacing a document's only tab IS a whole-doc write."""
+    """Replacing a document's only tab covers what a default write replaces."""
 
-    def test_sole_tab_write_advances_global_baseline(self, tmp_path):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.x", "X"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab",
-                       return_value={"tab_id": "t.x", "tab_title": "X",
-                                     "insert_index": 1}), \
-                 patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 101}):
-                args = _write_args("abc123", "X", str(f), force=True)
-                assert cmd_write(args) == 0
-            st = load_state("abc123")
-            # Whole-doc baseline advanced: a following whole-doc write
-            # won't conflict against our own mutation.
-            assert st.last_read_version == 101
-            assert st.global_read_covers_doc is True
-            assert st.tab_read_versions == {"t.x": 101}
+    def test_sole_tab_write_then_default_write(self, docs):
+        del docs.live["tabs"][1]
+        assert cmd_write(_write_args(DOC, "X", docs.body, force=True)) == 0
+        assert state.load_state(DOC).read_revision_ids == {"t.x": "r2"}
+        assert cmd_write(_write_args(DOC, None, docs.body)) == 0
 
 
 class TestBlankTabRejected:
-    """F20: a blank --tab must error, not silently read as no tab."""
+    """A blank --tab must error, not silently read as no tab."""
 
     def test_blank_flag_tab_errors(self):
         from gdoc.cli import _effective_tab
@@ -402,121 +238,33 @@ class TestBlankTabRejected:
 
 
 class TestInfoDoesNotAuthorizeTabWrites:
-    """`info` shows metadata only: it advances the whole-doc guard's
-    baseline (status quo) but must not stamp whole-doc content provenance,
-    which is what authorizes tab-scoped writes."""
+    """`info` shows metadata only and records no read coverage, so it can
+    neither authorize a tab write nor launder an unseen edit into one."""
 
-    def test_info_does_not_set_provenance_marker(self, tmp_path):
+    def _info(self, mocker):
+        """What `info` records: the interaction, not a content read."""
         from gdoc.state import update_state_after_command
 
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=100), command="info",
-                quiet=False, command_version=100,
-            )
-            st = load_state("abc123")
-            assert st.last_read_version == 100  # whole-doc guard status quo
-            assert st.global_read_covers_doc is False
+        update_state_after_command(
+            DOC, ChangeInfo(current_version=10), command="info",
+            quiet=False, command_version=10,
+        )
 
-    def test_info_then_tab_write_blocked(self, tmp_path):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            from gdoc.state import update_state_after_command
+    def test_info_then_tab_write_blocked(self, docs, mocker):
+        self._info(mocker)
+        with pytest.raises(GdocError, match="no complete read baseline"):
+            cmd_write(_write_args(DOC, "X", docs.body))
+        docs.insert.assert_not_called()
 
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=100), command="info",
-                quiet=False, command_version=100,
-            )
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.x", "X"),
-                                                   ("t.y", "Y"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab") as mi, \
-                 patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 100}):
-                with pytest.raises(GdocError, match="no read baseline"):
-                    cmd_write(_write_args("abc123", "X", str(f)))
-                mi.assert_not_called()
-
-
-    def test_info_after_edit_voids_stale_provenance(self, tmp_path):
-        """cat (marker True) -> unseen edit -> info: the marker must be
-        voided — the versions between the cat and the info were never
-        read, so leaving it True would launder the edit into the guard."""
-        from gdoc.state import update_state_after_command
-
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=5), command="cat",
-                quiet=False,
-            )
-            assert load_state("abc123").global_read_covers_doc is True
-
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=6), command="info",
-                quiet=False,
-            )
-            st = load_state("abc123")
-            assert st.last_read_version == 6
-            assert st.global_read_covers_doc is False
-
-    def test_info_at_same_version_preserves_provenance(self, tmp_path):
-        """An info that confirms nothing moved keeps the cat's provenance:
-        the authorization still traces to a genuine content read."""
-        from gdoc.state import update_state_after_command
-
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=5), command="cat",
-                quiet=False,
-            )
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=5), command="info",
-                quiet=False,
-            )
-            assert load_state("abc123").global_read_covers_doc is True
-
-    def test_quiet_info_after_edit_voids_stale_provenance(self, tmp_path):
-        from gdoc.state import update_state_after_command
-
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=5), command="cat",
-                quiet=False,
-            )
-            update_state_after_command(
-                "abc123", None, command="info", quiet=True,
-                command_version=6,
-            )
-            st = load_state("abc123")
-            assert st.last_read_version == 6
-            assert st.global_read_covers_doc is False
-
-    def test_cat_edit_info_write_tab_blocked_end_to_end(self, tmp_path):
-        """The full laundering sequence must fail closed: cat v5 ->
-        collaborator edit -> info v6 -> write --tab B is blocked."""
-        from gdoc.state import update_state_after_command
-
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with patch("gdoc.state.STATE_DIR", tmp_path):
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=5), command="cat",
-                quiet=False,
-            )
-            update_state_after_command(
-                "abc123", ChangeInfo(current_version=6), command="info",
-                quiet=False,
-            )
-            with patch("gdoc.api.docs.get_document_with_tabs",
-                       return_value=_doc_with_tabs(("t.a", "A"),
-                                                   ("t.b", "B"))), \
-                 patch("gdoc.api.docs.insert_markdown_into_tab") as mi, \
-                 patch("gdoc.api.drive.get_file_version",
-                       return_value={"version": 6}):
-                with pytest.raises(GdocError, match="no read baseline"):
-                    cmd_write(_write_args("abc123", "B", str(f)))
-                mi.assert_not_called()
+    def test_cat_edit_info_write_tab_blocked_end_to_end(self, docs, mocker):
+        """cat --tab X -> collaborator edit -> info -> write --tab X fails
+        closed: the coverage is pinned to the revision the cat saw."""
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        docs.collaborator_edit()
+        self._info(mocker)
+        with pytest.raises(GdocError, match="changed since last read"):
+            cmd_write(_write_args(DOC, "X", docs.body))
+        docs.insert.assert_not_called()
 
 
 class TestFlagTabKeepsWhitespace:
@@ -527,113 +275,89 @@ class TestFlagTabKeepsWhitespace:
 
         assert _effective_tab(None, " Notes ") == (" Notes ", False)
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 7})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs",
-           return_value=_doc_with_tabs(("t.a", "Notes"), ("t.b", " Notes ")))
-    def test_spaced_title_targets_its_own_tab(
-        self, _doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        cmd_write(_write_args("abc123", " Notes ", str(f), force=True))
-        assert mock_insert.call_args.args[1] == "t.b"
+    def test_spaced_title_targets_its_own_tab(self, docs):
+        docs.live["tabs"][0]["tabProperties"]["title"] = "Notes"
+        docs.live["tabs"][1]["tabProperties"]["title"] = " Notes "
+        assert cmd_write(_write_args(DOC, " Notes ", docs.body, force=True)) == 0
+        assert docs.insert.call_args.args[1] == "t.y"
 
 
-class TestMissingVersionFailsClosed:
-    """No Drive version means the write can't be shown current: refuse."""
+class TestUnpinnedWriteFailsClosed:
+    """#56 refused a tab write when Drive returned no version. The guard is
+    now the native revision: a read with no revision cannot pin a write.
+    (The Drive version is display-only for a tab write.)"""
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs",
-           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "Y")))
-    @patch("gdoc.state.load_state",
-           return_value=DocState(tab_read_versions={"t.x": 100}))
-    def test_per_tab_baseline(self, _load, _doc, mock_insert, _ver, _upd, tmp_path):
-        f = tmp_path / "body.md"
-        f.write_text("# new\n")
-        with pytest.raises(GdocError, match="no version"):
-            cmd_write(_write_args("abc123", "X", str(f)))
-        mock_insert.assert_not_called()
+    def test_missing_revision_refuses(self, docs):
+        assert cmd_cat(_cat_args(DOC, "X")) == 0
+        docs.live["revisionId"] = ""
+        with pytest.raises(GdocError, match="unpinned write"):
+            cmd_write(_write_args(DOC, "X", docs.body))
+        docs.insert.assert_not_called()
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs",
-           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "Y")))
-    def test_stamped_file(self, _doc, mock_insert, _ver, _upd, tmp_path):
-        f = tmp_path / "draft.md"
-        f.write_text("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
-        with pytest.raises(GdocError, match="no version"):
-            cmd_write(_write_args("abc123", "X", str(f)))
-        mock_insert.assert_not_called()
+    def test_stamped_file_without_drive_version_refuses(self, docs, mocker):
+        mocker.patch("gdoc.api.drive.get_file_version", return_value={})
+        mocker.patch("gdoc.api.drive.export_doc", return_value="other\n")
+        f = docs.body
+        with open(f, "w") as fh:
+            fh.write("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
+        with pytest.raises(GdocError, match="no gdoc-revision"):
+            cmd_write(_write_args(DOC, "X", f))
+        docs.insert.assert_not_called()
 
 
 class TestStaleStampedTabWriteRecovery:
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 101})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs",
-           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "Y")))
-    def test_recovery_stays_on_the_tab(
-        self, _doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        """Pushing a fresh pull would collapse the tabs; recover by tab."""
-        f = tmp_path / "draft.md"
-        f.write_text("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
+    """A stale 0.21.1-style stamped file written to one tab recovers by
+    that tab, with the selector the user gave."""
+
+    @pytest.fixture
+    def stale(self, docs, mocker):
+        mocker.patch("gdoc.api.drive.get_file_version",
+                     return_value={"version": 101})
+        mocker.patch("gdoc.api.drive.export_doc", return_value="other\n")
+        with open(docs.body, "w") as fh:
+            fh.write("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
+        return docs
+
+    def test_recovery_stays_on_the_tab(self, stale):
         with pytest.raises(GdocError) as exc:
-            cmd_write(_write_args("abc123", "X", str(f)))
+            cmd_write(_write_args(DOC, "X", stale.body))
         msg = str(exc.value)
         assert exc.value.exit_code == 3
         assert "gdoc cat abc123 --tab X >" in msg
         assert "gdoc write abc123 --tab X " in msg
         assert "push" not in msg
-        mock_insert.assert_not_called()
+        stale.insert.assert_not_called()
 
-    @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.get_file_version", return_value={"version": 101})
-    @patch("gdoc.api.docs.insert_markdown_into_tab")
-    @patch("gdoc.api.docs.get_document_with_tabs",
-           return_value=_doc_with_tabs(("t.x", "X"), ("t.y", "t.x")))
-    def test_url_write_recovers_by_url(
-        self, _doc, mock_insert, _ver, _upd, tmp_path,
-    ):
-        """A URL picks its tab by ID; `--tab t.x` would pick the tab titled
-        "t.x" instead, so the recovery repeats the URL."""
-        f = tmp_path / "draft.md"
-        f.write_text("---\ngdoc: abc123\ngdoc-version: 100\n---\n# new\n")
-        url = "https://docs.google.com/document/d/abc123/edit?tab=t.x"
+    def test_url_write_recovers_by_url(self, stale):
+        url = f"{URL}?tab=t.y"
         with pytest.raises(GdocError) as exc:
-            cmd_write(_write_args(url, None, str(f)))
+            cmd_write(_write_args(url, None, stale.body))
         msg = str(exc.value)
         quoted = shlex.quote(url)
         assert f"gdoc cat {quoted} >" in msg
         assert f"gdoc write {quoted} " in msg
         assert "--tab" not in msg
-        mock_insert.assert_not_called()
+        stale.insert.assert_not_called()
 
 
 class TestTabScopedChangeWarning:
-    """`edit`/`nest`/image commands warn against the tab they change."""
+    """`nest` warns against the tab it changes, from that tab's coverage."""
 
-    def _warn(self, change_info, tab_id, capsys):
-        from gdoc.cli import _warn_if_changed
+    def _warn(self, change_info, tab_id, revision, capsys):
+        from gdoc.cli import _warn_if_tab_changed
 
-        _warn_if_changed("abc123", change_info, tab_id)
+        _warn_if_tab_changed(DOC, change_info, tab_id, revision)
         return "WARN: doc changed since last read" in capsys.readouterr().err
 
-    def test_tab_read_counts(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setattr("gdoc.state.STATE_DIR", tmp_path)
-        save_state("abc123", DocState(tab_read_versions={"t.x": 5}))
-        current = ChangeInfo(current_version=5, last_read_version=None)
-        moved = ChangeInfo(current_version=6, last_read_version=None)
-        assert not self._warn(current, "t.x", capsys)
-        assert self._warn(moved, "t.x", capsys)
-        # Another tab, or the whole doc, was never read.
-        assert self._warn(current, "t.y", capsys)
-        assert self._warn(current, None, capsys)
+    def test_tab_read_counts(self, capsys):
+        state.record_content_read(DOC, ["t.x"], "r5")
+        info = ChangeInfo(current_version=5, last_read_version=None)
+        assert not self._warn(info, "t.x", "r5", capsys)
+        assert self._warn(info, "t.x", "r6", capsys)
+        # No recorded read of a tab is no sign of a change (the write is
+        # pinned to the revision it reads either way).
+        assert not self._warn(info, "t.y", "r5", capsys)
 
     def test_quiet_never_warns(self, capsys):
-        assert not self._warn(None, "t.x", capsys)
+        state.record_content_read(DOC, ["t.x"], "r5")
+        assert not self._warn(None, "t.x", "r6", capsys)

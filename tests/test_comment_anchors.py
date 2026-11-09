@@ -872,6 +872,14 @@ class TestCatOutput:
         assert _annotation_line(data["content"], "join") == 5
         assert "[#replaced open] [detached]" in data["content"]
 
+    def test_truncation_is_reported(self, edited_doc, capsys):
+        """Merge of #72 with #77: a partial read says so, as other reads do."""
+        assert cmd_cat(_cat_args(json=True, max_bytes=20)) == 0
+        scope = json.loads(capsys.readouterr().out)["scope"]
+        assert scope["truncated"] is True and scope["total_bytes"] > 20
+        assert cmd_cat(_cat_args(max_bytes=20)) == 0
+        assert "NOTE: partial output" in capsys.readouterr().err
+
     def test_fallback_warns_and_labels(self, edited_doc, monkeypatch, capsys):
         _no_preview(monkeypatch)
         assert cmd_cat(_cat_args()) == 0
@@ -1151,7 +1159,8 @@ class TestMcp:
             "arguments": {"doc": "doc1", "comments": True, "quiet": True},
         })
         assert result["isError"] is False
-        assert result["content"][0]["text"] == cli_out.strip()
+        # MCP returns the CLI's output with its whitespace intact.
+        assert result["content"][0]["text"] == cli_out
 
     def test_fallback_warning_reaches_the_client(
         self, edited_doc, monkeypatch,
@@ -1162,3 +1171,66 @@ class TestMcp:
             "arguments": {"doc": "doc1", "comments": True, "quiet": True},
         })
         assert "live comment anchors unavailable" in result["content"][1]["text"]
+
+
+class TestMergedWithNativeReads:
+    """Merge of #72 with #77: the per-tab path and truncation reporting."""
+
+    def test_quote_ambiguous_in_another_tab_is_not_placed(self):
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "alpha"}}
+        others = ["alpha\n\nalpha\n"]
+        placed = annotate_markdown("alpha\n", [comment], other_tabs=others)
+        assert "[quoted text ambiguous]" in placed
+        absent = annotate_markdown("beta\n", [comment], other_tabs=others)
+        assert "[quoted text in another tab]" in absent
+
+    @pytest.mark.parametrize("markdown", [
+        "- parent\n  - child\n    ```\n    alpha *beta*\n    ```\n",
+        "1. parent\n   1. child\n      ```\n      alpha *beta*\n      ```\n",
+        "- a\n  - b\n    - c\n      ```\n      alpha *beta*\n      ```\n",
+        # a blank line inside the item, a lazy continuation, an ancestor item
+        "- parent\n  - child\n\n    ```\n    alpha *beta*\n    ```\n",
+        "- parent\nlazy continuation\n    ```\n    alpha *beta*\n    ```\n",
+        "- a\n  - b\n    - c\n    ```\n    alpha *beta*\n    ```\n",
+        "1. a\n   1. b\n      1. c\n      ```\n      alpha *beta*\n      ```\n",
+        # a quoted heading or rule inside the item does not end it
+        "- parent\n  - child\n    > # Heading\n    ```\n    alpha *beta*\n    ```\n",
+        "- parent\n  - child\n    > ---\n    ```\n    alpha *beta*\n    ```\n",
+        # a list inside a quote
+        "> - x\n> \n>   ```\n>   alpha *beta*\n>   ```\n",
+    ])
+    def test_fences_in_nested_list_items_stay_code(self, markdown):
+        literal = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "alpha *beta*"}}
+        assert "[quoted text found]" in annotate_markdown(markdown, [literal])
+        prose = {"id": "c2", "content": "check",
+                 "quotedFileContent": {"value": "alpha beta"}}
+        assert "[quoted text not found" in annotate_markdown(markdown, [prose])
+
+    @pytest.mark.parametrize("markdown", [
+        "```\nalpha\n    ```\n*beta*\n```\n",
+        "- a\n  ```\n  alpha\n      ```\n  *beta*\n  ```\n",
+    ])
+    def test_an_over_indented_fence_does_not_close(self, markdown):
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "*beta*"}}
+        assert "[quoted text found]" in annotate_markdown(markdown, [comment])
+
+    @pytest.mark.parametrize("markdown", [
+        "- item\n# Heading\n    ```\nalpha *beta*\n",
+        "- item\n***\n    ```\nalpha *beta*\n",
+        "- item\n  ```\n  code\n  ```\nText\n    ```\nalpha *beta*\n",
+    ])
+    def test_a_block_after_a_list_ends_it(self, markdown):
+        """A heading, a rule or a paragraph after closed code is no lazy
+        continuation: the four-space line after it is not a fence."""
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "alpha beta"}}
+        assert "[quoted text found]" in annotate_markdown(markdown, [comment])
+
+    def test_top_level_four_space_indent_is_not_a_fence(self):
+        comment = {"id": "c1", "content": "check",
+                   "quotedFileContent": {"value": "a b c"}}
+        assert "[quoted text found]" in annotate_markdown(
+            "    ```\na *b* c\n", [comment])

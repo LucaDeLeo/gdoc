@@ -313,6 +313,11 @@ _RENAME_TABS = [
     {"id": "t.abc", "title": "Notes", "index": 1, "nesting_level": 0,
      "body": {}, "lists": {}},
 ]
+_RENAME_DOC = {"revisionId": "r7", "tabs": [
+    {"tabProperties": {"tabId": t["id"], "title": t["title"], "index": t["index"]},
+     "documentTab": {"body": {}, "lists": {}}}
+    for t in _RENAME_TABS
+]}
 
 
 @pytest.fixture
@@ -320,7 +325,7 @@ def rename_mocks(mocker):
     """Mock the API layer for cmd_rename_tab; state is mocked too."""
     return SimpleNamespace(
         tabs=mocker.patch(
-            "gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS,
+            "gdoc.api.docs.get_document_with_tabs", return_value=_RENAME_DOC,
         ),
         rename=mocker.patch("gdoc.api.docs.rename_tab"),
         pre_flight=mocker.patch("gdoc.notify.pre_flight", return_value=None),
@@ -407,17 +412,24 @@ class TestRenameTab:
 
 
 class TestRenameTabBaselines:
-    """Real state files: a rename must not cost the read baselines."""
+    """Real state files: a rename must not cost the read baselines.
 
-    def _run(self, mocker, tmp_path, state, preflight_version, post_version):
+    #73 carried Drive-version baselines past its own bump. Under #72 the
+    write guard checks read coverage at a Docs revision, so the rename is
+    pinned to the revision that coverage names and the coverage moves to
+    the acknowledged revision; the Drive-version baseline still follows
+    the mv/rename rule.
+    """
+
+    def _run(self, mocker, state, preflight_version, post_version,
+             acknowledged="r8"):
         from gdoc.state import load_state, save_state
 
-        mocker.patch("gdoc.state.STATE_DIR", tmp_path)
         save_state("abc123", state)
         mocker.patch(
-            "gdoc.api.docs.get_document_tabs", return_value=_RENAME_TABS,
+            "gdoc.api.docs.get_document_with_tabs", return_value=_RENAME_DOC,
         )
-        mocker.patch("gdoc.api.docs.rename_tab")
+        rename = mocker.patch("gdoc.api.docs.rename_tab", return_value=acknowledged)
         mocker.patch(
             "gdoc.notify.pre_flight",
             return_value=ChangeInfo(
@@ -430,31 +442,35 @@ class TestRenameTabBaselines:
             return_value={"version": post_version},
         )
         assert cmd_rename_tab(_make_rename_tab_args()) == 0
-        return load_state("abc123")
+        return load_state("abc123"), rename
 
-    def test_current_tab_baselines_carry_forward(self, mocker, tmp_path):
+    def test_current_tab_baselines_carry_forward(self, mocker):
         from gdoc.state import DocState
 
-        state = DocState(last_version=7, tab_read_versions={"t.abc": 7})
-        after = self._run(mocker, tmp_path, state, 7, 8)
+        state = DocState(last_version=7, read_revision_ids={"t.abc": "r7"},
+                         limited_read_revision_ids={"t.0": "r7"})
+        after, rename = self._run(mocker, state, 7, 8)
+        rename.assert_called_once_with("abc123", "t.0", "Calls", revision_id="r7")
         assert after.last_version == 8
-        assert after.tab_read_versions == {"t.abc": 8}
+        assert after.read_revision_ids == {"t.abc": "r8"}
+        assert after.limited_read_revision_ids == {"t.0": "r8"}
 
-    def test_current_whole_doc_baseline_carries_forward(self, mocker, tmp_path):
+    def test_current_whole_doc_baseline_carries_forward(self, mocker):
         from gdoc.state import DocState
 
         state = DocState(last_version=7, last_read_version=7)
-        after = self._run(mocker, tmp_path, state, 7, 8)
+        after, _ = self._run(mocker, state, 7, 8)
         assert after.last_read_version == 8
 
-    def test_concurrent_edit_leaves_baselines_alone(self, mocker, tmp_path):
+    def test_stale_coverage_is_not_pinned_or_advanced(self, mocker):
         from gdoc.state import DocState
 
-        # Post-rename version jumped by 2: someone else edited in between.
+        # Coverage names an older revision: someone edited since the read.
         state = DocState(
-            last_version=7, last_read_version=7, tab_read_versions={"t.abc": 7},
+            last_version=7, last_read_version=7, read_revision_ids={"t.abc": "r6"},
         )
-        after = self._run(mocker, tmp_path, state, 7, 9)
+        after, rename = self._run(mocker, state, 7, 9)
+        rename.assert_called_once_with("abc123", "t.0", "Calls")
         assert after.last_version == 9
         assert after.last_read_version == 7
-        assert after.tab_read_versions == {"t.abc": 7}
+        assert after.read_revision_ids == {"t.abc": "r6"}

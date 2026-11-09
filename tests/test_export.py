@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import httplib2
 import pytest
@@ -110,13 +110,13 @@ class TestCmdExport:
         mock_export.assert_called_once_with("doc123", DOCX_MIME)
 
     @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Title\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Title\n")
     def test_text_format_prints_to_stdout(self, mock_export, _update, capsys):
         args = _make_args(format="md")
         rc = cmd_export(args)
         assert rc == 0
         assert capsys.readouterr().out == "# Title\n"
-        mock_export.assert_called_once_with("doc123", "text/markdown")
+        mock_export.assert_called_once_with(ANY, markdown=True)
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.export_doc_bytes", return_value=b"<html></html>")
@@ -162,7 +162,7 @@ class TestCmdExport:
         assert "Bytes: 5" in lines
 
     @patch("gdoc.state.update_state_after_command")
-    @patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Title\n")
+    @patch("gdoc.api.docs.get_tab_text", return_value="# Title\n")
     def test_stdout_json_wraps_content(self, mock_export, _update, capsys):
         args = _make_args(format="md", json=True)
         rc = cmd_export(args)
@@ -187,40 +187,61 @@ class TestCmdExport:
     def test_state_updated(self, mock_export, mock_update, tmp_path):
         args = _make_args(out=str(tmp_path / "r.pdf"))
         cmd_export(args)
-        assert mock_update.call_args.kwargs["command"] == "export"
+        assert mock_update.call_args.kwargs["command"] == "export-content"
+
+
+@pytest.fixture(autouse=True)
+def _native_snapshot(mocker):
+    mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
+        "revisionId": "r1", "tabs": [{
+            "tabProperties": {"tabId": "main", "title": "Main"},
+            "documentTab": {"body": {"content": []}},
+        }],
+    })
+
+
+_TAB_URL = "https://docs.google.com/document/d/abc123/edit?tab="
 
 
 @patch("gdoc.state.update_state_after_command")
-@patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Hi\n")
-class TestExportUrlTabNote:
-    # Exports render the whole document, so a URL's tab deep link is
-    # discarded with the same stderr NOTE convention as pull/push.
-    @patch(
-        "gdoc.notify.pre_flight",
-        return_value=ChangeInfo(current_version=42),
-    )
-    def test_notes_discarded_url_tab(self, _pf, _export, _update, capsys):
-        args = _make_args(
-            doc="https://docs.google.com/document/d/abc123/edit?tab=t.second",
-            format="md",
-            quiet=False,
-        )
-        rc = cmd_export(args)
-        assert rc == 0
+@patch("gdoc.api.drive.export_doc_bytes", return_value=b"%PDF")
+@patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=42))
+class TestExportUrlTab:
+    """A Markdown export reads one tab, so a URL's ?tab= selects it like
+    --tab. Other formats render the whole document and note the discard.
+    (In 0.23.0 every export noted the discard: Markdown export was a
+    whole-document Drive export then.)"""
+
+    def test_markdown_export_reads_the_url_tab(
+        self, _pf, _export, _update, mocker, tmp_path, capsys,
+    ):
+        mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
+            "revisionId": "r1", "tabs": [
+                {"tabProperties": {"tabId": "main", "title": "Main"},
+                 "documentTab": {"body": {"content": []}}},
+                {"tabProperties": {"tabId": "t.second", "title": "Second"},
+                 "documentTab": {"body": {"content": []}}},
+            ],
+        })
+        out = tmp_path / "second.md"
+        args = _make_args(doc=_TAB_URL + "t.second", format="md",
+                          out=str(out), quiet=False, json=True)
+        assert cmd_export(args) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["tab_id"] == "t.second"
+
+    def test_binary_export_notes_discarded_url_tab(
+        self, _pf, _export, _update, tmp_path, capsys,
+    ):
+        args = _make_args(doc=_TAB_URL + "t.second", format="pdf",
+                          out=str(tmp_path / "r.pdf"), quiet=False)
+        assert cmd_export(args) == 0
         err = capsys.readouterr().err
         assert "NOTE" in err
         assert "t.second" in err
 
-    @patch(
-        "gdoc.notify.pre_flight",
-        return_value=ChangeInfo(current_version=42),
-    )
-    def test_t0_url_tab_is_silent(self, _pf, _export, _update, capsys):
-        args = _make_args(
-            doc="https://docs.google.com/document/d/abc123/edit?tab=t.0",
-            format="md",
-            quiet=False,
-        )
-        rc = cmd_export(args)
-        assert rc == 0
+    def test_t0_url_tab_is_silent(self, _pf, _export, _update, tmp_path, capsys):
+        args = _make_args(doc=_TAB_URL + "t.0", format="pdf",
+                          out=str(tmp_path / "r.pdf"), quiet=False)
+        assert cmd_export(args) == 0
         assert "NOTE" not in capsys.readouterr().err

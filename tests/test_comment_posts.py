@@ -331,7 +331,6 @@ class TestInsertCommentAssignee:
     @pytest.mark.parametrize("message, expect", [
         ('Unknown name "insert_comment"', "preview not enabled"),
         ("Invalid requests[0]: No request set.", "preview not enabled"),
-        ("The revision id does not match", "document changed"),
     ])
     @patch("gdoc.api.docs.get_docs_service")
     def test_distinct_preview_reasons(self, mock_svc, message, expect):
@@ -342,10 +341,29 @@ class TestInsertCommentAssignee:
             insert_comment("abc123", "hi", 5, 9, revision_id="rev1")
 
     @patch("gdoc.api.docs.get_docs_service")
+    def test_revision_mismatch_is_a_conflict_not_a_fallback(self, mock_svc):
+        # #72: a stale anchor is re-read and retried once by the caller, then
+        # refused; it never degrades to an unanchored Drive comment.
+        from gdoc.api.docs import CommentRevisionConflictError
+
+        mock_svc.return_value = _mock_docs_service(
+            batch_error=_http_error(400, "The revision id does not match")
+        )
+        with pytest.raises(CommentRevisionConflictError, match="Document changed"):
+            insert_comment("abc123", "hi", 5, 9, revision_id="rev1")
+
+    @patch("gdoc.api.docs.get_docs_service")
     def test_403_reason(self, mock_svc):
-        mock_svc.return_value = _mock_docs_service(batch_error=_http_error(403))
+        mock_svc.return_value = _mock_docs_service(batch_error=_http_error(
+            403, "The caller does not have permission"))
         with pytest.raises(PreviewUnavailableError, match="not permitted"):
             insert_comment("abc123", "hi", 5, 9)
+        # #72: an unexplained 403 (quota and API-disabled are 403 too) is
+        # refused without a fallback comment.
+        mock_svc.return_value = _mock_docs_service(batch_error=_http_error(403))
+        with pytest.raises(GdocError, match="refused the comment write") as ei:
+            insert_comment("abc123", "hi", 5, 9)
+        assert not isinstance(ei.value, PreviewUnavailableError)
 
     @pytest.mark.parametrize("response", [
         {"replies": _INSERT_OK["replies"]},  # state missing
@@ -360,28 +378,25 @@ class TestInsertCommentAssignee:
         # 2xx without ALL_SAVED, or ALL_SAVED without a thread id, may or may
         # not have created a comment: never "not created", never a fallback.
         mock_svc.return_value = _mock_docs_service(response)
-        with pytest.raises(GdocError, match="outcome uncertain") as ei:
+        with pytest.raises(GdocError, match="outcome (is )?uncertain") as ei:
             insert_comment("abc123", "hi", 5, 9, assignee_email=ME)
         assert not isinstance(ei.value, PreviewUnavailableError)
         assert "inspect" in str(ei.value)
         assert "not created" not in str(ei.value).lower()
         mock_read.assert_not_called()
 
+    @pytest.mark.parametrize("response", [
+        {"replies": _INSERT_OK["replies"]},
+        dict(_INSERT_OK, commentUpdateState="ALL_FAILED_UNKNOWN_REASON"),
+    ])
     @patch("gdoc.api.docs.get_docs_service")
-    def test_unassigned_tolerates_missing_state(self, mock_svc):
-        # Pre-existing contract for the fallback path is unchanged.
-        response = {"replies": _INSERT_OK["replies"]}
+    def test_unassigned_unsaved_state_is_uncertain(self, mock_svc, response):
+        # #72: Google always reports the save state, so a missing or partial
+        # one is as uncertain as a lost response: no Drive fallback.
         mock_svc.return_value = _mock_docs_service(response)
-        assert insert_comment("abc123", "hi", 5, 9) == "c_new"
-
-    @patch("gdoc.api.docs.get_docs_service")
-    def test_unassigned_partial_failure_still_falls_back(self, mock_svc):
-        response = dict(
-            _INSERT_OK, commentUpdateState="ALL_FAILED_UNKNOWN_REASON",
-        )
-        mock_svc.return_value = _mock_docs_service(response)
-        with pytest.raises(PreviewUnavailableError, match="ALL_FAILED"):
+        with pytest.raises(GdocError, match="outcome is uncertain") as ei:
             insert_comment("abc123", "hi", 5, 9)
+        assert not isinstance(ei.value, PreviewUnavailableError)
 
     @patch("gdoc.api.docs.get_document_threads")
     @patch("gdoc.api.docs.get_docs_service")
@@ -730,7 +745,9 @@ class TestDispatchFailureIsAmbiguous:
         with pytest.raises(GdocError) as ei:
             calls[operation]()
         msg = str(ei.value)
-        assert "outcome uncertain" in msg and "may have succeeded" in msg
+        # insertComment keeps #72's "Comment write outcome is uncertain".
+        assert re.search("outcome (is )?uncertain", msg)
+        assert "may have succeeded" in msg
         assert "inspect" in msg
         # Not the fallback sentinel: comment --quote must not degrade to a
         # Drive comment that could duplicate an anchored one.
@@ -865,13 +882,13 @@ class TestCmdCommentAssign:
         data = json.loads(capsys.readouterr().out)
         assert data == {
             "ok": True, "id": "c_assigned", "status": "created",
-            "anchored": True, "assignee": ME,
+            "anchored": True, "tabId": "t.0", "assignee": ME,
         }
         cmd_comment(
             _make_args("comment", text="p", quote="quick", assign=ME, plain=True)
         )
         assert capsys.readouterr().out == (
-            f"id\tc_assigned\nanchored\ttrue\nassignee\t{ME}\n"
+            f"id\tc_assigned\nanchored\ttrue\ntabId\tt.0\nassignee\t{ME}\n"
         )
 
     @patch("gdoc.api.comments.create_comment")
@@ -894,7 +911,7 @@ class TestCmdCommentAssign:
     def test_assign_quote_not_found_is_usage_error(
         self, _get, mock_insert, mock_create, _ver, _pf, _update,
     ):
-        with pytest.raises(GdocError, match="Quote text not found") as ei:
+        with pytest.raises(GdocError, match="Quote not found") as ei:
             cmd_comment(_make_args("comment", text="p", quote="zzz", assign=ME))
         assert ei.value.exit_code == 3
         mock_insert.assert_not_called()
@@ -1220,7 +1237,8 @@ class TestStateWriteBestEffort:
     def test_assigned_insert(self, _get, _ins, capsys):
         args = _make_args("comment", text="p", quote="quick", assign=ME)
         assert cmd_comment(args) == 0
-        assert "not persisted" in capsys.readouterr().err
+        # #72's _update_state_after_write wording.
+        assert "local state could not be updated" in capsys.readouterr().err
 
 
 @patch("gdoc.state.update_state_after_command")
@@ -1237,7 +1255,8 @@ class TestPostWriteVersionBestEffort:
         assert cmd_comment(args) == 0
         out, err = capsys.readouterr()
         assert json.loads(out)["id"] == "c_assigned"
-        assert "WARN: write succeeded" in err
+        # #72's version_after_write wording.
+        assert "WARN: write acknowledged" in err
         kwargs = mock_update.call_args.kwargs
         assert kwargs["command_version"] is None
         assert kwargs["comment_state_patch"] == {"add_comment_id": "c_assigned"}
@@ -1274,10 +1293,15 @@ class TestPostWriteVersionBestEffort:
 
     @patch("gdoc.api.comments.get_drive_service")
     @patch("gdoc.api.comments.create_comment", return_value={"id": "c_drive"})
-    def test_drive_comment_path_unchanged(self, _create, _svc, _ver, _pf, _update):
-        # Ordinary Drive comment creation keeps its existing contract.
-        with pytest.raises(GdocError, match="API error"):
-            cmd_comment(_make_args("comment", text="p", quote=None, assign=None))
+    def test_drive_comment_path_is_best_effort_too(
+        self, _create, _svc, _ver, _pf, mock_update, capsys,
+    ):
+        # #72 makes the post-write lookup best-effort for every comment
+        # write: a failed lookup must not hide a comment Drive created.
+        assert cmd_comment(
+            _make_args("comment", text="p", quote=None, assign=None)) == 0
+        assert "WARN: write acknowledged" in capsys.readouterr().err
+        assert mock_update.call_args.kwargs["command_version"] is None
 
 
 # --- edit-comment / edit-suggestion-reply ---------------------------------
