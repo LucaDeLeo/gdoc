@@ -737,10 +737,19 @@ def test_warm_up_refreshes_before_building_services(mocker, tmp_path):
     token.write_text("{}")
     mocker.patch("gdoc.util.token_path_for", return_value=token)
     calls = []
-    mocker.patch("gdoc.auth.get_credentials", side_effect=lambda *a: calls.append("credentials"))
-    mocker.patch("gdoc.api.docs.get_docs_service", side_effect=lambda: calls.append("docs"))
+    mocker.patch(
+        "gdoc.auth.get_credentials",
+        side_effect=lambda *a: calls.append("credentials"),
+    )
+    mocker.patch(
+        "gdoc.api.docs.get_docs_service",
+        side_effect=lambda: calls.append("docs"),
+    )
     drive = mocker.MagicMock()
-    mocker.patch("gdoc.api.get_drive_service", side_effect=lambda: calls.append("drive") or drive)
+    mocker.patch(
+        "gdoc.api.get_drive_service",
+        side_effect=lambda: calls.append("drive") or drive,
+    )
     mcp.MCPServer()._warm_up()
     assert calls == ["credentials", "docs", "drive"]
     drive.about.return_value.get.return_value.execute.assert_called_once()
@@ -763,5 +772,32 @@ def test_tool_call_waits_for_warm_up(mocker):
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "gdoc_ls", "arguments": {}},
     })
-    thread.join.assert_called_once()
+    thread.join.assert_called_once_with()  # no timeout: never dispatch early
+    assert server._warm_up_thread is None
+
+
+def test_tool_call_does_not_run_while_warm_up_is_running(mocker):
+    import threading
+
+    order = []
+    release = threading.Event()
+
+    def slow_warm_up():
+        release.wait(5)
+        order.append("warm-up done")
+
+    def command(*args):
+        order.append("command")
+        return ("out", "", 0)
+
+    mocker.patch.object(mcp, "call_command", side_effect=command)
+    server = mcp.MCPServer()
+    mocker.patch.object(server, "_warm_up", side_effect=slow_warm_up)
+    server.start_warm_up()
+    threading.Timer(0.2, release.set).start()
+    server.dispatch({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "gdoc_ls", "arguments": {}},
+    })
+    assert order == ["warm-up done", "command"]
     assert server._warm_up_thread is None

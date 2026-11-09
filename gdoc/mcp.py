@@ -658,10 +658,16 @@ class MCPServer:
 
     def _wait_for_warm_up(self) -> None:
         # The Google HTTP client is not thread-safe, so a tool call must not
-        # share a service object with a warm-up that is still running.
-        thread, self._warm_up_thread = self._warm_up_thread, None
+        # share a service object with a warm-up that is still running. Wait
+        # until the thread has ended, with no timeout of our own: returning
+        # early would let the call reuse the cached service the warm-up is
+        # still using. The warm-up cannot hang, because every request it
+        # makes has a client timeout (120 s for the token refresh, 60 s for
+        # the Drive call).
+        thread = self._warm_up_thread
         if thread is not None:
-            thread.join(timeout=30)
+            thread.join()
+            self._warm_up_thread = None
 
     # -- request handlers ------------------------------------------------
 
