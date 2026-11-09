@@ -34,7 +34,7 @@ uv sync --extra dev
 
 2. **API layer** (`gdoc/api/`): Thin wrappers around Google APIs. Each module translates `HttpError` into `GdocError`/`AuthError` at the API boundary — the CLI layer does not catch `HttpError`. Service objects are `lru_cache`d per account: keyed by `account_cache_key()` (resolved account + token-file identity), so a long-lived multi-account process never serves one account another account's service, and a token re-auth/removal or default-account change is picked up on the next call. The active account is a `ContextVar`; long-lived servers scope it per call with `account_context()`.
    - `api/drive.py` — Drive v3: export, list, search, file info, update content, create, copy, share
-   - `api/docs.py` — Docs v1: `replace_all_text` (for the `edit` command)
+   - `api/docs.py` — Docs v1: `replace_all_text` (for the `edit` command); developer-preview requests (`insert_comment`, `get_document_threads`, `decide_suggestion`) keep all preview JSON shapes behind this boundary
    - `api/comments.py` — Drive v3 comments: list (paginated), create comment, create reply
 
 3. **Awareness system** (`gdoc/state.py` + `gdoc/notify.py`): Tracks per-document state in `~/.config/gdoc/state/{doc_id}.json`. Before most commands, `pre_flight()` detects changes (edits, new comments, resolved/reopened) since last interaction and prints a banner to stderr. The `write` command uses version tracking to prevent conflicts (blocks unless `--force`).
