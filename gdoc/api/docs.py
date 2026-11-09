@@ -1,8 +1,11 @@
 """Google Docs API v1 wrapper functions with error translation."""
 
 import re
+from array import array
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import pairwise
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -12,6 +15,7 @@ from gdoc.util import (
     AuthError,
     GdocError,
     PreviewUnavailableError,
+    find_overlapping,
     fold_typography,
 )
 
@@ -190,6 +194,17 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
         pageless: If True, set PAGELESS; otherwise PAGES (paged).
     """
     mode = "PAGELESS" if pageless else "PAGES"
+    _update_document_style(
+        doc_id, {"documentFormat": {"documentMode": mode}},
+        "documentFormat.documentMode",
+    )
+
+
+def _update_document_style(doc_id: str, style: dict, fields: str) -> None:
+    """Apply an updateDocumentStyle, retrying transient failures.
+
+    Retrying is safe because setting a style is idempotent.
+    """
     try:
         service = get_docs_service()
         service.documents().batchUpdate(
@@ -198,17 +213,87 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
                 "requests": [
                     {
                         "updateDocumentStyle": {
-                            "documentStyle": {
-                                "documentFormat": {"documentMode": mode},
-                            },
-                            "fields": "documentFormat.documentMode",
+                            "documentStyle": style,
+                            "fields": fields,
                         }
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=_STYLE_RETRIES)
     except HttpError as e:
         _translate_http_error(e, doc_id)
+
+
+# documentStyle fields updateDocumentStyle can write. The others, such as
+# defaultHeaderId and useCustomHeaderFooterMargins, are read-only.
+_WRITABLE_STYLE_FIELDS = (
+    "documentFormat",
+    "background",
+    "pageSize",
+    "flipPageOrientation",
+    "marginTop",
+    "marginBottom",
+    "marginLeft",
+    "marginRight",
+    "marginHeader",
+    "marginFooter",
+    "pageNumberStart",
+    "useFirstPageHeaderFooter",
+    "useEvenPageHeaderFooter",
+)
+_WHITE = {"rgbColor": {"red": 1, "green": 1, "blue": 1}}
+_STYLE_RETRIES = 2
+
+
+def get_document_style(doc_id: str) -> dict:
+    """Return a document's documentStyle (page mode, margins, page size...)."""
+    try:
+        service = get_docs_service()
+        document = (
+            service.documents()
+            .get(documentId=doc_id, fields="documentStyle")
+            .execute(num_retries=_STYLE_RETRIES)
+        )
+        return document.get("documentStyle", {})
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def _comparable_style_value(name: str, value):
+    """A style value for comparing, with an unset and a white background equal.
+
+    A blank doc reports white and a markdown import reports unset, which look
+    the same on screen. Without this, every whole-doc write to a default doc
+    would need a style write.
+    """
+    if name == "background":
+        color = (value or {}).get("color", {}).get("color")
+        return None if color == _WHITE else color
+    return value
+
+
+def restore_document_style(doc_id: str, style: dict) -> None:
+    """Write back the fields of *style* that the document no longer has.
+
+    Args:
+        doc_id: The document ID.
+        style: A documentStyle from get_document_style.
+
+    """
+    current = get_document_style(doc_id)
+    changed = [
+        name for name in _WRITABLE_STYLE_FIELDS
+        if _comparable_style_value(name, style.get(name))
+        != _comparable_style_value(name, current.get(name))
+    ]
+    if not changed:
+        return
+    # A masked field absent from the style resets to its default.
+    _update_document_style(
+        doc_id,
+        {name: style[name] for name in changed if name in style},
+        ",".join(changed),
+    )
 
 
 def _extract_paragraphs_text(content: list[dict]) -> str:
@@ -415,12 +500,17 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
     return "".join(parts)
 
 
-def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
+def resolve_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict:
     """Resolve a tab by title (case-insensitive) or ID.
 
     Args:
         tabs: Flattened list of tab dicts from flatten_tabs().
         tab_name: Tab title or ID to match.
+        by_id: Match the ID only. For values known to be IDs (a URL's
+            ?tab=, an ID resolved earlier): a tab titled like another
+            tab's ID would otherwise win.
 
     Returns:
         The matched tab dict.
@@ -428,9 +518,10 @@ def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
     Raises:
         GdocError: If no matching tab is found.
     """
-    for t in tabs:
-        if t["title"].lower() == tab_name.lower():
-            return t
+    if not by_id:
+        for t in tabs:
+            if t["title"].lower() == tab_name.lower():
+                return t
     for t in tabs:
         if str(t["id"]) == tab_name:
             return t
@@ -452,6 +543,23 @@ def get_document(doc_id: str) -> dict:
 def _utf16_len(ch: str) -> int:
     """Width of one code point in UTF-16 code units (Docs API indices)."""
     return 2 if ord(ch) > 0xFFFF else 1
+
+
+def _text_runs(content: list[dict]):
+    """(start index, text) of every text run, tables included, in order."""
+    for element in content:
+        paragraph = element.get("paragraph")
+        if paragraph is not None:
+            for pe in paragraph.get("elements", []):
+                text_run = pe.get("textRun")
+                if text_run is not None:
+                    yield pe.get("startIndex", 0), text_run.get("content", "")
+            continue
+        table = element.get("table")
+        if table is not None:
+            for row in table.get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    yield from _text_runs(cell.get("content", []))
 
 
 def _collect_segments(content: list[dict]) -> list[list[tuple[int, str]]]:
@@ -799,7 +907,7 @@ def _insert_table(
                 documentId=doc_id, includeTabsContent=True,
             ).execute()
             tabs = flatten_tabs(doc.get("tabs", []))
-            tab_match = resolve_tab(tabs, tab_id)
+            tab_match = resolve_tab(tabs, tab_id, by_id=True)
             cell_indices = _find_table_cell_indices(
                 None, index, body=tab_match["body"],
             )
@@ -1135,6 +1243,65 @@ def _raise_if_stale_revision(e: HttpError) -> None:
         )
 
 
+class StaleRevisionError(GdocError):
+    """The pinned revision was stale, so the batch was not applied."""
+
+
+def batch_update_pinned(
+    doc_id: str, requests: list[dict], revision_id: str,
+) -> None:
+    """Run one batchUpdate pinned to *revision_id* (all requests or none).
+
+    A stale revision (someone edited since the read) becomes a clear
+    "re-run it" error instead of a raw 400. A 5xx or a failure in transit
+    can arrive after Google applied the batch, so those say the outcome is
+    unknown: for a non-idempotent change a blind retry would apply it
+    twice.
+    """
+    from google.auth.exceptions import GoogleAuthError, TransportError
+
+    unknown = (
+        "The outcome is unknown: the change may or may not have been "
+        "saved. Inspect the document before retrying."
+    )
+    # Built before the try: a credentials failure here happens before
+    # anything is sent, so it must not read as an unknown outcome.
+    service = get_docs_service()
+    try:
+        service.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": requests,
+                "writeControl": {"requiredRevisionId": revision_id},
+            },
+        ).execute()
+    except HttpError as e:
+        try:
+            _raise_if_stale_revision(e)
+        except GdocError as stale:
+            raise StaleRevisionError(str(stale)) from e
+        if int(e.resp.status) >= 500:
+            raise GdocError(
+                f"the write returned a server error ({int(e.resp.status)}: "
+                f"{e.reason}). {unknown}"
+            )
+        _translate_http_error(e, doc_id)
+    except TransportError as e:
+        # Raised only while refreshing the access token, before the
+        # request is sent.
+        raise GdocError(
+            f"the write failed before it was sent (network error during "
+            f"token refresh: {e}). No change was made."
+        )
+    except GoogleAuthError as e:
+        raise AuthError(f"Authentication expired ({e}). Run `gdoc auth`.")
+    except Exception as e:  # noqa: BLE001 — .execute() is the network call
+        raise GdocError(
+            f"the write failed in transit ({str(e) or type(e).__name__}). "
+            f"{unknown}"
+        )
+
+
 def find_object_tab(doc: dict, object_id: str) -> str | None:
     """Find which tab holds an inline/positioned object ID.
 
@@ -1248,23 +1415,27 @@ def get_document_structure(
         _translate_http_error(e, doc_id)
 
 
-def resolve_raw_tab(tabs: list[dict], tab_name: str) -> dict | None:
+def resolve_raw_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict | None:
     """Find a raw tab dict by title (case-insensitive) or tab ID.
 
     Unlike resolve_tab (which returns a flattened summary), this returns
     the tab's raw API dict — tabProperties, documentTab, childTabs —
     searching the whole tree. Title matches win over ID matches,
-    mirroring resolve_tab. Returns None when nothing matches.
+    mirroring resolve_tab; by_id skips the title pass, as there.
+    Returns None when nothing matches.
     """
     def walk(ts: list[dict]):
         for t in ts:
             yield t
             yield from walk(t.get("childTabs", []))
 
-    for t in walk(tabs):
-        props = t.get("tabProperties", {})
-        if props.get("title", "").lower() == tab_name.lower():
-            return t
+    if not by_id:
+        for t in walk(tabs):
+            props = t.get("tabProperties", {})
+            if props.get("title", "").lower() == tab_name.lower():
+                return t
     for t in walk(tabs):
         if str(t.get("tabProperties", {}).get("tabId", "")) == tab_name:
             return t
@@ -1423,12 +1594,37 @@ def _strip_trailing_newline_unless_hr(parsed) -> None:
                 s.end = old_len - 1
 
 
+def _keep_boundary_paragraph_styles(parsed) -> None:
+    """Drop the implicit NORMAL_TEXT from paragraphs that join existing text.
+
+    A replacement's first paragraph merges into the paragraph holding the
+    start of the match, and its last into the one holding the end. A
+    paragraph-style request covers the whole paragraph, and setting
+    ``namedStyleType`` re-resolves the character formatting of every run in
+    it — so the bare NORMAL_TEXT that plain lines carry would strip bold and
+    italic from text outside the match and demote a heading. Explicit block
+    Markdown (headings, blockquotes, rules) keeps its paragraph style.
+    Wholly new middle paragraphs keep NORMAL_TEXT too. Call after
+    ``_strip_trailing_newline_unless_hr``. Mutates ``parsed`` in place.
+    """
+    end = len(parsed.plain_text)
+    parsed.styles = [
+        s for s in parsed.styles
+        if not (
+            s.type == "paragraph_style"
+            and s.style == {"namedStyleType": "NORMAL_TEXT"}
+            and (s.start == 0 or s.end == end)
+        )
+    ]
+
+
 def insert_markdown_into_tab(
     doc_id: str,
-    tab_name: str,
+    tab_id: str,
     markdown: str,
     position: str = "start",
     replace: bool = False,
+    doc: dict | None = None,
 ) -> dict:
     """Insert (or replace) markdown content in a tab via Docs API.
 
@@ -1437,22 +1633,29 @@ def insert_markdown_into_tab(
 
     Args:
         doc_id: Document ID.
-        tab_name: Tab title (case-insensitive) or tab ID.
+        tab_id: ID of the tab to write (callers resolve titles first, so
+            the tab written is the tab they checked).
         markdown: Markdown source to insert (frontmatter should be
             stripped by the caller).
         position: "start" or "end". Ignored when replace=True.
         replace: If True, delete the tab body first then insert at the
             body start.
+        doc: Optional pre-fetched get_document_with_tabs() response. When a
+            caller (e.g. `write --tab`) already fetched the doc to resolve the
+            tab for its conflict check, pass it here to avoid a second fetch.
+            Its revisionId still pins writeControl, so a concurrent edit
+            between the fetch and this write is still rejected.
 
     Returns:
         Dict with "tab_id", "tab_title", "insert_index".
     """
     from gdoc.mdparse import parse_markdown, to_docs_requests, utf16_len
 
-    doc = get_document_with_tabs(doc_id)
+    if doc is None:
+        doc = get_document_with_tabs(doc_id)
     revision_id = doc.get("revisionId", "")
     tabs = flatten_tabs(doc.get("tabs", []))
-    tab_match = resolve_tab(tabs, tab_name)
+    tab_match = resolve_tab(tabs, tab_id, by_id=True)
     tab_id = tab_match["id"]
     body = tab_match["body"]
 
@@ -1587,6 +1790,7 @@ def replace_formatted(
     _reject_overlapping_matches(matches)
 
     _strip_trailing_newline_unless_hr(parsed)
+    _keep_boundary_paragraph_styles(parsed)
 
     sorted_matches, all_requests = _build_replacement_requests(
         parsed, matches, tab_id=tab_id,
@@ -1612,7 +1816,7 @@ def replace_formatted(
         if tab_id:
             doc = get_document_with_tabs(doc_id)
             tabs = flatten_tabs(doc.get("tabs", []))
-            tab_match = resolve_tab(tabs, tab_id)
+            tab_match = resolve_tab(tabs, tab_id, by_id=True)
             fetch_body = tab_match["body"]
         else:
             doc = service.documents().get(documentId=doc_id).execute()
@@ -1944,6 +2148,44 @@ def _token_identity(account: str | None) -> tuple[str | None, str | None]:
     return (data.get("client_id"), data.get("refresh_token"))
 
 
+def _comments_view_get(doc_id: str, fields: str | None = None):
+    """Raw ``documents.get`` with the preview-only ``commentsViewMode``.
+
+    Sent as a raw authorized GET because the bundled discovery document
+    predates the field and the generated client refuses unknown parameters.
+    Google requires the two companions ("Comments view mode may only be
+    specified if tabs content is also requested" / "... if inline
+    suggestions are also explicitly requested"). Returns the ``requests``
+    response; transport and credential exceptions propagate.
+    """
+    from google.auth.transport.requests import AuthorizedSession
+
+    from gdoc.auth import get_credentials
+
+    account, _stamp = account_cache_key()
+    session = AuthorizedSession(get_credentials(account))
+    params = {
+        "includeTabsContent": "true",
+        "suggestionsViewMode": "SUGGESTIONS_INLINE",
+        "commentsViewMode": "COMMENTS_VIEW_MODE_INCLUDED",
+    }
+    if fields:
+        params["fields"] = fields
+    return session.get(
+        f"https://docs.googleapis.com/v1/documents/{doc_id}",
+        params=params,
+        timeout=60,
+    )
+
+
+def _preview_field_rejected(resp) -> bool:
+    """400 naming the preview field: the project is not preview-enrolled."""
+    if resp.status_code != 400:
+        return False
+    detail = resp.text.lower()
+    return "unknown name" in detail or "cannot find field" in detail
+
+
 def check_suggest_preview_access(doc_id: str) -> None:
     """Non-mutating gate: is this OAuth client's project preview-enrolled?
 
@@ -1954,33 +2196,12 @@ def check_suggest_preview_access(doc_id: str) -> None:
     a registered project echoes it (HTTP 200), an unregistered one rejects
     it (400 ``Unknown name "comments_view_mode"``). Same account, document,
     and scopes — only the client project changes the answer.
-
-    Sent as a raw authorized GET because the bundled discovery document
-    predates the field and the generated client refuses unknown parameters.
     """
     from google.auth.exceptions import GoogleAuthError, TransportError
-    from google.auth.transport.requests import AuthorizedSession
     from requests.exceptions import RequestException
 
-    from gdoc.auth import get_credentials
-
-    account, _stamp = account_cache_key()
     try:
-        session = AuthorizedSession(get_credentials(account))
-        resp = session.get(
-            f"https://docs.googleapis.com/v1/documents/{doc_id}",
-            params={
-                # Google requires the two companions ("Comments view mode
-                # may only be specified if tabs content is also requested"
-                # / "... if inline suggestions are also explicitly
-                # requested").
-                "includeTabsContent": "true",
-                "suggestionsViewMode": "SUGGESTIONS_INLINE",
-                "commentsViewMode": "COMMENTS_VIEW_MODE_INCLUDED",
-                "fields": "documentId,commentsViewMode",
-            },
-            timeout=60,
-        )
+        resp = _comments_view_get(doc_id, fields="documentId,commentsViewMode")
     except TransportError as e:
         # google-auth wraps a network failure during token refresh in
         # TransportError (a GoogleAuthError subclass) — it is a transport
@@ -2012,10 +2233,7 @@ def check_suggest_preview_access(doc_id: str) -> None:
                 "mode cannot be trusted. No change was made."
             )
         return
-    detail = resp.text.lower()
-    if status == 400 and (
-        "unknown name" in detail or "cannot find field" in detail
-    ):
+    if _preview_field_rejected(resp):
         raise GdocError(
             "suggest mode not available: the OAuth client's Cloud project "
             "is not enrolled in the Google Workspace Developer Preview "
@@ -2031,6 +2249,203 @@ def check_suggest_preview_access(doc_id: str) -> None:
     if status == 404:
         raise GdocError(f"Document not found: {doc_id}")
     raise GdocError(f"API error ({status}): {resp.reason}")
+
+
+def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
+    """Live comment anchors, from the Docs API Developer Preview.
+
+    Drive's comment fields (``anchor``, ``quotedFileContent``) never change
+    after an edit, so they cannot show whether a comment is still attached.
+    ``documents.get`` with ``commentsViewMode`` returns each tab's
+    ``commentAnchors``: the ranges each comment covers now, matching what
+    the Docs UI highlights. A comment with an anchor ID but no range left
+    is detached (the UI says "Original content deleted").
+
+    Returns ``{comment_id: anchor}`` for every comment the preview reports
+    with an anchor ID. ``anchor`` is None when detached (no range left),
+    otherwise:
+
+    - ``text``: the anchored text now, in document order; empty when the
+      anchor covers only non-text content such as an image.
+    - ``key``: the anchored text in the paragraph where the anchor ends,
+      stripped — the text ``cat --comments`` looks for to pick a line.
+    - ``occurrence`` / ``occurrences``: which occurrence of ``key`` this is
+      (0-based) and how many there are, over every tab's text in tab order
+      (with each tab's title before it when there are several tabs, as in
+      the markdown export). Zero occurrences when ``key`` can't be located.
+
+    Comments missing from the result have no live anchor (for example,
+    comments created through the Drive API with only a quote).
+
+    Raises PreviewUnavailableError whenever the anchors can't be read but
+    the document otherwise can: the OAuth client's project is not
+    preview-enrolled (the field is rejected, or accepted but not applied),
+    access is refused (403), or the request fails (network, rate limit,
+    server error). Callers fall back to quoted text. Only expired
+    credentials (AuthError) and a missing document (GdocError) propagate.
+    """
+    from google.auth.exceptions import GoogleAuthError, TransportError
+    from requests.exceptions import RequestException
+
+    try:
+        # No fields mask: Google rejects masks that expand childTabs.
+        resp = _comments_view_get(doc_id)
+    except TransportError as e:
+        # A network failure during token refresh, not bad credentials.
+        raise PreviewUnavailableError(f"network error: {e}")
+    except GoogleAuthError as e:
+        raise AuthError(f"Authentication expired ({e}). Run `gdoc auth`.")
+    except RequestException as e:
+        raise PreviewUnavailableError(f"network error: {e}")
+    status = resp.status_code
+    if _preview_field_rejected(resp):
+        raise PreviewUnavailableError(
+            "the OAuth client's Cloud project is not enrolled in the "
+            "Google Workspace Developer Preview"
+        )
+    if status == 401:
+        raise AuthError("Authentication expired. Run `gdoc auth`.")
+    if status == 404:
+        raise GdocError(f"Document not found: {doc_id}")
+    if status == 403:
+        raise PreviewUnavailableError(
+            "permission denied (403); the comments view needs comment or "
+            "edit access"
+        )
+    if status != 200:
+        raise PreviewUnavailableError(f"API error ({status}): {resp.reason}")
+    try:
+        document = resp.json()
+    except ValueError:
+        raise PreviewUnavailableError("unreadable document response")
+    if document.get("commentsViewMode") != "COMMENTS_VIEW_MODE_INCLUDED":
+        raise PreviewUnavailableError(
+            "the server did not apply the Developer Preview comments view"
+        )
+
+    def walk(ts: list[dict]):
+        for t in ts:
+            yield t
+            yield from walk(t.get("childTabs", []))
+
+    # Every tab's text as one string, tab after tab, plus each tab's map
+    # from doc index to position in that string. The markdown export of a
+    # document with several tabs heads each tab with its title, so those
+    # titles are counted too. A single-tab export usually has no title
+    # heading (one that once had more tabs can keep it); a count that then
+    # disagrees with the markdown leaves the comment unplaced, not misplaced.
+    tabs = list(walk(document.get("tabs", [])))
+    text_parts: list[str] = []
+    # tab ID -> (position of the tab's first char, each char's doc index)
+    position: dict[str, tuple[int, array]] = {}
+    ranges_by_anchor: dict[str, list[tuple[str, int, int]]] = {}
+    offset = 0
+    for tab in tabs:
+        tab_id = tab.get("tabProperties", {}).get("tabId", "")
+        title = tab.get("tabProperties", {}).get("title", "")
+        if len(tabs) > 1:
+            text_parts.append(title + "\n")
+            offset += len(title) + 1
+        doc_tab = tab.get("documentTab", {})
+        # One compact int per char (a per-char dict of tuples costs ~200
+        # bytes a char on a book-length document).
+        indices = array("q")
+        pieces: list[str] = []
+        for start, run in _text_runs(
+            doc_tab.get("body", {}).get("content", []),
+        ):
+            # Only chars beyond the BMP take two UTF-16 units; a lone
+            # surrogate (which can't be encoded) takes one.
+            if not run or max(run) <= "\uffff":
+                indices.extend(range(start, start + len(run)))
+            else:
+                # Doc indices are UTF-16 units: an emoji advances by 2.
+                i = start
+                for ch in run:
+                    indices.append(i)
+                    i += _utf16_len(ch)
+            pieces.append(run)
+        tab_text = "".join(pieces)
+        if any(b <= a for a, b in pairwise(indices)):
+            # Runs out of document order: sort chars by doc index.
+            order = sorted(range(len(indices)), key=indices.__getitem__)
+            indices = array("q", (indices[i] for i in order))
+            tab_text = "".join(tab_text[i] for i in order)
+        position[tab_id] = (offset, indices)
+        text_parts.append(tab_text)
+        offset += len(tab_text)
+        for anchor_id, anchor in doc_tab.get("commentAnchors", {}).items():
+            for r in anchor.get("ranges", []):
+                # A range in a header, footer or footnote (segmentId) is
+                # indexed within that segment, not the body: it keeps the
+                # comment attached but contributes no body text.
+                segment = r.get("segmentId")
+                ranges_by_anchor.setdefault(anchor_id, []).append((
+                    r.get("tabId") or tab_id,
+                    0 if segment else r.get("startIndex", 0),
+                    0 if segment else r.get("endIndex", 0),
+                ))
+    full_text = "".join(text_parts)
+
+    def find_all(key: str) -> list[int]:
+        return list(find_overlapping(full_text, key))
+
+    anchors: dict[str, dict | None] = {}
+    for comment in document.get("comments", []):
+        comment_id = comment.get("commentId")
+        anchor_id = comment.get("anchorId")
+        if not comment_id or not anchor_id:
+            continue
+        # Chars whose doc index falls in a range; the second UTF-16 unit
+        # of an emoji has no char of its own.
+        spots: list[int] = []
+        for tab_id, start, end in ranges_by_anchor.get(anchor_id, []):
+            if tab_id not in position:
+                continue
+            base, indices = position[tab_id]
+            spots.extend(range(
+                base + bisect_left(indices, start),
+                base + bisect_left(indices, end),
+            ))
+        spots.sort()
+        if anchor_id not in ranges_by_anchor:
+            anchors[comment_id] = None
+            continue
+        if not spots:
+            # Still attached, but only to non-text content (an image).
+            anchors[comment_id] = {
+                "text": "", "key": "", "occurrence": 0, "occurrences": 0,
+            }
+            continue
+        text = "".join(full_text[p] for p in spots)
+        # A soft line break (vertical tab) ends a markdown line too.
+        lines_text = text.replace("\x0b", "\n")
+        # The last paragraph that holds anchored text: its part of the
+        # anchor, and where that part starts in the full text.
+        line_start = len(text)
+        while True:
+            cut = lines_text.rfind("\n", 0, line_start)
+            part = text[cut + 1:line_start]
+            if part.strip() or cut == -1:
+                break
+            line_start = cut
+        key = part.strip()
+        occurrence = occurrences = 0
+        if key:
+            key_pos = spots[cut + 1 + (len(part) - len(part.lstrip()))]
+            starts = find_all(key)
+            # Split ranges can make key text that never occurs as one run;
+            # zero occurrences leaves the comment unplaced.
+            if key_pos in starts:
+                occurrence = starts.index(key_pos)
+                occurrences = len(starts)
+        anchors[comment_id] = {
+            "text": text,
+            "key": key,
+            "occurrence": occurrence,
+            "occurrences": occurrences,
+        }
+    return anchors
 
 
 def _reject_overlapping_matches(matches: list[dict]) -> None:
