@@ -205,6 +205,51 @@ class TestReplaceFormatted:
         assert "updateTextStyle" in req_types
 
     @patch("gdoc.api.docs.get_docs_service")
+    def test_inline_replacement_leaves_paragraph_style_alone(self, mock_svc):
+        """A NORMAL_TEXT reset covers the whole paragraph and re-resolves its
+        runs, stripping bold outside the match and demoting headings — so an
+        inline replacement must not send one."""
+        chain = _docs_chain(mock_svc)
+        chain.batchUpdate.return_value.execute = MagicMock()
+        matches = [{"startIndex": 20, "endIndex": 30}]
+        replace_formatted("d1", matches, "has a [cap](https://x.y)", "r1")
+        reqs = chain.batchUpdate.call_args_list[0][1]["body"]["requests"]
+        req_types = [list(r.keys())[0] for r in reqs]
+        assert "updateParagraphStyle" not in req_types
+        assert "updateTextStyle" in req_types
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_multi_paragraph_replacement_styles_only_new_paragraphs(
+        self, mock_svc,
+    ):
+        """The first and last paragraphs join existing text and keep its
+        style; a wholly new middle paragraph is still set to NORMAL_TEXT."""
+        chain = _docs_chain(mock_svc)
+        chain.batchUpdate.return_value.execute = MagicMock()
+        matches = [{"startIndex": 20, "endIndex": 30}]
+        replace_formatted("d1", matches, "first\nmiddle\nlast", "r1")
+        reqs = chain.batchUpdate.call_args_list[0][1]["body"]["requests"]
+        ups = [r["updateParagraphStyle"] for r in reqs
+               if "updateParagraphStyle" in r]
+        assert len(ups) == 1
+        # "middle\n" spans plain-text offsets 6..13.
+        assert ups[0]["range"] == {"startIndex": 26, "endIndex": 33}
+        assert ups[0]["paragraphStyle"] == {"namedStyleType": "NORMAL_TEXT"}
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_explicit_heading_replacement_still_styled(self, mock_svc):
+        chain = _docs_chain(mock_svc)
+        chain.batchUpdate.return_value.execute = MagicMock()
+        matches = [{"startIndex": 5, "endIndex": 10}]
+        replace_formatted("d1", matches, "## Title", "r1")
+        reqs = chain.batchUpdate.call_args_list[0][1]["body"]["requests"]
+        ups = [r["updateParagraphStyle"] for r in reqs
+               if "updateParagraphStyle" in r]
+        assert [u["paragraphStyle"] for u in ups] == [
+            {"namedStyleType": "HEADING_2"},
+        ]
+
+    @patch("gdoc.api.docs.get_docs_service")
     def test_empty_matches_returns_zero(self, mock_svc):
         result = replace_formatted("d1", [], "text", "r1")
         assert result == 0

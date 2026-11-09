@@ -169,18 +169,28 @@ def update_doc_content(doc_id: str, content: str) -> int:
     """Overwrite a Google Doc's content with markdown.
 
     Uploads markdown content via files.update with media, triggering
-    automatic conversion to Google Docs format.
+    automatic conversion to Google Docs format. That import also resets the
+    document's style (pageless becomes paged, and margins, page size and
+    background go to their defaults), so the style is read first and restored
+    afterwards.
 
     Args:
         doc_id: The document ID.
         content: Markdown content string to upload.
 
     Returns:
-        The new document version (int) from the API response.
+        The new document version (int) from the upload response. A file stamp
+        relies on it being that response's and not a later read. Drive doesn't
+        count a style restore in this version straight away.
     """
     import io
 
     from googleapiclient.http import MediaIoBaseUpload
+
+    from gdoc.api.docs import get_document_style
+
+    # Nothing has been written yet, so a failed read safely aborts the write.
+    style = get_document_style(doc_id)
 
     try:
         service = get_drive_service()
@@ -204,9 +214,36 @@ def update_doc_content(doc_id: str, content: str) -> int:
             )
             .execute()
         )
-        return int(result["version"])
+        version = int(result["version"])
     except HttpError as e:
         _translate_http_error(e, doc_id)
+    _restore_style_after_import(doc_id, style)
+    return version
+
+
+def _restore_style_after_import(doc_id: str, style: dict) -> None:
+    """Put back the style a document had before an import.
+
+    Best-effort: the content is already written, so a failure here must not
+    stop the caller from recording that write. The warning carries the old
+    style, because the next write would otherwise take the reset style as the
+    one to keep. A style change made during the import is overwritten, as a
+    content edit made then would be.
+    """
+    import json
+    import sys
+
+    from gdoc.api.docs import restore_document_style
+
+    try:
+        restore_document_style(doc_id, style)
+    except Exception as e:
+        print(
+            f"WARN: content written, but the document style could not be "
+            f"restored: {e}. Reset it under File > Page setup. It was: "
+            f"{json.dumps(style)}",
+            file=sys.stderr,
+        )
 
 
 def get_file_version(doc_id: str) -> dict:
@@ -543,12 +580,14 @@ def create_permission(
     domain: str | None = None,
     anyone: bool = False,
     discoverable: bool = False,
+    notify: bool = True,
 ) -> dict:
     """Share a document with a user, a whole domain, or anyone with the link.
 
     Exactly one of email / domain / anyone selects the grantee type; the
-    caller validates that. User shares send a notification email; domain
-    and anyone shares are link-based, with `discoverable` controlling
+    caller validates that. User shares send Google's notification email
+    unless `notify=False`. Domain and anyone shares are link-based (never
+    emailed), with `discoverable` controlling
     whether the file also appears in search results
     (`allowFileDiscovery` — never inferred, off by default).
 
@@ -559,6 +598,7 @@ def create_permission(
         domain: Workspace domain to share with (domain grant).
         anyone: Share with anyone who has the link.
         discoverable: Let the file surface in search (domain/anyone only).
+        notify: Send the notification email (user grants only).
 
     Returns:
         Permission resource dict from the API.
@@ -566,7 +606,7 @@ def create_permission(
     kwargs: dict = {}
     if email:
         body: dict = {"type": "user", "role": role, "emailAddress": email}
-        kwargs["sendNotificationEmail"] = True
+        kwargs["sendNotificationEmail"] = notify
     elif domain:
         body = {
             "type": "domain",

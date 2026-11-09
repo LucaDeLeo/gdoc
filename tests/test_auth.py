@@ -4,6 +4,7 @@ import contextlib
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -586,6 +587,32 @@ class TestSaveToken:
 
         with patch("gdoc.auth.os.open", side_effect=spy_open):
             _save_token(mock_creds, fake_token)
+
+    def test_parallel_saves_all_succeed(self, tmp_path):
+        """Concurrent refreshes of one token must not collide on a temp file."""
+        fake_token = tmp_path / "token.json"
+        mock_creds = MagicMock()
+        mock_creds.to_json.return_value = '{"token": "test"}'
+        barrier = threading.Barrier(6)
+        errors = []
+
+        def save_repeatedly():
+            barrier.wait()
+            for _ in range(50):
+                try:
+                    _save_token(mock_creds, fake_token)
+                except Exception as error:  # collect, so the assert shows them
+                    errors.append(error)
+
+        threads = [threading.Thread(target=save_repeatedly) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert errors == []
+        assert fake_token.read_text() == '{"token": "test"}'
+        assert [p.name for p in tmp_path.iterdir()] == ["token.json"]
 
 
 class TestCmdAuthIntegration:
