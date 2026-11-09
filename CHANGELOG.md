@@ -17,6 +17,20 @@ All notable changes to `gdoc` are documented here. This project follows
   they no longer get the implicit `NORMAL_TEXT`; wholly new middle
   paragraphs and explicit block Markdown (`# Heading`, `> quote`) are
   styled as before.
+- **Whole-doc `write`, `push` and the sync hook keep the document's style.**
+  These re-import markdown through Drive, and that import resets
+  `documentStyle`: a pageless doc came back paged, and margins, page size,
+  orientation, background and page numbering went to their defaults. The style
+  is now read before the import and any field that changed is written back.
+  If that read fails the write stops with nothing changed, including under
+  `--force-collapse-tabs`, which made no Docs API call before. If the restore
+  fails, the command warns and still succeeds, since the content is already
+  written. The import still drops headers and footers.
+- **Parallel runs no longer fail as "Not authenticated" when the token
+  expires.** Every token save went through one fixed `token.json.tmp`
+  opened exclusively, so when several gdoc processes refreshed the same
+  expired token at once, all but one failed to save it and reported the
+  account as not authenticated. Each save now uses its own temp file.
 
 ## [0.23.0] — 2026-10-16
 

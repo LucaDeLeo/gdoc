@@ -4273,8 +4273,9 @@ def _apply_page_mode(args, doc_id: str) -> int | None:
         print(f"WARN: could not set page mode: {e}", file=sys.stderr)
         return None
 
-    # The updateDocumentStyle write bumped the Drive version; re-read it so the
-    # caller seeds state with the post-write baseline. Best-effort: a failed
+    # The updateDocumentStyle write can bump the Drive version, though Drive may
+    # count it only later; re-read it so the caller seeds state with the latest
+    # baseline available. A new doc has no stamp to protect. Best-effort: a failed
     # refresh just falls back to the create-time version (a stale banner is
     # better than aborting after the doc exists).
     from gdoc.api.drive import get_file_version
