@@ -359,3 +359,35 @@ def test_inspection_header_inside_code_is_supported_text(native_write):
     native_write.path.write_text('```\n=== Tab: Draft ===\n```\n')
     assert cmd_write(_make_args(file=str(native_write.path))) == 0
     native_write.write.assert_called_once()
+
+
+class TestWriteUrlTab:
+    """A ?tab= in the document URL drives the per-tab write path."""
+
+    def test_url_tab_writes_single_tab(self, native_write):
+        env = native_write
+        env.document["tabs"].append(native_tab("second", "Second"))
+        state.record_content_read("abc123", ["second"], "r10")
+        url = "https://docs.google.com/document/d/abc123/edit?tab=second"
+        assert cmd_write(_make_args(doc=url, file=str(env.path))) == 0
+        assert env.tab_write.call_args.args[:2] == ("abc123", "second")
+        env.write.assert_not_called()
+        assert state.load_state("abc123").read_revision_ids["second"] == "r11"
+
+    def test_url_tab_and_force_collapse_conflict(self, tmp_path):
+        args = _make_args(
+            doc="https://docs.google.com/document/d/abc123/edit?tab=t.second",
+            force_collapse_tabs=True,
+            quiet=True,
+        )
+        with pytest.raises(GdocError, match="URL targets tab") as exc:
+            cmd_write(args)
+        assert exc.value.exit_code == 3
+
+    def test_url_tab_t0_uses_the_default_write(self, native_write):
+        """?tab=t.0 is ambient noise: the default first-tab write."""
+        env = native_write
+        url = "https://docs.google.com/document/d/abc123/edit?tab=t.0"
+        assert cmd_write(_make_args(doc=url, file=str(env.path))) == 0
+        env.write.assert_called_once()
+        env.tab_write.assert_not_called()

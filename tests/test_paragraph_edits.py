@@ -221,7 +221,9 @@ def test_insertion_styles_only_new_paragraphs(mocker, position, markdown, bullet
         }],
     })
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
-    insert_markdown_into_tab("synthetic-doc", "Notes", markdown, position=position)
+    insert_markdown_into_tab(
+        "synthetic-doc", "synthetic-tab", markdown, position=position,
+    )
     requests = service.documents.return_value.batchUpdate.call_args.kwargs[
         "body"]["requests"]
     inserts = [req["insertText"] for req in requests if "insertText" in req]
@@ -552,7 +554,7 @@ def test_insert_at_end_trailing_rule_reuses_final_newline(mocker, replace):
         }],
     })
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
-    insert_markdown_into_tab("synthetic-doc", "Notes", "Text\n\n---",
+    insert_markdown_into_tab("synthetic-doc", "synthetic-tab", "Text\n\n---",
                              position="end", replace=replace)
     requests = service.documents.return_value.batchUpdate.call_args.kwargs[
         "body"]["requests"]
@@ -584,7 +586,7 @@ def test_insert_table_only_at_end_adds_no_separator(mocker, bullet):
     })
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
     insert_table = mocker.patch("gdoc.api.docs._insert_table")
-    insert_markdown_into_tab("synthetic-doc", "Notes", "| A |\n|---|\n| 1 |",
+    insert_markdown_into_tab("synthetic-doc", "synthetic-tab", "| A |\n|---|\n| 1 |",
                              position="end")
     service.documents.return_value.batchUpdate.assert_not_called()
     assert insert_table.call_count == 1
@@ -600,7 +602,7 @@ def _tab_insert(mocker, body, markdown, **kwargs):
     })
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
     insert_table = mocker.patch("gdoc.api.docs._insert_table")
-    insert_markdown_into_tab("synthetic-doc", "Notes", markdown, **kwargs)
+    insert_markdown_into_tab("synthetic-doc", "synthetic-tab", markdown, **kwargs)
     calls = service.documents.return_value.batchUpdate.call_args_list
     requests = calls[0].kwargs["body"]["requests"] if calls else []
     return requests, insert_table
@@ -717,7 +719,7 @@ def test_replay_insert_preserves_heading_and_avoids_unneeded_indents(
         }],
     })
     service = mocker.patch('gdoc.api.docs.get_docs_service').return_value
-    insert_markdown_into_tab('doc', 'Notes', markdown, position=position)
+    insert_markdown_into_tab('doc', 'tab', markdown, position=position)
     batch = service.documents.return_value.batchUpdate.call_args.kwargs['body']
     requests = batch['requests']
     inserted = markdown.removesuffix('\n') + '\n'
@@ -899,7 +901,7 @@ def _tab_insert_requests(mocker, body, markdown, operation):
     })
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
     insert_markdown_into_tab(
-        "synthetic-doc", "Notes", markdown,
+        "synthetic-doc", "synthetic-tab", markdown,
         position="end" if operation == "end" else "start",
         replace=operation == "write",
     )

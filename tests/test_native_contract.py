@@ -74,7 +74,8 @@ def test_targeted_revision_is_from_acknowledgment(mocker):
 def test_general_split_and_reorder_are_native(mocker):
     chain = service(mocker)
     result = insert_markdown_into_tab(
-        "doc", "Notes", "## Moved\n\nSplit\n\nApart", replace=True, document=snapshot()
+        "doc", "tab-one", "## Moved\n\nSplit\n\nApart", replace=True,
+        document=snapshot(),
     )
     batch = chain.batchUpdate.call_args.kwargs["body"]
     assert batch["writeControl"] == {"requiredRevisionId": "before"}
@@ -123,7 +124,7 @@ def test_code_markers_include_final_mark_and_ignore_code_tabs():
 def test_non_default_start_is_explicit_best_effort(mocker, capsys):
     chain = service(mocker)
     insert_markdown_into_tab(
-        "doc", "Notes", "7. Seven", replace=True, document=snapshot()
+        "doc", "tab-one", "7. Seven", replace=True, document=snapshot()
     )
     assert "will start at 1" in capsys.readouterr().err
     assert any(
@@ -208,7 +209,7 @@ def test_image_reuse_and_external_insertion_share_first_atomic_batch(mocker, cap
     chain = service(mocker)
     insert_markdown_into_tab(
         "doc",
-        "Notes",
+        "tab-one",
         "😀 ![old](gdoc-image:original) ![](https://example.org/new)",
         replace=True,
         document=document,
@@ -241,7 +242,7 @@ def test_invalid_image_source_cannot_send_deletion(mocker):
     for source in ("file:///private/image.png", "gdoc-image:missing", "javascript:x"):
         with pytest.raises(GdocError):
             insert_markdown_into_tab(
-                "doc", "Notes", f"![]({source})", replace=True, document=snapshot()
+                "doc", "tab-one", f"![]({source})", replace=True, document=snapshot()
             )
     chain.batchUpdate.assert_not_called()
 
@@ -283,7 +284,7 @@ def test_mixed_children_keep_parent_batch_and_restore_semantic_indent(mocker):
     chain = service(mocker)
     insert_markdown_into_tab(
         "doc",
-        "Notes",
+        "tab-one",
         "1. parent\n  - child\n2. sibling",
         replace=True,
         document=snapshot(),
@@ -303,7 +304,7 @@ def test_mixed_children_keep_parent_batch_and_restore_semantic_indent(mocker):
 
 def test_terminal_empty_list_styles_retained_native_mark(mocker):
     chain = service(mocker)
-    insert_markdown_into_tab("doc", "Notes", "- ", replace=True, document=snapshot())
+    insert_markdown_into_tab("doc", "tab-one", "- ", replace=True, document=snapshot())
     requests = chain.batchUpdate.call_args.kwargs["body"]["requests"]
     assert next(
         r["createParagraphBullets"]["range"]
@@ -320,7 +321,7 @@ def test_terminal_empty_list_styles_retained_native_mark(mocker):
 def test_terminal_empty_item_after_worded_item_is_included(mocker):
     chain = service(mocker)
     insert_markdown_into_tab(
-        "doc", "Notes", "- words\n- ", replace=True, document=snapshot()
+        "doc", "tab-one", "- words\n- ", replace=True, document=snapshot()
     )
     requests = chain.batchUpdate.call_args.kwargs["body"]["requests"]
     assert next(
@@ -438,7 +439,9 @@ def test_existing_image_changed_rewrite_preserves_moves_replaces_or_removes(
         }
     ]
     chain = service(mocker)
-    insert_markdown_into_tab("doc", "Notes", markdown, replace=True, document=document)
+    insert_markdown_into_tab(
+        "doc", "tab-one", markdown, replace=True, document=document,
+    )
     requests = chain.batchUpdate.call_args.kwargs["body"]["requests"]
     assert _apply_text_and_images("Old\ufffc\n", requests) == expected
     assert [
@@ -469,7 +472,7 @@ def test_existing_nondefault_list_supports_general_and_targeted_edit(mocker, cap
         "createParagraphBullets" in r or "deleteParagraphBullets" in r for r in targeted
     )
     insert_markdown_into_tab(
-        "doc", "Notes", "9. Revised", replace=True, document=document
+        "doc", "tab-one", "9. Revised", replace=True, document=document
     )
     assert "starts at 9 (reset to 1)" in capsys.readouterr().err
     general = chain.batchUpdate.call_args.kwargs["body"]["requests"]

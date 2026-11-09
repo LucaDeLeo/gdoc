@@ -120,6 +120,12 @@ class TestResolveRawTab:
         tab = resolve_raw_tab(tabs, "t1")
         assert tab["tabProperties"]["tabId"] == "t1"
 
+    def test_by_id_ignores_titles(self):
+        tabs = [_tab("t1", "Main"), _tab("x9", "t1")]
+        tab = resolve_raw_tab(tabs, "t1", by_id=True)
+        assert tab["tabProperties"]["tabId"] == "t1"
+        assert resolve_raw_tab(tabs, "Main", by_id=True) is None
+
     def test_not_found_returns_none(self):
         assert resolve_raw_tab(_DOC["tabs"], "missing") is None
 
@@ -226,3 +232,81 @@ def test_direct_structure_selection_is_partial(mocker, capsys, selector):
     assert result["scope"] == {"tab_ids": ["main"], "complete": False}
     assert "Unrelated" not in json.dumps(result)
     assert load_state("synthetic").read_revision_ids == {}
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
+class TestStructureUrlTab:
+    def test_url_tab_narrows_output(self, mock_get, _update, capsys):
+        args = _make_args(
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t2",
+        )
+        cmd_structure(args)
+        data = json.loads(capsys.readouterr().out)
+        assert data["tab"]["tabProperties"]["tabId"] == "t2"
+        assert "tabs" not in data
+
+    def test_flag_overrides_url_tab(self, mock_get, _update, capsys):
+        args = _make_args(
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t2",
+            tab="Main",
+        )
+        cmd_structure(args)
+        data = json.loads(capsys.readouterr().out)
+        assert data["tab"]["tabProperties"]["tabId"] == "t1"
+
+    def test_t0_url_tab_ignored(self, mock_get, _update, capsys):
+        # Google auto-appends ?tab=t.0 — ambient noise, whole doc returned.
+        args = _make_args(
+            doc="https://docs.google.com/document/d/doc123/edit?tab=t.0",
+        )
+        cmd_structure(args)
+        assert json.loads(capsys.readouterr().out) == _DOC
+
+
+def _covered():
+    from gdoc.state import load_state
+
+    state = load_state("doc123")
+    return state.read_revision_ids if state else {}
+
+
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
+class TestStructureTabBaseline:
+    """An unmasked structure read covers the tabs it returned, at its
+    revision (in 0.23.0 these stamped Drive-version baselines)."""
+
+    def test_multi_tab_read_covers_that_tab(self, mock_get, mock_update):
+        cmd_structure(_make_args(tab="Notes"))
+        assert _covered() == {"t2": "rev7", "t2c": "rev7"}
+
+    def test_whole_doc_read_covers_every_tab(self, mock_get, mock_update):
+        cmd_structure(_make_args())
+        assert _covered() == {"t1": "rev7", "t2": "rev7", "t2c": "rev7"}
+
+    def test_single_tab_read_is_whole_doc(self, mock_get, mock_update):
+        # One tab IS the whole document (same rule as `cat --tab`).
+        mock_get.return_value = {
+            "documentId": "doc123", "revisionId": "rev7",
+            "tabs": [_tab("t1", "Main")],
+        }
+        cmd_structure(_make_args(tab="Main"))
+        assert _covered() == {"t1": "rev7"}
+
+
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.docs.get_document_structure", return_value=_DOC)
+class TestStructureFieldsBaseline:
+    """A --fields-masked response can't prove a full read, so it records
+    no read coverage (whole document or tab)."""
+
+    def test_fields_read_is_partial(self, mock_get, mock_update):
+        cmd_structure(_make_args(fields="tabs(tabProperties)"))
+        assert _covered() == {}
+
+    def test_fields_with_tab_stamps_nothing(self, mock_get, mock_update):
+        cmd_structure(_make_args(tab="Notes", fields="tabs(tabProperties),revisionId"))
+        assert _covered() == {}
+
+    def test_unmasked_read_still_counts(self, mock_get, mock_update):
+        cmd_structure(_make_args())
+        assert _covered() != {}

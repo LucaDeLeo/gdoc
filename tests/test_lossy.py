@@ -172,7 +172,7 @@ def test_simple_tables_round_trip_in_both_paths():
 
 
 @pytest.mark.parametrize("target_body", [PLAIN, {}, {"content": []}])
-@pytest.mark.parametrize("selector", ["TARGET", "target"])
+@pytest.mark.parametrize("selector", ["target"])
 def test_tab_scope_ignores_rich_sibling_and_headers(mocker, target_body, selector):
     target = tab("target", target_body)
     target["documentTab"]["headers"] = {"h": RICH}

@@ -9,7 +9,7 @@ from gdoc.util import (
     GdocError,
     build_doc_url,
     confirm_destructive,
-    extract_doc_id,
+    extract_doc_ref,
 )
 
 
@@ -33,54 +33,118 @@ class TestBuildDocUrl:
 class TestExtractDocId:
     def test_standard_docs_url(self):
         url = "https://docs.google.com/document/d/1aBcDeFg/edit"
-        assert extract_doc_id(url) == "1aBcDeFg"
+        assert extract_doc_ref(url)[0] == "1aBcDeFg"
 
     def test_standard_drive_url(self):
         url = "https://drive.google.com/file/d/1aBcDeFg/view"
-        assert extract_doc_id(url) == "1aBcDeFg"
+        assert extract_doc_ref(url)[0] == "1aBcDeFg"
 
     def test_query_param_url(self):
         url = "https://drive.google.com/open?id=1aBcDeFg"
-        assert extract_doc_id(url) == "1aBcDeFg"
+        assert extract_doc_ref(url)[0] == "1aBcDeFg"
 
     def test_query_param_with_other_params(self):
         url = "https://drive.google.com/uc?export=download&id=1aBcDeFg"
-        assert extract_doc_id(url) == "1aBcDeFg"
+        assert extract_doc_ref(url)[0] == "1aBcDeFg"
 
     def test_url_with_fragment(self):
         url = "https://docs.google.com/document/d/1aBcDeFg/edit#heading=h.abc"
-        assert extract_doc_id(url) == "1aBcDeFg"
+        assert extract_doc_ref(url)[0] == "1aBcDeFg"
 
     def test_bare_document_id(self):
         bare_id = "1aBcDeFgHiJkLmNoPqRsTuVwXyZ"
-        assert extract_doc_id(bare_id) == bare_id
+        assert extract_doc_ref(bare_id)[0] == bare_id
 
     def test_whitespace_around_input(self):
-        assert extract_doc_id("  1aBcDeFg  ") == "1aBcDeFg"
+        assert extract_doc_ref("  1aBcDeFg  ")[0] == "1aBcDeFg"
 
     def test_empty_string_raises(self):
         with pytest.raises(ValueError, match="empty string"):
-            extract_doc_id("")
+            extract_doc_ref("")[0]
 
     def test_whitespace_only_raises(self):
         with pytest.raises(ValueError, match="empty string"):
-            extract_doc_id("   ")
+            extract_doc_ref("   ")[0]
 
     def test_invalid_url_raises(self):
         with pytest.raises(ValueError, match="Cannot extract"):
-            extract_doc_id("https://example.com/not-a-doc")
+            extract_doc_ref("https://example.com/not-a-doc")[0]
 
     def test_special_characters_raise(self):
         with pytest.raises(ValueError, match="Cannot extract"):
-            extract_doc_id("hello world!")
+            extract_doc_ref("hello world!")[0]
 
     def test_folder_url(self):
         url = "https://drive.google.com/drive/folders/1aBcDeFg"
-        assert extract_doc_id(url) == "1aBcDeFg"
+        assert extract_doc_ref(url)[0] == "1aBcDeFg"
 
     def test_folder_url_with_params(self):
         url = "https://drive.google.com/drive/folders/abc123?usp=sharing"
-        assert extract_doc_id(url) == "abc123"
+        assert extract_doc_ref(url)[0] == "abc123"
+
+
+class TestExtractDocRef:
+    def test_no_tab_param(self):
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit"
+        assert extract_doc_ref(url) == ("1aBcDeFg", None)
+
+    def test_tab_t0(self):
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?tab=t.0"
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.0")
+
+    def test_tab_non_t0(self):
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?tab=t.abc123"
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.abc123")
+
+    def test_tab_with_fragment(self):
+        url = (
+            "https://docs.google.com/document/d/1aBcDeFg/edit"
+            "?tab=t.xyz#heading=h.abc"
+        )
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.xyz")
+
+    def test_tab_as_second_query_param(self):
+        url = (
+            "https://docs.google.com/document/d/1aBcDeFg/edit"
+            "?usp=sharing&tab=t.xyz"
+        )
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.xyz")
+
+    def test_tab_suffixed_param_name_does_not_match(self):
+        # The [?&] anchor means a param whose *name* ends in "tab"
+        # (e.g. subtab=) must NOT be read as the tab id.
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?subtab=t.9"
+        assert extract_doc_ref(url) == ("1aBcDeFg", None)
+
+    def test_html_escaped_separator_still_finds_tab(self):
+        # A URL copied out of rendered HTML keeps "&amp;" as the separator.
+        # Missing the tab there is not a no-op: the caller silently falls
+        # back to the whole-doc path and edits outside the intended tab.
+        url = (
+            "https://docs.google.com/document/d/1aBcDeFg/edit"
+            "?usp=sharing&amp;tab=t.xyz"
+        )
+        assert extract_doc_ref(url) == ("1aBcDeFg", "t.xyz")
+
+    def test_escaped_separator_does_not_relax_the_name_anchor(self):
+        # The &amp; alternative must not become a wildcard: a param whose
+        # name merely ends in "tab" is still rejected.
+        url = "https://docs.google.com/document/d/1aBcDeFg/edit?a=1&amp;subtab=t.9"
+        assert extract_doc_ref(url) == ("1aBcDeFg", None)
+
+    def test_bare_id_has_no_tab(self):
+        assert extract_doc_ref("1aBcDeFgHiJkLmNoPqRsTuVwXyZ") == (
+            "1aBcDeFgHiJkLmNoPqRsTuVwXyZ",
+            None,
+        )
+
+    def test_folder_url_has_no_tab(self):
+        url = "https://drive.google.com/drive/folders/abc123?usp=sharing"
+        assert extract_doc_ref(url) == ("abc123", None)
+
+    def test_invalid_url_raises(self):
+        with pytest.raises(ValueError, match="Cannot extract"):
+            extract_doc_ref("https://example.com/not-a-doc")
 
 
 class TestErrorClasses:

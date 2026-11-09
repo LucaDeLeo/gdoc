@@ -71,3 +71,31 @@ def _block_network(monkeypatch, tmp_path):
 
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(socket, "create_connection", denied)
+def doc_with_tabs(*pairs):
+    """A get_document_with_tabs() response for the given (id, title) pairs.
+
+    Shared by the insert/write/baseline test modules: the payload encodes
+    the API contract (tabProperties.tabId, documentTab.body), so its shape
+    lives in one place.
+    """
+    return {
+        "revisionId": "rev1",
+        "tabs": [
+            {
+                "tabProperties": {"tabId": tid, "title": title, "index": i},
+                "documentTab": {"body": {"content": []}},
+            }
+            for i, (tid, title) in enumerate(pairs)
+        ],
+    }
+
+
+def tab_read_state(*tab_ids, revision="rev1"):
+    """State recording a complete read of each tab at native *revision*.
+
+    Read coverage is per tab at an exact Docs revision (see
+    gdoc.state.record_content_read); a whole-document read covers every tab.
+    """
+    from gdoc.state import DocState
+
+    return DocState(read_revision_ids={tid: revision for tid in tab_ids})

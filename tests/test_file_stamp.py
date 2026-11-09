@@ -23,6 +23,7 @@ from gdoc.frontmatter import parse_frontmatter
 from gdoc.notify import ChangeInfo
 from gdoc.state import DocState
 from gdoc.util import GdocError
+from tests.conftest import doc_with_tabs as _doc_with_tabs
 
 DOC = "abc123"
 
@@ -135,6 +136,27 @@ class TestStaleFileRefused:
             cmd_write(_write_args(f))
         assert exc.value.exit_code == 3
         mock_upload.assert_not_called()
+
+    @patch("gdoc.api.docs.insert_markdown_into_tab")
+    @patch("gdoc.api.docs.get_document_with_tabs",
+           return_value=_doc_with_tabs(("t.0", "Main"), ("t.n", "Notes")))
+    @patch("gdoc.api.drive.get_file_version", return_value={"version": 2})
+    @patch("gdoc.notify.pre_flight", return_value=_machine_read(2))
+    def test_write_tab(self, _pf, _ver, _doc, mock_insert, tmp_path):
+        """The stamp beats the per-tab read coverage: `cat --tab Notes` at
+        the current revision must not bless a file pulled at v1."""
+        from gdoc.state import record_content_read
+
+        record_content_read(DOC, ["t.0", "t.n"], "rev1")
+        f = tmp_path / "draft.md"
+        f.write_text(_stamped(1))
+        before = f.read_bytes()
+        with pytest.raises(GdocError) as exc:
+            cmd_write(_write_args(f, tab="Notes"))
+        assert exc.value.exit_code == 3
+        assert "Nothing was sent" in str(exc.value)
+        mock_insert.assert_not_called()
+        assert f.read_bytes() == before
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.api.drive.update_doc_content", return_value=3)

@@ -116,7 +116,7 @@ def batches(api):
 
 
 def write():
-    return insert_markdown_into_tab("synthetic", "Notes", MARKDOWN, replace=True)
+    return insert_markdown_into_tab("synthetic", "t1", MARKDOWN, replace=True)
 
 
 def test_all_table_stages_use_their_own_revision(api):
@@ -149,7 +149,7 @@ def test_table_only_empty_tab_pins_the_first_table_batch(api, mocker):
     )
     api.get.return_value.execute.return_value = snapshot("r3", "", table=True)
     insert_markdown_into_tab(
-        "synthetic", "Notes", "| A |\n|---|\n| B |", position="end"
+        "synthetic", "t1", "| A |\n|---|\n| B |", position="end"
     )
     assert "insertTable" in batches(api)[1]["requests"][0]
     assert [b["writeControl"]["requiredRevisionId"] for b in batches(api)] == [
@@ -272,7 +272,7 @@ def test_table_only_conflict_is_not_guessed(api):
     api.get.return_value.execute.return_value = snapshot("editor", "Other editor\n")
     with pytest.raises(GdocError, match="conflict") as caught:
         insert_markdown_into_tab(
-            "synthetic", "Notes", "| A |\n|---|\n| B |", replace=True
+            "synthetic", "t1", "| A |\n|---|\n| B |", replace=True
         )
     assert caught.value.exit_code == 1
     assert len(batches(api)) == 2
@@ -601,7 +601,7 @@ def test_two_tables_carry_revision_from_previous_cell_fill(api):
         # The first table also leaves its placeholder before "Second".
         snapshot("r5", "First\n", table=True, trailing=2),
     ]
-    insert_markdown_into_tab("synthetic", "Notes", markdown, replace=True)
+    insert_markdown_into_tab("synthetic", "t1", markdown, replace=True)
     assert [b["writeControl"]["requiredRevisionId"] for b in batches(api)] == [
         "r1",
         "r2",
@@ -742,7 +742,7 @@ def test_replacement_clears_bullet_inherited_from_final_paragraph(
     mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=doc)
     # The retained mark is an empty list item, requiring explicit loss consent.
     insert_markdown_into_tab(
-        "synthetic", "Notes", markdown, replace=True, allow_lossy=True
+        "synthetic", "t1", markdown, replace=True, allow_lossy=True
     )
     requests = batches(api)[0]["requests"]
     kinds = [next(iter(r)) for r in requests]
@@ -759,7 +759,7 @@ def test_replacement_clears_bullet_inherited_from_final_paragraph(
 
 
 def test_replacement_without_inherited_bullet_resets_retained_mark(api):
-    insert_markdown_into_tab("synthetic", "Notes", "Plain prose", replace=True)
+    insert_markdown_into_tab("synthetic", "t1", "Plain prose", replace=True)
     requests = batches(api)[0]["requests"]
     assert [r["deleteParagraphBullets"]["range"] for r in requests
             if "deleteParagraphBullets" in r] == [
@@ -771,7 +771,7 @@ def test_replacement_ignores_bullet_on_deleted_first_paragraph(api, mocker):
     doc = snapshot()
     body(doc)["content"][0]["paragraph"]["bullet"] = {"listId": "kix.list"}
     mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=doc)
-    insert_markdown_into_tab("synthetic", "Notes", "Plain prose", replace=True)
+    insert_markdown_into_tab("synthetic", "t1", "Plain prose", replace=True)
     requests = batches(api)[0]["requests"]
     assert [r["deleteParagraphBullets"]["range"] for r in requests
             if "deleteParagraphBullets" in r] == [
@@ -838,7 +838,7 @@ def test_empty_replacement_normalizes_retained_heading(api, mocker):
         "namedStyleType": "HEADING_1", "indentStart": {"magnitude": 36, "unit": "PT"}
     }
     mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=doc)
-    insert_markdown_into_tab("synthetic", "Notes", "", replace=True)
+    insert_markdown_into_tab("synthetic", "t1", "", replace=True)
     requests = batches(api)[0]["requests"]
     styles = [r["updateParagraphStyle"] for r in requests
               if "updateParagraphStyle" in r]
@@ -860,7 +860,7 @@ def test_prose_replacement_resets_then_styles_retained_paragraph(api, mocker):
         "namedStyleType": "HEADING_1"
     }
     mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=doc)
-    insert_markdown_into_tab("synthetic", "Notes", "Plain prose", replace=True)
+    insert_markdown_into_tab("synthetic", "t1", "Plain prose", replace=True)
     requests = batches(api)[0]["requests"]
     styles = [r["updateParagraphStyle"] for r in requests
               if "updateParagraphStyle" in r]

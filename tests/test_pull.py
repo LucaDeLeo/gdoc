@@ -273,3 +273,60 @@ def _native_snapshot(mocker):
             "documentTab": {"body": {"content": []}},
         }],
     })
+
+
+_TAB_URL = "https://docs.google.com/document/d/abc123/edit?tab="
+
+
+@patch("gdoc.state.update_state_after_command")
+@patch("gdoc.api.drive.get_file_info", return_value={"name": "My Doc", "version": 42})
+@patch("gdoc.notify.pre_flight", return_value=ChangeInfo(current_version=42))
+class TestPullUrlTab:
+    """pull reads one tab, so a URL's ?tab= selects it like --tab. (In
+    0.23.0 pull exported the whole document and noted the discard.)"""
+
+    @pytest.fixture(autouse=True)
+    def _two_tabs(self, mocker):
+        mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value={
+            "revisionId": "r1", "tabs": [
+                {"tabProperties": {"tabId": "main", "title": "Main"},
+                 "documentTab": {"body": {"content": []}}},
+                {"tabProperties": {"tabId": "t.second", "title": "Second"},
+                 "documentTab": {"body": {"content": []}}},
+            ],
+        })
+
+    def _pulled_tab(self, path):
+        from gdoc.frontmatter import parse_frontmatter
+
+        return parse_frontmatter(path.read_text())[0]["tab"]
+
+    def test_non_t0_url_tab_selects_that_tab(
+        self, _pf, _info, _update, tmp_path, capsys,
+    ):
+        f = tmp_path / "out.md"
+        args = _make_args(file=str(f), doc=_TAB_URL + "t.second")
+        assert cmd_pull(args) == 0
+        assert self._pulled_tab(f) == "t.second"
+        assert "ignoring tab" not in capsys.readouterr().err
+
+    def test_t0_url_tab_reads_the_first_tab(
+        self, _pf, _info, _update, tmp_path, capsys,
+    ):
+        f = tmp_path / "out.md"
+        assert cmd_pull(_make_args(file=str(f), doc=_TAB_URL + "t.0")) == 0
+        assert self._pulled_tab(f) == "main"
+        assert "NOTE: ignoring" not in capsys.readouterr().err
+
+    def test_flag_beats_url_tab(self, _pf, _info, _update, tmp_path):
+        f = tmp_path / "out.md"
+        args = _make_args(file=str(f), doc=_TAB_URL + "t.second", tab="Main")
+        assert cmd_pull(args) == 0
+        assert self._pulled_tab(f) == "main"
+
+    def test_url_tab_with_revision_names_the_url(self, _pf, _info, _update, tmp_path):
+        args = _make_args(file=str(tmp_path / "o.md"), doc=_TAB_URL + "t.second",
+                          revision="latest")
+        with pytest.raises(GdocError, match="URL targets tab") as exc:
+            cmd_pull(args)
+        assert exc.value.exit_code == 3

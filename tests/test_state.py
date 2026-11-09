@@ -18,6 +18,8 @@ class TestDocState:
         assert s.last_comment_check == ""
         assert s.known_comment_ids == []
         assert s.known_resolved_ids == []
+        assert s.read_revision_ids == {}
+        assert s.limited_read_revision_ids == {}
 
     def test_custom_values(self):
         s = DocState(
@@ -264,6 +266,75 @@ class TestUpdateStateAfterCommand:
             state = load_state("doc1")
             assert state.last_version == 11
             assert state.last_read_version == 5
+
+    # Per-tab baselines are read coverage at a native Docs revision
+    # (record_content_read / record_content_write); they never touch the
+    # Drive-version last_read_version.
+
+    def test_tab_read_stamps_tab_coverage_not_global(self, tmp_path):
+        """cat --tab X covers that tab, never last_read_version."""
+        from gdoc.state import record_content_read
+
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            info = self._make_change_info(current_version=100)
+            update_state_after_command(
+                "doc1", info, command="cat-content", quiet=False,
+            )
+            record_content_read("doc1", ["t.x"], "r100")
+            state = load_state("doc1")
+            assert state.read_revision_ids == {"t.x": "r100"}
+            assert state.last_read_version is None  # NOT a whole-doc read
+            assert state.last_version == 100  # we did observe the version
+
+    def test_tab_read_preserves_prior_global_baseline(self, tmp_path):
+        """A tab read must not disturb an earlier Drive-version baseline."""
+        from gdoc.state import record_content_read
+
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_read_version=50))
+            record_content_read("doc1", ["t.x"], "r100")
+            state = load_state("doc1")
+            assert state.last_read_version == 50  # untouched
+            assert state.read_revision_ids == {"t.x": "r100"}
+
+    def test_tab_write_stamps_tab_coverage(self, tmp_path):
+        """write --tab X covers that tab at the acknowledged revision, so a
+        second write to the same tab doesn't false-conflict."""
+        from gdoc.state import record_content_write
+
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_read_version=5))
+            record_content_write(
+                "doc1", input_revision_id="r10", acknowledged_revision_id="r11",
+                replaced_tab_ids=["t.x"],
+            )
+            state = load_state("doc1")
+            assert state.read_revision_ids == {"t.x": "r11"}
+            assert state.last_read_version == 5  # global still untouched
+
+    def test_read_without_revision_stamps_nothing(self, tmp_path):
+        """A read with no revision in hand covers nothing."""
+        from gdoc.state import record_content_read
+
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            record_content_read("doc1", ["t.x"], "")
+            state = load_state("doc1")
+            assert state is None or state.read_revision_ids == {}
+
+    def test_old_state_file_loads_with_empty_coverage(self, tmp_path):
+        """State files from before per-tab coverage (including 0.23.0's
+        Drive-version `tab_read_versions`) load cleanly with none."""
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            path = tmp_path / "doc1.json"
+            path.write_text(json.dumps({
+                "last_seen": "2025-01-20T00:00:00Z",
+                "last_read_version": 7,
+                "tab_read_versions": {"t.x": 7},
+                "global_read_covers_doc": True,
+            }))
+            state = load_state("doc1")
+            assert state.read_revision_ids == {}
+            assert state.last_read_version == 7
 
     def test_edit_does_not_advance_read_baseline(self, tmp_path):
         """Partial mutations (find/replace) don't establish full-content

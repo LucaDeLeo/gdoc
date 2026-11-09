@@ -1136,11 +1136,20 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
     return "".join(parts)
 
 
-def _match_tab(tabs: list[dict], tab_name: str) -> dict | None:
-    """Prefer immutable IDs, then unique exact or case-insensitive titles."""
+def _match_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict | None:
+    """Prefer immutable IDs, then unique exact or case-insensitive titles.
+
+    ``by_id`` matches the ID only, for values known to be IDs (a URL's
+    ?tab=, an ID resolved earlier): such a value never falls back to a
+    tab whose title happens to equal it.
+    """
     for tab in tabs:
         if str(tab["id"]) == tab_name:
             return tab
+    if by_id:
+        return None
     matches = [tab for tab in tabs if tab["title"] == tab_name]
     if not matches:
         matches = [tab for tab in tabs if tab["title"].lower() == tab_name.lower()]
@@ -1153,12 +1162,15 @@ def _match_tab(tabs: list[dict], tab_name: str) -> dict | None:
     return matches[0] if matches else None
 
 
-def resolve_tab(tabs: list[dict], tab_name: str) -> dict:
+def resolve_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict:
     """Resolve a flattened tab by ID, exact title, or unique folded title.
 
-    Raise GdocError with exit code 3 for missing or ambiguous titles.
+    ``by_id`` matches the ID only (see _match_tab). Raise GdocError with
+    exit code 3 for missing or ambiguous titles.
     """
-    match = _match_tab(tabs, tab_name)
+    match = _match_tab(tabs, tab_name, by_id=by_id)
     if match is None:
         raise GdocError(f"tab not found: {tab_name}", exit_code=3)
     return match
@@ -2612,10 +2624,13 @@ def get_document_structure(
         _translate_http_error(e, doc_id)
 
 
-def resolve_raw_tab(tabs: list[dict], tab_name: str) -> dict | None:
+def resolve_raw_tab(
+    tabs: list[dict], tab_name: str, *, by_id: bool = False,
+) -> dict | None:
     """Resolve a raw tab across the tree with the same identity rules as resolve_tab.
 
-    Return None when missing; refuse ambiguous titles with exit code 3.
+    ``by_id`` matches the ID only, as there. Return None when missing;
+    refuse ambiguous titles with exit code 3.
     """
     def walk(ts: list[dict]):
         for tab in ts:
@@ -2624,7 +2639,7 @@ def resolve_raw_tab(tabs: list[dict], tab_name: str) -> dict | None:
                    "raw": tab}
             yield from walk(tab.get("childTabs", []))
 
-    match = _match_tab(list(walk(tabs)), tab_name)
+    match = _match_tab(list(walk(tabs)), tab_name, by_id=by_id)
     return match["raw"] if match is not None else None
 
 
@@ -3033,7 +3048,7 @@ def _owned_range_requests(tab, tab_id, parts, *, keep_after=True,
 
 def insert_markdown_into_tab(
     doc_id: str,
-    tab_name: str,
+    tab_id: str,
     markdown: str,
     position: str = "start",
     replace: bool = False,
@@ -3047,7 +3062,8 @@ def insert_markdown_into_tab(
 
     Args:
         doc_id: Document ID.
-        tab_name: Tab title (case-insensitive) or tab ID.
+        tab_id: ID of the tab to write (callers resolve titles first, so
+            the tab written is the tab they checked).
         markdown: Markdown source to insert (frontmatter should be
             stripped by the caller).
         position: "start" or "end". Ignored when replace=True.
@@ -3070,7 +3086,7 @@ def insert_markdown_into_tab(
     revision_id = doc.get("revisionId", "")
     input_revision_id = revision_id
     tabs = flatten_tabs(doc.get("tabs", []))
-    tab_match = resolve_tab(tabs, tab_name)
+    tab_match = resolve_tab(tabs, tab_id, by_id=True)
     tab_id = tab_match["id"]
     body = tab_match["body"]
 

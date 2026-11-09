@@ -4,7 +4,7 @@ All notable changes to `gdoc` are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.23.0] — 2026-09-29
+## [Unreleased]
 
 ### Added
 
@@ -13,11 +13,6 @@ All notable changes to `gdoc` are documented here. This project follows
 - `write` and `push` refuse identified rich-content loss before mutation.
   `--allow-lossy` permits that loss independently of revision conflicts and
   explicit sibling-tab collapse. Supported Markdown needs no loss override.
-- **`share DOC EMAIL --no-notify` skips Google's notification email.**
-  Email shares still notify the recipient by default; the flag opts out
-  for one share. The MCP share tool takes the matching option. Combining
-  `--no-notify` with `--domain` or `--anyone` (link shares, which never
-  send email) is rejected with exit 3 before any API call.
 
 ### Changed
 
@@ -112,6 +107,24 @@ All notable changes to `gdoc` are documented here. This project follows
   leave unsynced local bodies in place. Local replacements retain the previous
   file as a printed recovery copy, so an editor write racing the replacement is
   never lost. Files without `gdoc-revision` need a fresh pull or `--force`.
+
+- **Per-tab write baselines are per-tab read coverage at a Docs revision.**
+  0.23.0 tracked a Drive-version baseline per tab (`tab_read_versions` and
+  `global_read_covers_doc` in the state file). Writes now require a complete
+  read of the selected tab at the exact native revision being written, which
+  keeps 0.23.0's guarantees: reading tab A does not authorize writing tab B,
+  writing one tab twice does not conflict with your own write, an edit to any
+  tab still trips the check, and `info` or `structure --fields` never
+  authorize a write. A 0.23.0 state file loads with those keys ignored, so the
+  first write after upgrading needs a fresh read of its tab.
+- **A `?tab=` URL selects the tab for `pull`, Markdown `export`, file `diff`
+  and `cat --comments`**, which now read one tab (in 0.23.0 they read the whole
+  document and noted the discarded tab). `cat`/`pull --revision` with a URL tab
+  is refused, naming the URL. `push` writes the tab its file's `tab` key names
+  and notes a `?tab=` in the file's `gdoc` key. Non-Markdown `export`, revision
+  `diff`, `comments`, `comment` and `images` still note and ignore it.
+- **`--tab` matches a tab ID before a title**, and a title shared by two tabs
+  is refused as ambiguous. A URL's tab is still matched by ID only.
 
 ### Fixed
 
@@ -220,8 +233,145 @@ All notable changes to `gdoc` are documented here. This project follows
   lookup. Markdown `export` and `pull` name the tab they read. Sync hooks
   report skips to the agent, identical local replacements leave the file in
   place, and comment anchors no longer match through escapes in code.
+- **Whole-doc `write`, `push` and the sync hook keep the document's style.**
+  They now replace the first tab with native Docs requests instead of
+  re-importing Markdown through Drive, whose import reset `documentStyle` (a
+  pageless doc came back paged, and margins, page size, orientation,
+  background and page numbering went to their defaults) and dropped headers
+  and footers. The unreleased workaround that read the style before that
+  import and restored it afterwards (#81) is removed with the import: no
+  existing document is re-imported any more. `new --file` still imports
+  Markdown into the new document, which has no earlier style to keep.
+- **Parallel runs no longer fail as "Not authenticated" when the token
+  expires.** Every token save went through one fixed `token.json.tmp`
+  opened exclusively, so when several gdoc processes refreshed the same
+  expired token at once, all but one failed to save it and reported the
+  account as not authenticated. Each save now uses its own temp file.
 
 
+## [0.23.0] — 2026-10-16
+
+### Added
+- **`share DOC EMAIL --no-notify` skips Google's notification email.**
+  Email shares still notify the recipient by default; the flag opts out
+  for one share. The MCP share tool takes the matching option. Combining
+  `--no-notify` with `--domain` or `--anyone` (link shares, which never
+  send email) is rejected with exit 3 before any API call.
+- **Document URLs honor their `?tab=` deep link.** Google's editor appends
+  `?tab=<id>` when you open a tab, so a pasted tab URL now acts like
+  `--tab <id>` for `cat`, `edit` (incl. `--cell`), `write`, `insert`, `toc`,
+  `structure`, `insert-image`, `suggest` and `nest`/`unnest` — previously
+  the tab was silently dropped and the command operated on the first tab
+  (or whole doc). The URL's value is matched as a tab ID only, so a tab
+  titled like another tab's ID can't capture it (an explicit `--tab` still
+  matches titles first). An explicit `--tab`/`--all-tabs` overrides the
+  URL. `comment`, like the other whole-document commands, notes on stderr
+  that it ignores a URL tab.
+
+
+### Fixed
+- **Per-tab write-conflict baselines.** The write guard now tracks a read
+  baseline *per tab*, not just per document — a follow-up to the `?tab=` URL
+  support above. Two defects on multi-tab docs are fixed:
+  - **Cross-tab false negative.** `write --tab B` after only `cat --tab A`
+    used to be satisfied by A's read and would replace tab B unseen. It now
+    errors `no read baseline for tab 'B'` until you read B (or the whole
+    doc). `info` still advances the whole-doc guard's baseline (status
+    quo) but never authorizes tab-scoped writes — it shows no content,
+    and an `info` that moves the baseline also voids any earlier read's
+    content provenance for the tab guard.
+  - **Same-tab false positive.** `write --tab X` twice in a row used to
+    conflict on the second write (the first write bumped the doc version but
+    the tab-scoped write left the baseline behind). A tab write now advances
+    that tab's own baseline, so repeated edits to one tab just work.
+
+  A pulled file's `gdoc-version` stamp (0.21.1) still beats these read
+  baselines: `write --tab X FILE` with a stamped file compares the stamp
+  with the doc's current version, so a later `cat --tab X` can't bless a
+  stale file. Per-tab baselines apply to unstamped files.
+- **HTML-escaped `&amp;tab=` in a pasted URL is honored.** A doc URL copied
+  out of rendered HTML keeps the escaped separator; the tab id used to go
+  unseen, silently downgrading `edit`/`write` to the whole-doc path.
+- **`insert --tab X` accepts a `cat --tab X` baseline.** The tab-populate
+  flow the collapse-guard error recommends no longer demands a whole-doc
+  read: `insert` runs the same per-tab conflict check as `write --tab`.
+- **`structure --fields` no longer counts as a read.** A masked response
+  may omit tab ids, sibling tabs, or the content itself, so it can't prove
+  the document (or a tab) was actually seen; it now records the
+  interaction without advancing any read baseline.
+- **Metadata-only version bumps heal per-tab baselines.** `mv`/`rename`
+  used to leave `tab_read_versions` behind their own version bump, so the
+  next `write --tab` false-conflicted. Entries current at pre-flight are
+  now carried forward under the same attributability guard as the global
+  baseline.
+- **Replacing a document's only tab counts as a whole-doc write** (the
+  single-tab rule `cat --tab` already follows), so a following
+  whole-document `write`/`push` doesn't conflict with the CLI's own edit.
+- **Blank `--tab` values are rejected** (exit 3) instead of silently
+  reading as "no tab" and mutating the default target. A non-blank value
+  is used as given, so titles with leading or trailing spaces still match.
+- **`edit`, `nest`/`unnest`, `insert-image` and `replace-image` stop
+  warning "doc changed since last read" after a read of the tab they
+  change**: the warning now counts that tab's read baseline, not only a
+  whole-doc read.
+- **Write guards refuse when Drive reports no version** instead of letting
+  the write through unchecked (stamped files and per-tab baselines).
+
+  A plain `cat`/`pull` still covers every tab (its Drive export is the whole
+  document), so the common read-then-write flow is unchanged. On a single-tab
+  document a `cat --tab X` reads the whole document too, so a following
+  whole-document `write`/`push` is not blocked. An edit to a *different* tab
+  still trips the check — Google's version number is per-document — which is
+  conservative by design; `--force` overrides. `structure --tab X` follows
+  the same rule as `cat --tab X`: on a multi-tab doc it stamps only that
+  tab's baseline, not the whole-doc one.
+
+
+### Changed
+- State files gain a `tab_read_versions` map and a
+  `global_read_covers_doc` provenance marker. Older state files load
+  unchanged, but their **whole-doc read baseline is not trusted for
+  tab-scoped writes** — a pre-0.23 `cat --tab A` stored its version in the
+  global baseline, which would wrongly authorize `write --tab B`. The
+  first `write --tab` after upgrading may therefore ask for a fresh
+  `gdoc cat`. Downgrading is safe but lossy in the same direction: a
+  pre-0.23 binary rewriting state drops both new fields, so re-upgrading
+  fail-closes (re-read before the next tab write) rather than risking an
+  overwrite.
+- **Multi-tab `cat --tab X` / `structure --tab X` no longer establish a
+  whole-doc baseline.** A scripted `cat --tab X` followed by
+  `write`/`push --force-collapse-tabs` now errors `no read baseline`
+  where it previously succeeded — reading one tab shouldn't authorize
+  flattening the others. Read the whole doc (plain `cat`) first.
+- **`?tab=t.0` is treated as no tab.** The editor auto-appends `t.0` for the
+  first tab, so it's ambient UI noise; honoring it would push the common
+  pasted-URL case onto the lower-fidelity Docs-API renderer. It now stays on
+  the high-fidelity Drive export path. Escape hatch: pass `--tab t.0`
+  explicitly to force the literal first-tab read.
+- **`gdoc insert` no longer requires `--tab`** when the document URL already
+  carries a `?tab=`.
+
+
+### Notes
+- Combining a URL tab with a whole-document flag errors (exit 3) and names the
+  URL as the source: `cat --comments`/`--revision`,
+  `write --force-collapse-tabs`.
+- `pull`/`push`/`export`/`diff`/`comments`/`images` ignore a URL tab (they
+  cover the whole document) but print a one-line stderr `NOTE:` when
+  discarding a non-`t.0` tab (suppressed under `--quiet`).
+- **`t.0` caveat:** tab ids are assigned at creation and survive
+  reordering, so after tabs are dragged around, id `t.0` may no longer be
+  the first-*positioned* tab — yet the editor still emits `?tab=t.0` when
+  viewing it, and the ambient-noise rule still drops it. If you mean that
+  tab specifically, pass `--tab t.0` explicitly (the multi-tab collapse
+  error now points this out).
+- Spreadsheet `#gid=` deep links are still unparsed — select a worksheet with
+  `--tab`/`--range`.
+
+
+### Docs
+- Corrected the README Tabs section: the Drive export returns **all** tabs
+  (each under a `# **Tab title**` heading), not just the first.
 ## [0.22.0] — 2026-09-28
 
 ### Added

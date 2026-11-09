@@ -38,7 +38,7 @@ def _rewrite(mocker, markdown, paragraph=None):
     original = deepcopy(doc)
     mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=doc)
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
-    insert_markdown_into_tab("doc", "Draft", markdown, replace=True)
+    insert_markdown_into_tab("doc", "draft", markdown, replace=True)
     assert doc == original
     batch = service.documents.return_value.batchUpdate.call_args.kwargs["body"]
     assert batch["writeControl"] == {"requiredRevisionId": "rev"}
@@ -106,7 +106,7 @@ def _append(mocker, markdown, existing="old\n"):
     doc = {"revisionId": "rev", "tabs": [_tab({"content": content})]}
     mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=doc)
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
-    insert_markdown_into_tab("doc", "Draft", markdown, position="end")
+    insert_markdown_into_tab("doc", "draft", markdown, position="end")
     batch = service.documents.return_value.batchUpdate.call_args.kwargs["body"]
     return batch["requests"]
 

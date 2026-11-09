@@ -54,7 +54,7 @@ def _write(service, markdown):
     with mock.patch("gdoc.api.docs.get_docs_service", return_value=service), \
             mock.patch.object(comment_transport, "execute_mutation_request",
                               lambda request, **_: request.execute()):
-        insert_markdown_into_tab("synthetic", "Main", markdown, replace=True)
+        insert_markdown_into_tab("synthetic", "t.0", markdown, replace=True)
 
 
 WORDS = ("Owner", "Ana", "ship", "today", "x", "status", "draft", "Q3")

@@ -231,6 +231,122 @@ class TestCatTabMutualExclusivity:
             cmd_cat(args)
 
 
+_URL = "https://docs.google.com/document/d/abc123/edit"
+
+
+class TestCatUrlTab:
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text", return_value="tab body\n")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_url_tab_selects_that_tab(
+        self, _svc, mock_tabs, mock_text, _pf, _update, capsys,
+    ):
+        """A non-t.0 ?tab= in the URL is honored like --tab."""
+        mock_tabs.return_value = _document([
+            _tab("t.first", "First"), _tab("t.second", "Second"),
+        ])
+        rc = cmd_cat(_make_args(doc=f"{_URL}?tab=t.second"))
+        assert rc == 0
+        assert capsys.readouterr().out == "tab body\n"
+        assert mock_text.call_args[0][0]["id"] == "t.second"
+        mock_tabs.assert_called_once_with("abc123")
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text", return_value="first\n")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_url_tab_t0_reads_the_default_first_tab(
+        self, _svc, mock_tabs, mock_text, _pf, _update,
+    ):
+        """?tab=t.0 is ambient noise: the default (first-positioned) tab is
+        read, even after tabs were reordered and t.0 moved."""
+        mock_tabs.return_value = _document([
+            _tab("t.a", "A"), _tab("t.0", "Zero"),
+        ])
+        assert cmd_cat(_make_args(doc=f"{_URL}?tab=t.0")) == 0
+        assert mock_text.call_args[0][0]["id"] == "t.a"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text", return_value="flag body\n")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_flag_overrides_url_tab(
+        self, _svc, mock_tabs, mock_text, _pf, _update, capsys,
+    ):
+        """An explicit --tab wins over a differing URL tab."""
+        mock_tabs.return_value = _document([
+            _tab("t.second", "Second"), _tab("t.flag", "Flag"),
+        ])
+        args = _make_args(doc=f"{_URL}?tab=t.second", tab="Flag")
+        assert cmd_cat(args) == 0
+        assert mock_text.call_args[0][0]["id"] == "t.flag"
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_all_tabs_overrides_url_tab(
+        self, _svc, mock_tabs, mock_text, _pf, _update, capsys,
+    ):
+        """--all-tabs wins over a URL tab (no conflict error)."""
+        mock_tabs.return_value = _document([
+            _tab("t1", "First"), _tab("t.second", "Second"),
+        ])
+        mock_text.side_effect = ["a\n", "b\n"]
+        args = _make_args(doc=f"{_URL}?tab=t.second", all_tabs=True)
+        assert cmd_cat(args) == 0
+        out = capsys.readouterr().out
+        assert "=== Tab: First ===" in out
+        assert "=== Tab: Second ===" in out
+
+    @patch("gdoc.api.comments.list_comments", return_value=[])
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text", return_value="second\n")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_url_tab_with_comments_annotates_that_tab(
+        self, _svc, mock_tabs, mock_text, _pf, _update, _comments, capsys,
+    ):
+        """`--comments --tab` annotates one tab, so a URL's tab does the
+        same. (In 0.23.0 `--comments` read only the whole document and
+        refused a URL tab.)"""
+        mock_tabs.return_value = _document([
+            _tab("t.first", "First"), _tab("t.second", "Second"),
+        ])
+        args = _make_args(doc=f"{_URL}?tab=t.second", comments=True)
+        assert cmd_cat(args) == 0
+        assert mock_text.call_args_list[0][0][0]["id"] == "t.second"
+        assert "read tab 'Second' (t.second)" in capsys.readouterr().err
+
+    def test_url_tab_and_revision_conflict_mentions_url(self):
+        args = _make_args(doc=f"{_URL}?tab=t.second", revision="latest", quiet=True)
+        with pytest.raises(GdocError, match="URL targets tab") as exc:
+            cmd_cat(args)
+        assert exc.value.exit_code == 3
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight", return_value=None)
+    @patch("gdoc.api.docs.get_tab_text", return_value="zero\n")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_flag_t0_forces_tab_t0(
+        self, _svc, mock_tabs, mock_text, _pf, _update,
+    ):
+        """Explicit --tab t.0 is the escape hatch: read tab t.0 itself
+        rather than treating t.0 as ambient noise."""
+        mock_tabs.return_value = _document([
+            _tab("t.a", "A"), _tab("t.0", "Zero"),
+        ])
+        assert cmd_cat(_make_args(tab="t.0")) == 0
+        assert mock_text.call_args[0][0]["id"] == "t.0"
+
+
 class TestCatTabAwareness:
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight")
@@ -242,14 +358,34 @@ class TestCatTabAwareness:
     ):
         change_info = ChangeInfo(current_version=7)
         mock_pf.return_value = change_info
-        mock_tabs.return_value = _document([_tab("t1", "Tab 1")])
+        # Multi-tab doc: a --tab read covers only that tab.
+        mock_tabs.return_value = _document([_tab("t1", "Tab 1"), _tab("t2", "Tab 2")])
         args = _make_args(tab="Tab 1")
         rc = cmd_cat(args)
         assert rc == 0
         mock_pf.assert_called_once_with("abc123", quiet=False)
+        # Content reads record per-tab coverage, never the Drive baseline.
         mock_update.assert_called_once_with(
             "abc123", change_info, command="cat-content", quiet=False,
         )
+        from gdoc.state import load_state
+        assert load_state("abc123").read_revision_ids == {"t1": "r1"}
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.notify.pre_flight")
+    @patch("gdoc.api.docs.get_tab_text", return_value="text\n")
+    @patch("gdoc.api.docs.get_document_with_tabs")
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_single_tab_read_covers_the_document(
+        self, _svc, mock_tabs, _text, mock_pf, mock_update,
+    ):
+        """On a single-tab doc, `cat --tab X` covers the tab a default
+        `write`/`push` replaces, so those aren't blocked for no baseline."""
+        mock_pf.return_value = ChangeInfo(current_version=7)
+        mock_tabs.return_value = _document([_tab("t.only", "Only")])
+        assert cmd_cat(_make_args(tab="Only")) == 0
+        from gdoc.state import load_state
+        assert load_state("abc123").read_revision_ids == {"t.only": "r1"}
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight")
@@ -261,9 +397,39 @@ class TestCatTabAwareness:
     ):
         change_info = ChangeInfo(current_version=7)
         mock_pf.return_value = change_info
-        mock_tabs.return_value = _document([_tab("t1", "Tab 1")])
+        mock_tabs.return_value = _document([_tab("t1", "Tab 1"), _tab("t2", "Tab 2")])
         args = _make_args(all_tabs=True)
         rc = cmd_cat(args)
         assert rc == 0
         mock_pf.assert_called_once()
         mock_update.assert_called_once()
+        # --all-tabs reads every tab: each is covered.
+        from gdoc.state import load_state
+        assert load_state("abc123").read_revision_ids == {"t1": "r1", "t2": "r1"}
+
+
+class TestCatTabBaselinePersistence:
+    """Against real (tmp) state: on a multi-tab doc a single-tab read
+    covers only that tab and never touches the Drive-version baseline
+    (which would let a sibling tab be overwritten unseen)."""
+
+    def test_tab_read_does_not_advance_global_baseline(self):
+        from gdoc.state import DocState, load_state, save_state
+
+        save_state("abc123", DocState(last_read_version=50, last_version=50))
+        change_info = ChangeInfo(
+            current_version=100,
+            mime_type="application/vnd.google-apps.document",
+        )
+        with patch("gdoc.notify.pre_flight", return_value=change_info), \
+             patch("gdoc.api.docs.get_document_with_tabs",
+                   return_value=_document([
+                       _tab("t.notes", "Notes", "body\n"),
+                       _tab("t.other", "Other", "other\n"),
+                   ])), \
+             patch("gdoc.api.docs.get_docs_service"):
+            rc = cmd_cat(_make_args(tab="Notes"))
+        assert rc == 0
+        state = load_state("abc123")
+        assert state.last_read_version == 50  # global untouched
+        assert state.read_revision_ids == {"t.notes": "r1"}

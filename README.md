@@ -717,7 +717,7 @@ same native tab and revision checks and reports a skip when it cannot safely wri
 The inventory is not a promise of pixel-perfect formatting or detection of properties
 Google does not expose.
 
-Files pulled by gdoc 0.21.1 to 0.22.0 carry only `gdoc-version: N`, the Drive
+Files pulled by gdoc 0.21.1 to 0.23.0 carry only `gdoc-version: N`, the Drive
 version their content came from, instead of `gdoc-revision`. When the doc has moved
 past that version, `push`, `write DOC FILE` (and MCP `write` of such text) and the sync hook refuse
 such a file with exit 3: nothing is sent and the file is left untouched. The sync hook
@@ -878,6 +878,21 @@ Keep these markers when reconstructing a tab with `write --tab`; arbitrary
 Markdown tools and the separate Drive importer may not preserve them. For verbatim
 prose, copying search strings, or text to match with `edit`, use
 `gdoc cat --plain --tab "Notes" DOC`.
+
+### Tabs in the URL
+
+Google's editor deep-links to a tab with a `?tab=<id>` query param (e.g. `.../edit?tab=t.abc123`). `gdoc` honors it: a pasted tab URL acts like `--tab <id>`, so `cat` (including `--comments`), `pull`, Markdown `export`, file `diff`, `edit`, `write`, `insert`, `toc`, `structure`, `insert-image`, `suggest`, `nest`, and `unnest` all operate on that tab, and the read and write baselines are that tab's. The URL's value is matched as a tab ID only, so a tab titled like another tab's ID can't capture it; an explicit `--tab` matches an ID first, then a unique title.
+
+```bash
+# Reads the "Notes" tab — same as `gdoc cat --tab t.abc123 DOC`
+gdoc cat 'https://docs.google.com/document/d/DOC/edit?tab=t.abc123'
+```
+
+One special case: the editor auto-appends `?tab=t.0` to the address bar for the **first** tab, so it's ambient UI noise rather than an intentional selection. `gdoc` therefore treats `?tab=t.0` as if no tab were given, which selects the first tab. To select the tab whose ID is `t.0`, pass `--tab t.0` explicitly. Caveat: tab ids are assigned at creation and survive reordering, so after tabs are dragged around, `t.0` may no longer be the first-positioned tab — the rule still drops it, so pass `--tab t.0` when you mean that tab specifically.
+
+Precedence: an explicit `--tab` (or `cat --all-tabs`) always overrides the URL. Combining a URL tab with a whole-document flag is an error (`cat`/`pull --revision`, `write --force-collapse-tabs`) — the message names the URL so you know to drop `?tab=`. Commands that can't target a tab (non-Markdown `export`, revision `diff`, `comments`, `comment`, `images`) ignore a URL tab but print a one-line `NOTE:` to stderr when they do (silent for `t.0`, and under `--quiet`). `push` writes the tab its file's `tab` key names, so it notes a `?tab=` in the file's `gdoc` key the same way.
+
+> **Spreadsheets:** Sheets deep-links use `#gid=<n>`, which `gdoc` does not yet parse — select a worksheet with `--tab`/`--range` instead.
 
 ## Byte truncation
 

@@ -288,3 +288,30 @@ def test_stale_file_matching_live_markdown_is_not_blessed(native_write, capsys):
     with pytest.raises(GdocError, match="stale"):
         cmd_push(_make_args(file=str(env.path)))
     env.write.assert_not_called()
+
+
+class TestPushUrlTab:
+    """A pulled file names its tab in its `tab` key; a `?tab=` in its `gdoc`
+    URL is not read, and push says so."""
+
+    def test_non_t0_url_tab_notes_discard(self, native_write, capsys):
+        env = native_write
+        env.path.write_text(
+            "---\ngdoc: https://docs.google.com/document/d/abc123/edit?tab=t.second\n"
+            "gdoc-revision: r10\ntitle: Harbor\n---\nChanged\n"
+        )
+        assert cmd_push(_make_args(file=str(env.path))) == 0
+        err = capsys.readouterr().err
+        assert "NOTE" in err
+        assert "t.second" in err
+        assert "`tab` key" in err
+        env.write.assert_called_once()
+
+    def test_t0_url_tab_is_silent(self, native_write, capsys):
+        env = native_write
+        env.path.write_text(
+            "---\ngdoc: https://docs.google.com/document/d/abc123/edit?tab=t.0\n"
+            "gdoc-revision: r10\ntitle: Harbor\n---\nChanged\n"
+        )
+        assert cmd_push(_make_args(file=str(env.path))) == 0
+        assert "NOTE" not in capsys.readouterr().err

@@ -781,6 +781,71 @@ class TestCommand:
         with pytest.raises(GdocError, match="no match"):
             cmd_nest(_args())
 
+    def test_url_tab_targets_that_tab(self, api):
+        """A pasted ?tab= URL acts like --tab, as for edit/write/suggest."""
+        other = {"tabProperties": {"tabId": "t.0", "title": "Other"},
+                 "documentTab": _tab(("Nothing here", 0, None))}
+        first = _doc(_tab(*STD))
+        first["tabs"].insert(0, other)
+        second = _doc(NESTED)
+        second["tabs"].insert(0, other)
+        api.get.side_effect = [first, second]
+        url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
+        assert cmd_nest(_args(doc=url)) == 0
+
+    def test_url_tab_is_matched_by_id_not_title(self, api):
+        """A tab titled like the URL's tab ID must not be picked instead."""
+        decoy = {"tabProperties": {"tabId": "t.0", "title": TAB},
+                 "documentTab": _tab(*STD)}
+        first = _doc(_tab(*STD))
+        first["tabs"].insert(0, decoy)
+        second = _doc(NESTED)
+        second["tabs"].insert(0, decoy)
+        api.get.side_effect = [first, second]
+        url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
+        assert cmd_nest(_args(doc=url)) == 0
+        written = str(api.write.call_args)
+        assert f"'tabId': '{TAB}'" in written
+        assert "'tabId': 't.0'" not in written
+
+    def test_stale_tab_read_warns(self, api, mocker, capsys):
+        """The target tab moved since it was read: warn. A read records
+        coverage at the native revision it saw (rev0); the doc is at rev1."""
+        from gdoc.notify import ChangeInfo
+        from gdoc.state import DocState
+
+        mocker.patch(
+            "gdoc.notify.pre_flight",
+            return_value=ChangeInfo(current_version=9, last_read_version=None),
+        )
+        mocker.patch(
+            "gdoc.state.load_state",
+            return_value=DocState(read_revision_ids={TAB: "rev0"}),
+        )
+        assert cmd_nest(_args(quiet=False)) == 0
+        assert "WARN: doc changed since last read" in capsys.readouterr().err
+
+    def test_current_tab_read_does_not_warn(self, api, mocker, capsys):
+        from gdoc.notify import ChangeInfo
+        from gdoc.state import DocState
+
+        mocker.patch(
+            "gdoc.notify.pre_flight",
+            return_value=ChangeInfo(current_version=9, last_read_version=None),
+        )
+        mocker.patch(
+            "gdoc.state.load_state",
+            return_value=DocState(read_revision_ids={TAB: "rev1"}),
+        )
+        assert cmd_nest(_args(quiet=False)) == 0
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_tab_flag_beats_url_tab(self, api):
+        url = f"https://docs.google.com/document/d/doc1/edit?tab={TAB}"
+        with pytest.raises(GdocError, match="tab not found") as exc:
+            cmd_nest(_args(doc=url, tab="Nope"))
+        assert exc.value.exit_code == 3
+
     def test_unknown_tab(self, api):
         with pytest.raises(GdocError, match="tab not found") as exc:
             cmd_nest(_args(tab="Nope"))
