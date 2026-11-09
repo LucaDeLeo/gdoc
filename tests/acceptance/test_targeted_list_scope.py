@@ -154,8 +154,9 @@ def test_a_whole_item_is_deleted(route):
     ("1. a\n2. b\n", "1. c\n", "end", "1. a\n2. b\n1. c\n"),
     ("1. a\n2. b\n", "\n1. c\n", "end", "1. a\n2. b\n\n1. c\n"),
     # a sublist of another kind is its own list, as in a write
-    (BASE, "  - d\n", "end", "1. a\n2. b\n3. c\n  - d\n"),
-    ("1. a\n  - b\n", "- X\n", "end", "1. a\n  - b\n- X\n"),
+    # (cat indents a child to its parent's content column: 3 under "1.")
+    (BASE, "  - d\n", "end", "1. a\n2. b\n3. c\n   - d\n"),
+    ("1. a\n  - b\n", "- X\n", "end", "1. a\n   - b\n- X\n"),
     ("- a\n  1. b\n", "1. X\n", "end", "- a\n  1. b\n1. X\n"),
     # a rule ends the list
     ("- a\n", "\n---\n\n- c\n", "end", "- a\n\n---\n\n- c\n"),

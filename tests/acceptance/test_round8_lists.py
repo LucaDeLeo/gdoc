@@ -41,7 +41,8 @@ def _lists(doc):
 
 
 # (markdown, expected native lists). List numbers are by first appearance;
-# each nesting level is its own native list, as elsewhere in the writer.
+# a nested list of its parent's kind shares the parent's native list, as
+# Docs' Tab key makes it; another kind, or a quoted list, is a list of its own.
 CASES = [
     # The exact R7-1 trigger: a quoted bullet list between numbered subitems.
     ("- x\n  1. d\n\n     > - q\n  2. e\n",
@@ -49,17 +50,19 @@ CASES = [
       ("e", 1, "num", 1, 2)]),
     # The reverse direction: a quoted numbered list between bulleted subitems.
     ("- x\n  - d\n\n    > 1. q\n  - e\n",
-     [("x", 0, "bullet", 0, "-"), ("d", 1, "bullet", 1, "-"), ("q", 2, "num", 0, 1),
-      ("e", 1, "bullet", 1, "-")]),
+     [("x", 0, "bullet", 0, "-"), ("d", 0, "bullet", 1, "-"), ("q", 1, "num", 0, 1),
+      ("e", 0, "bullet", 1, "-")]),
     # Same preset inside and outside: the quoted list keeps its own numbering.
     ("- x\n  1. d\n\n     > 1. q\n     > 2. r\n  2. e\n",
      [("x", 0, "bullet", 0, "-"), ("d", 1, "num", 1, 1), ("q", 2, "num", 0, 1),
       ("r", 2, "num", 0, 2), ("e", 1, "num", 1, 2)]),
-    # Numbered outer list, nested quoted bullets two levels down.
-    ("1. x\n  1. d\n    - f\n\n      > - q\n      >   1. s\n    - g\n  2. e\n",
-     [("x", 0, "num", 0, 1), ("d", 1, "num", 1, 1), ("f", 2, "bullet", 2, "-"),
-      ("q", 3, "bullet", 0, "-"), ("s", 4, "num", 1, 1), ("g", 2, "bullet", 2, "-"),
-      ("e", 1, "num", 1, 2)]),
+    # Numbered outer list, nested quoted bullets two levels down. (`cat`
+    # indents each child to its parent's content column: 3 under "1.".)
+    ("1. x\n   1. d\n      - f\n\n        > - q\n        >   1. s\n"
+     "      - g\n   2. e\n",
+     [("x", 0, "num", 0, 1), ("d", 0, "num", 1, 1), ("f", 1, "bullet", 2, "-"),
+      ("q", 2, "bullet", 0, "-"), ("s", 3, "num", 1, 1), ("g", 1, "bullet", 2, "-"),
+      ("e", 0, "num", 1, 2)]),
 ]
 
 
@@ -87,14 +90,16 @@ def test_quoted_list_inside_nested_item_keeps_its_own_identity(
 
 
 # A quoted list that an outer list's range spans, outside any list item.
+# The quote ends a bullet list, as in CommonMark, so the bullet after it is
+# a new list; a numbered list continues across it, as its numbers say.
 SPANNED = [
     ("- a\n\n> 1. g\n> 2. h\n\n- b\n",
      [("a", 0, "bullet", 0, "-"), ("g", 1, "num", 0, 1), ("h", 1, "num", 0, 2),
-      ("b", 0, "bullet", 0, "-")]),
+      ("b", 2, "bullet", 0, "-")]),
     ("- a\n\n> 1. g\n\nsep\n\n- b\n",
-     [("a", 0, "bullet", 0, "-"), ("g", 1, "num", 0, 1), ("b", 0, "bullet", 0, "-")]),
+     [("a", 0, "bullet", 0, "-"), ("g", 1, "num", 0, 1), ("b", 2, "bullet", 0, "-")]),
     ("> - a\n> \n> > 1. g\n> \n> - b\n",
-     [("a", 0, "bullet", 0, "-"), ("g", 1, "num", 0, 1), ("b", 0, "bullet", 0, "-")]),
+     [("a", 0, "bullet", 0, "-"), ("g", 1, "num", 0, 1), ("b", 2, "bullet", 0, "-")]),
     ("1. a\n\n> 1. g\n\n2. b\n",
      [("a", 0, "num", 0, 1), ("g", 1, "num", 0, 1), ("b", 0, "num", 0, 2)]),
 ]

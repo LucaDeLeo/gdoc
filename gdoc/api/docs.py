@@ -1097,12 +1097,21 @@ def _shown_level(paragraph: dict, lists: dict) -> int:
 
 
 def _paragraph_markdown(
-    paragraph: dict, lists: dict, ordered_counters: dict
+    paragraph: dict, lists: dict, ordered_counters: dict,
+    open_items: list | None = None, level_gaps: list | None = None,
 ) -> str:
     """Render one paragraph as markdown: headings, list items, inline styles.
 
     ``ordered_counters`` (nesting level -> running ordinal) is carried across
     paragraphs by the caller so numbered lists count 1, 2, 3.
+
+    ``open_items`` lists ``(level, marker column, content column)`` of the
+    list items above
+    in the same container, outermost first. A list item is indented to its
+    parent's content column, as CommonMark nests it (``- a`` then ``  - b``,
+    ``1. a`` then ``   - b``, ``10. a`` then ``    - b``). A level Markdown
+    cannot spell, deeper than the item above plus one, is written as that
+    item's child and described in ``level_gaps``.
     """
     elements = paragraph.get("elements", [])
     if any("horizontalRule" in e for e in elements):
@@ -1116,7 +1125,7 @@ def _paragraph_markdown(
             if chunk and _runs_markdown(chunk).strip():
                 part = dict(marked[0], elements=chunk)
                 fragments.append(_paragraph_markdown(
-                    part, lists, ordered_counters,
+                    part, lists, ordered_counters, open_items, level_gaps,
                 ).rstrip("\n") + "\n")
                 marked[0] = {k: v for k, v in marked[0].items() if k != "bullet"}
 
@@ -1143,7 +1152,6 @@ def _paragraph_markdown(
         for key in list(ordered_counters):
             if key[0] == list_id and key[1] > native_level:
                 del ordered_counters[key]
-        indent = "  " * level
         if _list_is_ordered(lists, list_id, native_level):
             definition = lists[list_id]["listProperties"]["nestingLevels"][native_level]
             key = (list_id, native_level)
@@ -1154,6 +1162,22 @@ def _paragraph_markdown(
             marker = f"{ordinal}."
         else:
             marker = "-"
+        if open_items is None:
+            indent = "  " * level
+        else:
+            while open_items and open_items[-1][0] >= level:
+                open_items.pop()
+            parent_level, _, column = open_items[-1] if open_items else (-1, 0, 0)
+            if parent_level != level - 1 and level_gaps is not None:
+                preview = text.strip()[:40]
+                level_gaps.append(
+                    f"list item {preview!r} at nesting level {level + 1} under "
+                    + (f"an item at level {parent_level + 1}" if open_items
+                       else "no list item")
+                    + " (Markdown nests one level at a time)"
+                )
+            indent = " " * column
+            open_items.append((level, column, column + len(marker) + 1))
         item = text
         named_style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
         heading = _HEADING_LEVELS.get(named_style)
@@ -1379,6 +1403,29 @@ def suggestion_preview_gaps(tab: dict) -> list[str]:
 
 
 def get_tab_text(tab: dict, markdown: bool = False) -> str:
+    """Extract a tab's text, or its Markdown; see _tab_text."""
+    return _tab_text(tab, markdown)
+
+
+def list_level_gaps(tab: dict) -> list[str]:
+    """List nesting in a tab that its Markdown read cannot spell."""
+    gaps: list[str] = []
+    _tab_text(tab, True, gaps)
+    return gaps
+
+
+def open_list_items(tab: dict) -> list[tuple[int, int]]:
+    """``(marker column, content column)`` of the list items still open at
+    the end of a tab's Markdown, outermost first: what appended Markdown
+    nests under (see parse_markdown)."""
+    state: dict = {}
+    _tab_text(tab, True, open_out=state)
+    return [(marker, content) for _, marker, content in state.get("items", [])]
+
+
+def _tab_text(tab: dict, markdown: bool = False,
+              level_gaps: list | None = None,
+              open_out: dict | None = None) -> str:
     """Extract text from a tab's body content.
 
     Handles paragraphs and tables (tab-joined cells per row in plain text). When
@@ -1403,6 +1450,11 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
     when reconstructing a tab; arbitrary Markdown tools and Drive import need
     not preserve them. With *markdown* False (``cat --plain --tab``), text is
     returned verbatim for searching, copying prose, and matching ``gdoc edit``.
+
+    List items nest as CommonMark does: a child is indented to its parent's
+    content column. A nesting level Markdown cannot spell (an item more than
+    one level below the item above it) is read one level below that item
+    and described in *level_gaps*, so a rewrite needs consent to lose it.
     """
     body = tab.get("body", {})
     content = body.get("content", [])
@@ -1448,15 +1500,37 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
     active_code = None
     active_prefix = ()
 
-    def with_prefix(text, path, code=False):
-        from gdoc.mdparse import path_lead
+    def render_lead(path):
+        """A container path's line prefix. Each run of item-content tokens
+        is indented to the content column of the open item it is inside, as
+        this read spells that item (the tokens record the written spelling,
+        which may differ); without such an item, to the recorded width."""
+        out, run, context = [], [], ()
 
-        lead = path_lead(path)
+        def flush():
+            if run:
+                entry = next((e for e in reversed(open_lists.get(context, []))
+                              if e[0] == len(run) - 1), None)
+                out.append(" " * (entry[2] if entry else sum(run)))
+                run.clear()
+
+        for position, token in enumerate(path):
+            if token == "q":
+                flush()
+                out.append("> ")
+                context = tuple(path[:position + 1])
+            else:
+                run.append(token)
+        flush()
+        return "".join(out)
+
+    def with_prefix(text, path, code=False):
+        lead = render_lead(path)
         # A blank line outside code carries only the containers that need a
         # marker: trailing list-item indentation alone would be invisible
         # trailing whitespace, and the parser treats a blank line as inside
         # the item either way.
-        blank = path_lead(_without_trailing_indent(path))
+        blank = render_lead(_without_trailing_indent(path))
         # Only "\n" ends a Markdown line; a soft break (\x0b) stays in its line.
         return "".join((blank if line == "\n" and not code else lead) + line
                        for line in re.findall(r"[^\n]*\n|[^\n]+", text))
@@ -1508,6 +1582,21 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
         return None
 
     table_run = None  # Container of the last pipe table, until non-blank content.
+    # Open list items per container, as the parser tracks them: leaving a
+    # container ends its lists, and prose, code or a table in a container
+    # ends the lists in it (prose in a quote also ends the quote's parents').
+    open_lists: dict[tuple, list] = {}
+
+    def end_lists(path, text=True):
+        for key in list(open_lists):
+            if tuple(path[:len(key)]) != key:
+                del open_lists[key]
+        if text:
+            open_lists.pop(tuple(path), None)
+            for depth, token in enumerate(path):
+                if token == "q":
+                    open_lists.pop(tuple(path[:depth]), None)
+
     for position, element in enumerate(content):
         if not markdown:
             prefix = ()
@@ -1541,6 +1630,8 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
         active_code = marker
         active_prefix = prefix
         if marker is not None and "paragraph" in element:
+            if markdown:
+                end_lists(prefix)
             code_parts.append(_extract_paragraphs_text([element]))
             table_run = None
             continue
@@ -1563,7 +1654,14 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
                     else:
                         paragraph_style.pop(key, None)
                 paragraph = dict(paragraph, paragraphStyle=paragraph_style)
-            rendered = _paragraph_markdown(paragraph, lists, ordered_counters)
+            if paragraph.get("bullet") is not None:
+                end_lists(prefix, text=False)
+            else:
+                end_lists(prefix, text=bool(
+                    _runs_markdown(paragraph.get("elements", [])).strip()))
+            rendered = _paragraph_markdown(
+                paragraph, lists, ordered_counters,
+                open_lists.setdefault(tuple(prefix), []), level_gaps)
             # A blank paragraph outside the tables' container already separates
             # them; another separator line would read back as a new paragraph.
             if rendered.strip() or prefix != table_run:
@@ -1571,6 +1669,8 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
             parts.append(with_prefix(rendered, prefix))
         elif "table" in element:
             table = element["table"]
+            if markdown:
+                end_lists(prefix)
             rendered = _table_markdown(table) if markdown else None
             if rendered is not None:
                 if table_run == prefix:
@@ -1589,6 +1689,8 @@ def get_tab_text(tab: dict, markdown: bool = False) -> str:
                     cells.append(cell_text)
                 parts.append("\t".join(cells) + "\n")
     flush_code()
+    if open_out is not None:
+        open_out["items"] = list(open_lists.get((), []))
     return "".join(parts)
 
 
@@ -3588,7 +3690,10 @@ def insert_markdown_into_tab(
         insert_index = body_start
     original_insert_index = insert_index
 
-    parsed = parse_markdown(markdown)
+    # Appended Markdown nests under the tab's open list items, as it would
+    # in a write of the joined Markdown.
+    parsed = parse_markdown(markdown, open_items=(
+        open_list_items(tab_match) if not replace and position == "end" else None))
     if parsed.deep_list_items:
         import sys
 
@@ -3984,12 +4089,41 @@ def _paragraph_wording_matches(body: dict, match: dict, markdown: str):
     return result
 
 
-def _wording_contexts(body: dict, match: dict, markdown: str):
-    """Share contextual parsing between edits and suggestions, including fences."""
+def _open_items_before(scope: dict | None, match: dict) -> list | None:
+    """The list items open just before a body match, as `cat` shows them.
+
+    An indented list item in replacement Markdown nests under these, as it
+    would in a write of the whole tab.
+    """
+    if scope is None or match.get("segmentId"):
+        return None
+    if "content" in scope:
+        tab = {"body": scope}
+    else:
+        tabs = flatten_tabs(scope["tabs"]) if "tabs" in scope else [scope]
+        tab = next((t for t in tabs if not match.get("tabId")
+                    or t.get("id") == match.get("tabId")), None)
+        if tab is None:
+            return None
+    content = tab.get("body", {}).get("content", [])
+    before = [e for e in content if e.get("endIndex", 0) <= match["startIndex"]]
+    return open_list_items({**tab, "body": {**tab.get("body", {}),
+                                            "content": before}})
+
+
+def _wording_contexts(body: dict, match: dict, markdown: str,
+                      open_items: list | None = None):
+    """Share contextual parsing between edits and suggestions, including fences.
+
+    *open_items* are the list items open before the match: an indented
+    list item line nests under them and under the replacement's own items
+    above it, as in a write of the whole tab.
+    """
     from gdoc.mdparse import (
         _FENCE_RE,
         ParsedMarkdown,
         StyleRange,
+        _list_item_line,
         parse_markdown,
     )
 
@@ -4046,8 +4180,12 @@ def _wording_contexts(body: dict, match: dict, markdown: str):
             offset = end + 1
         return result
     result = []
+    seed = open_items
     for part, line in _paragraph_wording_matches(body, match, markdown):
-        selected = parse_markdown(line)
+        stripped = line.lstrip(" \t")
+        nested = bool(seed) and stripped != line and _list_item_line(stripped)
+        selected = parse_markdown(line, open_items=seed if nested else None)
+        seed = selected.open_items
         _strip_trailing_newline_unless_hr(selected)
         result.append((part, _contextual_replacement(selected, line, part, body)))
     return result
@@ -4108,10 +4246,15 @@ def _level_change_advice(parsed, lines, native, source, tab_id) -> str:
     `gdoc nest`/`gdoc unnest` when their planner accepts these items, and
     `write` otherwise."""
     from gdoc.listnest import plan_nesting
+    from gdoc.mdparse import parse_markdown
 
+    tab = _snapshot_tab(source, tab_id)
+    if tab and native:
+        # Indented items nest under the items open above the first one.
+        parsed = parse_markdown("\n".join(lines) + "\n", open_items=_open_items_before(
+            tab, {"startIndex": native[0][1], "tabId": tab_id}))
     items = sorted((s for s in parsed.styles if s.type == "bullets"),
                    key=lambda s: s.start)
-    tab = _snapshot_tab(source, tab_id)
     if (not tab or len(items) != len(lines) or len(lines) != len(native)
             or not all(p.get("bullet") for p, _, _ in native)):
         return _LIST_RESTRUCTURE
@@ -4202,8 +4345,10 @@ def _refuse_list_restructure(parsed, markdown, native, whole, body, source,
                             and any(a <= start < b for a, b in spans))
                   for _, start, _ in native}
     if (new_items and whole and len(lines) == len(native) and len(containers) == 1
-            and all(p.get("bullet") and _line_kept(line, p, lists)
-                    for (p, _, _), line in zip(native, lines))
+            and all(p.get("bullet") and _line_kept(
+                        line, p, lists, _open_items_before(
+                            tab or body, {"startIndex": start, "tabId": tab_id}))
+                    for (p, start, _), line in zip(native, lines))
             and _numbers_kept(native, lines, body, lists)):
         return
     if any(line.lstrip().startswith(">") for line in lines) and any(
@@ -4291,12 +4436,17 @@ def _orphans_item_content(native, content, match, source, tab_id) -> bool:
     return False
 
 
-def _line_kept(line, paragraph, lists) -> bool:
+def _line_kept(line, paragraph, lists, open_items=None) -> bool:
     """Whether one line rewords a list item in place, as an item of the
-    item's own list kind and level."""
-    from gdoc.mdparse import parse_markdown
+    item's own list kind and level. An indented line nests under
+    *open_items*, the items open above the paragraph."""
+    from gdoc.mdparse import _list_item_line, parse_markdown
 
-    return bool(_same_list_item(parse_markdown(line), paragraph, lists))
+    stripped = line.lstrip(" \t")
+    nested = stripped != line and _list_item_line(stripped)
+    return bool(_same_list_item(
+        parse_markdown(line, open_items=open_items if nested else None),
+        paragraph, lists))
 
 
 def _numbers_kept(native, lines, body, lists) -> bool:
@@ -5464,7 +5614,8 @@ def replace_formatted(
             parts = [(p, (ParsedMarkdown(""), [])) for p in pieces
                      if p not in whole_pieces]
         elif contextual:
-            parts = _wording_contexts(body, match, new_markdown)
+            parts = _wording_contexts(body, match, new_markdown,
+                                      _open_items_before(source, match))
         elif native and replace_paragraphs and not parsed.tables and not any(
             s.type == "bullets" or (s.type == "paragraph_style"
                                    and s.style != {"namedStyleType": "NORMAL_TEXT"})
@@ -6337,7 +6488,8 @@ def suggest_replacement(
             )
         planned = [part for match in matches
                    for part in _wording_contexts(
-                       _replacement_body(body, match), match, new_markdown)]
+                       _replacement_body(body, match), match, new_markdown,
+                       _open_items_before(body, match))]
         # Validate each resolved context before planning suggestion requests.
         for _, (selected, _) in planned:
             check_inline_only_markdown(selected)

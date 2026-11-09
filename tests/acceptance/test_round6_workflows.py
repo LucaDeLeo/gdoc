@@ -92,7 +92,7 @@ def test_prose_replacement_is_still_markdown(route):
 @pytest.mark.parametrize("markdown", [
     "1. a\n\n   ```\n   \tx\n   ```\n2. b\n",
     "- a\n\n  ```\n  \tt\n  \t\tu\n  ```\n- b\n  - c\n",
-    "1. a\n\n   ```\n   \tx\n   ```\n2. b\n  1. c\n\n"
+    "1. a\n\n   ```\n   \tx\n   ```\n2. b\n   1. c\n\n"
     "      | h |\n      | --- |\n      | v |\n",
 ])
 def test_list_contained_code_keeps_its_tabs(route, markdown):
@@ -280,7 +280,7 @@ def test_unlinked_wording_loses_the_link_appearance(route, old, new, expected):
     ("- item\n\n  > quoted\n- next\n", [("quoted", "said"), ("next", "then")]),
     ("- item\n  > quoted\n", [("quoted", "cited")]),
     ("- a\n  - b\n\n    > deep\n", [("deep", "deeper")]),
-    ("1. a\n  1. b\n\n     > q\n2. c\n", [("q\n", "quote\n"), ("c\n", "see\n")]),
+    ("1. a\n   1. b\n\n      > q\n2. c\n", [("q\n", "quote\n"), ("c\n", "see\n")]),
     ("- a\n\n  > one\n  > \n  > two\n- b\n", [("two", "three")]),
     ("- a\n\n  > > deep\n- b\n", [("deep", "deeper")]),
     ("1. a\n\n   > 1. x\n   > 2. y\n2. b\n", [("y\n", "why\n"), ("b\n", "be\n")]),

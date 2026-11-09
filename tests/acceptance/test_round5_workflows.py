@@ -237,7 +237,7 @@ def test_removing_a_paragraph_after_an_empty_list_item_is_refused(route):
 
 @pytest.mark.parametrize("markdown", [
     "- \tlit\n\n---\n",
-    "1. \tone\n  1. two\n\n```\nc\n```\n\n---\n",
+    "1. \tone\n   1. two\n\n```\nc\n```\n\n---\n",
 ])
 def test_literal_list_tabs_survive_a_trailing_rule(route, markdown):
     """F5: a trailing rule keeps the shielded list text, tabs and all."""

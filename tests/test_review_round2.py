@@ -149,7 +149,9 @@ def test_numbered_item_containing_a_rule_stays_one_item():
 @pytest.mark.parametrize("definition_indent, paragraph_indent, marker", [
     (54, None, "1. item"),     # Custom list definition, inherited indent.
     (None, 54, "1. item"),     # Custom paragraph indent on a first-level item.
-    (None, 72, "  1. item"),   # gdoc's own nested child list at one level deep.
+    # An indent one level deep with no parent item above it: Markdown
+    # cannot nest it, so it reads at the top level (a reported loss).
+    (None, 72, "1. item"),
 ])
 def test_custom_first_level_indent_is_not_nesting(definition_indent, paragraph_indent,
                                                   marker):

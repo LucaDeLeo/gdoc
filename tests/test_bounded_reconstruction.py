@@ -23,7 +23,7 @@ def _tab(body):
             "documentTab": {"body": body}}
 
 
-def _rewrite(mocker, markdown, paragraph=None):
+def _rewrite(mocker, markdown, paragraph=None, allow_lossy=False):
     body = {"content": [{"startIndex": 1, "endIndex": 5, "paragraph": {
         "elements": [{"textRun": {"content": "old\n"}}],
         **(paragraph or {}),
@@ -38,7 +38,8 @@ def _rewrite(mocker, markdown, paragraph=None):
     original = deepcopy(doc)
     mocker.patch("gdoc.api.docs.get_document_with_tabs", return_value=doc)
     service = mocker.patch("gdoc.api.docs.get_docs_service").return_value
-    insert_markdown_into_tab("doc", "draft", markdown, replace=True)
+    insert_markdown_into_tab("doc", "draft", markdown, replace=True,
+                             allow_lossy=allow_lossy)
     assert doc == original
     batch = service.documents.return_value.batchUpdate.call_args.kwargs["body"]
     assert batch["writeControl"] == {"requiredRevisionId": "rev"}
@@ -56,7 +57,9 @@ def _rewrite(mocker, markdown, paragraph=None):
                         "spaceAbove": {"magnitude": 24, "unit": "PT"}}},
 ])
 def test_f7_reset_retained_paragraph_before_inserting_new_content(mocker, paragraph):
-    requests = _rewrite(mocker, "# Heading\nPlain\n- Item\nClosing", paragraph)
+    # A lone level-3 item has no Markdown spelling: replacing it is a loss.
+    requests = _rewrite(mocker, "# Heading\nPlain\n- Item\nClosing", paragraph,
+                        allow_lossy="bullet" in paragraph)
     # Reset after deletion (at the retained mark) and before insertion: all new
     # paragraphs start from this state, then receive only requested Markdown.
     assert [next(iter(r)) for r in requests[:5]] == [
@@ -150,12 +153,14 @@ def test_r4_f005_three_levels_share_range_and_keep_later_offsets(marker, preset,
     assert parsed == before
     bullets = [r["createParagraphBullets"] for r in requests
                if "createParagraphBullets" in r]
-    assert len(bullets) == 2
+    # A blank line does not end a bullet list (CommonMark); "1." restarts.
+    lists = 1 if marker == "-" else 2
+    assert len(bullets) == lists
     first = "Parent 😀\n\tChild\n\t\tGrandchild\nSibling\n"
     second = "Next\n\tNested\n"
     assert parsed.plain_text.startswith(first + "\n" + second)
-    assert [b["bulletPreset"] for b in bullets] == [preset, preset]
-    # Applied from index 1 on the native model: two lists, absolute levels.
+    assert [b["bulletPreset"] for b in bullets] == [preset] * lists
+    # Applied from index 1 on the native model: absolute levels.
     paragraphs = apply_list_requests(to_docs_requests(parse_markdown(source), 1))
     items = [(p["text"].rstrip("\n"), p["depth"], p["list"])
              for p in paragraphs if p["list"] is not None]
@@ -163,7 +168,8 @@ def test_r4_f005_three_levels_share_range_and_keep_later_offsets(marker, preset,
         ("Parent 😀", 0), ("Child", 1), ("Grandchild", 2), ("Sibling", 0),
         ("Next", 0), ("Nested", 1)]
     assert len({lst for *_, lst in items[:4]}) == 1
-    assert items[4][2] == items[5][2] != items[0][2]
+    assert items[4][2] == items[5][2]
+    assert (items[4][2] == items[0][2]) == (lists == 1)
     assert parsed.removed_tabs == 4
     if table:
         assert parsed.tables[0].removed_tabs_before == 4

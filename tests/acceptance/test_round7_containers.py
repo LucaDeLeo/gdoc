@@ -326,7 +326,7 @@ def _indent_of(doc, text):
 
 @pytest.mark.parametrize("markdown,text,indent", [
     ("- parent\n  - child\n\n    continuation\n- next\n", "continuation", 72),
-    ("1. a\n  1. b\n\n     para\n2. c\n", "para", 72),
+    ("1. a\n   1. b\n\n      para\n2. c\n", "para", 72),
     ("- p\n  - c\n    - g\n\n      deep\n- n\n", "deep", 108),
     ("- p\n  - c\n\n    > quoted\n- n\n", "quoted", 108),
     ("- p\n  - c\n\n    ```\n    code\n    ```\n- n\n", "code", 72),

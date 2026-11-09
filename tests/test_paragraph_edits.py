@@ -933,7 +933,8 @@ def test_tab_insertion_preserves_trailing_blank_paragraphs(
 
 @pytest.mark.parametrize("operation", ["start", "end", "write"])
 @pytest.mark.parametrize("existing", ["Existing 😀", ""])
-@pytest.mark.parametrize("prefix", ["", "Body 😀\n", "  - Nested\n"])
+# Nesting is relative to the item above, so the nested item has a parent.
+@pytest.mark.parametrize("prefix", ["", "Body 😀\n", "- Parent\n  - Nested\n"])
 @pytest.mark.parametrize("named_style", ["TITLE", "SUBTITLE"])
 def test_tab_empty_final_named_style_targets_its_paragraph_mark(
     mocker, operation, existing, prefix, named_style,
@@ -941,7 +942,8 @@ def test_tab_empty_final_named_style_targets_its_paragraph_mark(
     body = _body((existing, "NORMAL_TEXT", False))
     markdown = prefix + f"<!-- gdoc:{named_style} --> \n"
     requests = _tab_insert_requests(mocker, body, markdown, operation)
-    prefix_text = "Nested\n" if prefix.startswith("  -") else prefix
+    nested = "Nested" in prefix
+    prefix_text = "Parent\nNested\n" if nested else prefix
     rendered = prefix_text + "\n"
     if operation == "write" or not existing:
         expected = rendered
@@ -960,13 +962,13 @@ def test_tab_empty_final_named_style_targets_its_paragraph_mark(
     removed_tabs = 0
     for request in requests:
         if "createParagraphBullets" in request:
-            removed_tabs += 1 if prefix.startswith("  -") else 0
+            removed_tabs += 1 if nested else 0
         style = request.get("updateParagraphStyle", {})
         if style.get("paragraphStyle", {}).get("namedStyleType") == named_style:
             assert style["range"] == {
-                "startIndex": target + (1 if prefix.startswith("  -") else 0)
+                "startIndex": target + (1 if nested else 0)
                 - removed_tabs,
-                "endIndex": target + (1 if prefix.startswith("  -") else 0)
+                "endIndex": target + (1 if nested else 0)
                 - removed_tabs + 1,
                 "tabId": "synthetic-tab",
             }

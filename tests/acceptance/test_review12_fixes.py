@@ -149,9 +149,9 @@ def test_r4_10_collapse_is_not_skipped(monkeypatch, tmp_path, capsys):
 
 
 @pytest.mark.parametrize("base,inserted,intended", [
-    # deeper items above with nothing at the new item's level
+    # an indented item after a paragraph starts a top-level list (CommonMark)
     ("- a\n\nPara\n\n  - deep\n", "- c\n", "- a\n\nPara\n\n  - deep\n- c\n"),
-    ("Para\n\n   1. deep\n", "1. c\n", "Para\n\n   1. deep\n1. c\n"),
+    ("Para\n\n   1. deep\n", "2. c\n", "Para\n\n   1. deep\n2. c\n"),
     # the item above is inside another item's content
     ("1. a\n\n   > 1. q\n", "2. c\n", "1. a\n\n   > 1. q\n2. c\n"),
     ("- a\n\n  > - q\n", "- c\n", "- a\n\n  > - q\n- c\n"),

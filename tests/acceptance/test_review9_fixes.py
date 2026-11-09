@@ -164,7 +164,7 @@ def test_kept_nested_item_with_its_own_number_does_not_warn(route):
     route.ok("write", text="1. p\n  1. one\n  2. two\n")
     code, output, error = route.call("edit", old_text="two", new_text="  2. TWO")
     assert code == 0 and "start at 1" not in output + error
-    assert _read(route) == "1. p\n  1. one\n  2. TWO\n"
+    assert _read(route) == "1. p\n   1. one\n   2. TWO\n"
 
 
 @pytest.mark.parametrize("base,old,new", [

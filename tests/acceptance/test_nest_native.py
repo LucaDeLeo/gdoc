@@ -37,10 +37,10 @@ def _written(route, markdown):
 
 
 @pytest.mark.parametrize("base,command,args,expected", [
-    ("1. a\n2. b\n3. c\n", "nest", {"text": "b"}, "1. a\n  1. b\n2. c\n"),
+    ("1. a\n2. b\n3. c\n", "nest", {"text": "b"}, "1. a\n   1. b\n2. c\n"),
     ("- a\n  - b\n- c\n", "unnest", {"text": "b"}, "- a\n- b\n- c\n"),
     ("1. a\n2. b\n3. c\n4. d\n", "nest", {"text": "b", "to": "c"},
-     "1. a\n  1. b\n  2. c\n2. d\n"),
+     "1. a\n   1. b\n   2. c\n2. d\n"),
 ])
 def test_nest_on_a_written_list(route, base, command, args, expected):
     doc = _written(route, base)

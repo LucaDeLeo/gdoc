@@ -638,7 +638,8 @@ def test_only_referenced_numbered_levels_are_checked(capsys):
     check_markdown_replacement(scope, tab_body=True)
     scope["body"]["content"][0]["paragraph"]["bullet"]["nestingLevel"] = 1
     assert capsys.readouterr().err == ""
-    check_markdown_replacement(scope, tab_body=True)
+    # A level-2 item with no parent is itself a loss Markdown cannot spell.
+    check_markdown_replacement(scope, tab_body=True, allow_lossy=True)
     assert "numbered list 'first' starts at 3" in capsys.readouterr().err
 
 

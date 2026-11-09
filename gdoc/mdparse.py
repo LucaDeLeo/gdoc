@@ -22,6 +22,10 @@ class StyleRange:
     list_depth: int = 0
     literal_tabs: int = 0
     list_group: int | None = None
+    # How many blocks other than list items (prose, a heading, a rule, code,
+    # a table, a quote) the item's container had before it: a bullet list
+    # ends at one, as in CommonMark.
+    list_epoch: int = 0
     # Container path of a markdown_prefix range (see container_path).
     path: tuple = ()
 
@@ -76,6 +80,9 @@ class ParsedMarkdown:
     non_default_list_starts: list[str] = field(default_factory=list)
     # List items nested deeper than a Docs list's nine levels.
     deep_list_items: list[str] = field(default_factory=list)
+    # (marker column, content column) of the top-level list items still open
+    # at the end of the text: what text that follows would nest under.
+    open_items: list[tuple[int, int]] = field(default_factory=list)
     code_blocks: list[CodeBlockData] = field(default_factory=list)
     images: list[ImageData] = field(default_factory=list)
     # Per-paragraph pieces of one fenced replacement share this marker, so
@@ -818,16 +825,42 @@ def _scan(
 MAX_LIST_LEVEL = 8
 
 
-def _list_level(indent: str) -> int:
-    """Nesting level from a list item's leading whitespace.
+def _indent_columns(indent: str) -> int:
+    """Columns of a list item's leading whitespace; a tab is four columns."""
+    return len(indent.expandtabs(4))
 
-    Two columns (or one tab) per level; capped at the ninth level (index 8).
+
+def _item_columns(indent: str, marker: str, rest: str | None) -> tuple[int, int]:
+    """``(marker column, content column)`` of a list item line.
+
+    The content column is where the item's text starts, as in CommonMark:
+    the marker, then one to four spaces (one when the item is empty or the
+    text is indented further, which makes it indented code).
     """
-    return min(_raw_list_level(indent), MAX_LIST_LEVEL)
+    column = _indent_columns(indent)
+    gap = 1
+    if rest and rest.strip():
+        # *rest* follows the one separator the item patterns consume.
+        spaces = 1 + len(rest) - len(rest.lstrip(" "))
+        gap = spaces if spaces <= 4 else 1
+    return column, column + len(marker) + gap
 
 
-def _raw_list_level(indent: str) -> int:
-    return len(indent.replace("\t", "  ")) // 2
+def _content_tokens(contents: list[int], spaces: int) -> tuple[int, ...]:
+    """Path tokens of a line indented *spaces* inside nested list items.
+
+    *contents* are the content columns of the enclosing items above the
+    innermost one, outermost first. There is one token per enclosing item,
+    so native indentation counts every level, and the tokens add up to the
+    line's indentation, so the Markdown prefix is unchanged.
+    """
+    cuts = []
+    previous = 0
+    for depth, column in enumerate(contents):
+        column = max(previous + 1, min(column, spaces - (len(contents) - depth)))
+        cuts.append(column)
+        previous = column
+    return tuple(b - a for a, b in zip([0, *cuts], [*cuts, spaces]))
 
 
 def _ref_label(label: str) -> str:
@@ -910,13 +943,20 @@ def _list_item_line(text: str) -> bool:
         _HR_RE.match(text)
 
 
-def parse_markdown(text: str) -> ParsedMarkdown:
+def parse_markdown(
+    text: str, open_items: list[tuple[int, int]] | None = None,
+) -> ParsedMarkdown:
     """Parse markdown text into plain text + style annotations.
 
     Handles: headings (H1-H6), bullet/numbered lists (nested), bold, italic,
     bold+italic, strikethrough, inline code, links, blockquotes, horizontal
     rules, fenced code blocks, and tables. The exporter also uses explicit
     ``<!-- gdoc:TITLE -->`` / ``<!-- gdoc:SUBTITLE -->`` paragraph prefixes.
+
+    *open_items* are the ``(marker column, content column)`` of list items
+    the text follows (text appended after a list): an indented item or
+    line nests under them as it would in the joined Markdown. No list of
+    the text continues theirs.
     """
     if not text:
         return ParsedMarkdown(plain_text="")
@@ -980,14 +1020,21 @@ def parse_markdown(text: str) -> ParsedMarkdown:
     next_group = 0
     # Each container path has its own open lists: a list quoted inside an
     # item is separate from the item's list, which resumes after the quote.
-    contexts: dict[tuple, tuple[dict, dict]] = {(): (list_levels, groups)}
+    # Marker and content columns of each open item, by depth (see
+    # _item_columns); entries count only while their depth is in list_levels.
+    item_columns: dict[int, tuple[int, int]] = {}
+    contexts: dict[tuple, tuple[dict, dict, dict]] = {
+        (): (list_levels, groups, item_columns)}
+    breaks: dict[tuple, int] = {}  # container -> blocks that end its lists
+    for depth, columns in enumerate(open_items or []):
+        list_levels[depth] = ("", 0)  # matches no preset: nothing continues it
+        item_columns[depth] = columns
     container: tuple = ()  # the current paragraph's container path
     context_blocks: dict[tuple, int] = {}  # each context's current list block
     non_default_list_starts: list[str] = []
     deep_list_items: list[str] = []
 
-    def note_deep(indent: str, content: str) -> None:
-        level = _raw_list_level(indent)
+    def note_deep(level: int, content: str) -> None:
         if level > MAX_LIST_LEVEL:
             deep_list_items.append(
                 f"list item at line {i + 1} ({content!r}) is nested "
@@ -996,12 +1043,44 @@ def parse_markdown(text: str) -> ParsedMarkdown:
 
     def enter(path: tuple) -> None:
         """Make *path* current, ending the lists of containers it left."""
-        nonlocal list_levels, groups, container
+        nonlocal list_levels, groups, item_columns, container
         for key in list(contexts):
             if key != path[:len(key)]:
                 del contexts[key]
-        list_levels, groups = contexts.setdefault(path, ({}, {}))
+        list_levels, groups, item_columns = contexts.setdefault(path, ({}, {}, {}))
         container = path
+
+    def interrupt(path: tuple, own: bool = True) -> None:
+        """Note a block that ends the lists of *path* (when *own*) and of
+        every container a quote in *path* was opened in."""
+        for depth in range(len(path)):
+            if path[depth] == "q":
+                breaks[path[:depth]] = breaks.get(path[:depth], 0) + 1
+        if own:
+            breaks[path] = breaks.get(path, 0) + 1
+
+    def open_items(levels: dict, columns: dict) -> list[tuple[int, int]]:
+        """Columns of the open items, outermost first."""
+        return [columns[depth] for depth in sorted(levels) if depth in columns]
+
+    def open_items_at_end() -> list[tuple[int, int]]:
+        levels, _, columns = contexts.get((), ({}, {}, {}))
+        return open_items(levels, columns)
+
+    def item_level(indent: str) -> int:
+        """Nesting level of a list item, relative to the open items.
+
+        An item indented at least two columns past an open item's marker is
+        its child, as in CommonMark (``- a`` then ``    - b`` is one level
+        deep, and so are sub-items under ``1.`` and ``10.``); otherwise it is
+        a sibling of the deepest open item it does not nest under.
+        """
+        column = _indent_columns(indent)
+        items = open_items(list_levels, item_columns)
+        for depth in range(len(items) - 1, -1, -1):
+            if column >= items[depth][0] + 2:
+                return depth + 1
+        return 0
 
     def container_path(line: str) -> tuple[tuple, str]:
         """Split a line into its container path and its content.
@@ -1011,16 +1090,18 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         """
         path: tuple = ()
         while True:
-            levels = contexts.get(path, ({},))[0]
+            levels, _, columns = contexts.get(path, ({}, {}, {}))
             spaces = len(line) - len(line.lstrip(" "))
             body = line[spaces:]
             if levels and spaces and not _list_item_line(body):
-                # Content of an item nested at depth d sits inside d + 1 items:
-                # one token per enclosing item (two spaces per nesting level,
-                # then the item's own content indent), so native indentation
-                # counts every level while the Markdown prefix is unchanged.
-                depth = min((spaces - 1) // 2, max(levels))
-                path += (2,) * depth + (spaces - 2 * depth,)
+                # The line is content of the deepest open item it is indented
+                # past (two columns beyond the marker, like a child item; a
+                # shallower line still belongs to the outermost item).
+                items = open_items(levels, columns)
+                depth = max((d for d, (marker, _) in enumerate(items)
+                             if spaces >= marker + 2), default=0)
+                path += _content_tokens(
+                    [content for _, content in items[:depth]], spaces)
                 line = body
                 continue
             quoted = _BLOCKQUOTE_RE.match(line)
@@ -1072,6 +1153,8 @@ def parse_markdown(text: str) -> ParsedMarkdown:
             groups[key] = (group, start_number)
         if bullet_preset is None:
             # Blank paragraphs may separate items of the same numbered list.
+            if content or "borderBottom" in para_style:
+                interrupt(container)
             if content:
                 list_levels.clear()
                 # A quote opened directly in a container interrupts its lists;
@@ -1080,6 +1163,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                     if container[depth] == "q" and container[:depth] in contexts:
                         contexts[container[:depth]][0].clear()
         else:
+            interrupt(container, own=False)
             previous = list_levels.get(leading_tabs)
             ordered = bullet_preset.startswith("NUMBERED")
             across_blank = last_list_end != offset
@@ -1142,6 +1226,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 # A list resumed after a nested container keeps its own block.
                 list_block=context_blocks.get(container, list_block),
                 list_depth=leading_tabs, list_group=group,
+                list_epoch=breaks.get(container, 0),
                 literal_tabs=len(content) - len(content.lstrip("\t")),
             ))
             last_list_end = offset
@@ -1169,6 +1254,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         fence_m = _fence_open(line)
         if fence_m and lines[i] == lead + line and line[0] in "`~":
             list_levels.clear()
+            interrupt(path)
             fence = fence_m.group(1)
             code_start = offset
             opened_at = i
@@ -1230,6 +1316,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         ):
             table_rows: list[list[str]] = []
             list_levels.clear()
+            interrupt(container)
             header_cells = _table_cells(header_line)
             table_rows.append(header_cells)
             num_cols = len(header_cells)
@@ -1346,13 +1433,16 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 item_style = named.group(1)
                 item = named.group(2) or ""
             inline_text, inline_styles = _parse_inline(item, references)
+            level = item_level(bullet_m.group(1))
             emit_paragraph(
                 inline_text, inline_styles,
                 {"namedStyleType": item_style},
                 bullet_preset="BULLET_DISC_CIRCLE_SQUARE",
-                leading_tabs=_list_level(bullet_m.group(1)),
+                leading_tabs=min(level, MAX_LIST_LEVEL),
             )
-            note_deep(bullet_m.group(1), item)
+            item_columns[min(level, MAX_LIST_LEVEL)] = _item_columns(
+                bullet_m.group(1), "-", bullet_m.group(2))
+            note_deep(level, item)
 
             i += 1
             continue
@@ -1371,14 +1461,18 @@ def parse_markdown(text: str) -> ParsedMarkdown:
                 item_style = named.group(1)
                 item = named.group(2) or ""
             inline_text, inline_styles = _parse_inline(item, references)
+            level = item_level(numbered_m.group(1))
+            number = line.lstrip().split(".", 1)[0]
             emit_paragraph(
                 inline_text, inline_styles,
                 {"namedStyleType": item_style},
                 bullet_preset="NUMBERED_DECIMAL_ALPHA_ROMAN",
-                leading_tabs=_list_level(numbered_m.group(1)),
-                start_number=int(line.lstrip().split(".", 1)[0]),
+                leading_tabs=min(level, MAX_LIST_LEVEL),
+                start_number=int(number),
             )
-            note_deep(numbered_m.group(1), item)
+            item_columns[min(level, MAX_LIST_LEVEL)] = _item_columns(
+                numbered_m.group(1), number + ".", numbered_m.group(2))
+            note_deep(level, item)
 
             i += 1
             continue
@@ -1398,6 +1492,7 @@ def parse_markdown(text: str) -> ParsedMarkdown:
         removed_tabs=removed_tabs,
         non_default_list_starts=non_default_list_starts,
         deep_list_items=deep_list_items,
+        open_items=open_items_at_end(),
         code_blocks=code_blocks,
         images=images,
     )
@@ -1590,80 +1685,49 @@ def _list_bullet_requests(parsed: ParsedMarkdown, insert_index: int,
 def _native_lists(parsed: ParsedMarkdown, items: list) -> list[list]:
     """Partition list items into native lists, each with one preset.
 
-    A block of items with one preset, whose nested sublists are separated by
-    their parents, is one native list, as Docs' own Tab key makes it. Any
-    other block (mixed bullet types, nested restarts, or numbering that
-    continues across another list or prose) gets one native list per
-    Markdown list, so numbering continues exactly where the Markdown does.
+    A Markdown list is one native list, and so is every list nested in one
+    of its items with the same preset, as Docs' own Tab key and Drive's
+    Markdown import make them: Tab, Shift+Tab and numbering then work across
+    the levels. A nested list of another preset, or a second list at the
+    same depth under the same item (a numbered restart), is a native list of
+    its own. Numbered items that continue a list after another list or
+    prose stay in that list, so numbering continues where the Markdown does;
+    a bullet list after a paragraph, heading, rule, code block, table or
+    quote is a new list.
     """
-    blocks: list[list] = []
+    lists: list[list] = []
+    by_group: dict = {}
+    owner: dict[int, int] = {}
+    used: set = set()
+    open_items: dict = {}  # list block -> stack of open items, outermost first
     for item in items:
-        if blocks and (
-            item.list_block is not None
-            and blocks[-1][-1].list_block == item.list_block
-            or item.list_block is None and blocks[-1][-1].end == item.start
-        ):
-            blocks[-1].append(item)
-        else:
-            blocks.append([item])
-    if not _needs_list_per_group(parsed, items, blocks):
-        return blocks
-    groups: dict = {}
-    for item in items:
+        preset = item.style["bulletPreset"]
+        stack = open_items.setdefault(item.list_block, [])
+        while stack and stack[-1].list_depth >= item.list_depth:
+            stack.pop()
+        parent = stack[-1] if stack else None
+        stack.append(item)
         key = item.list_group
         if key is None:
-            key = (item.list_block, item.list_depth, item.style["bulletPreset"])
-        groups.setdefault(key, []).append(item)
-    return list(groups.values())
-
-
-def _needs_list_per_group(parsed: ParsedMarkdown, items: list, blocks: list) -> bool:
-    if any(len({item.style["bulletPreset"] for item in block}) > 1
-           for block in blocks):
-        return True
-    active = {}
-    previous = {}
-    latest = {}
-    objects = {t.plain_text_offset for t in parsed.tables} | {
-        image.plain_text_offset for image in parsed.images} | {
-        s.start for s in parsed.styles if s.type == "image"}
-    for item in items:
-        for depth in list(active):
-            if depth > item.list_depth:
-                del active[depth]
-        # A list resumed after another list at its depth or shallower (such as
-        # one quoted inside its item) needs its own identity across the gap.
-        resumed = latest.get(item.list_group)
-        if resumed is not None and item.list_group is not None and any(
-                other.list_group != item.list_group
-                and other.list_depth <= item.list_depth
-                and resumed.start < other.start < item.start for other in items):
-            return True
-        latest[item.list_group] = item
-        if not item.style["bulletPreset"].startswith("NUMBERED"):
-            continue
-        prior = active.get(item.list_depth)
-        if prior and prior[0] == item.list_block and prior[1] != item.list_group:
-            return True
-        active[item.list_depth] = (item.list_block, item.list_group)
-        earlier = previous.get(item.list_group)
-        if earlier is not None:
-            between = [s for s in parsed.styles
-                       if earlier.end <= s.start < item.start]
-            interleaved = any(s.type == "bullets" and
-                              s.list_depth <= item.list_depth for s in between)
-            # A table or image between items interrupts the list like prose.
-            prose = any(
-                s.type == "paragraph_style"
-                and (parsed.plain_text[s.start:s.end].strip()
-                     or any(s.start <= o < s.end for o in objects))
-                and not any(b.start == s.start for b in items)
-                for s in between
-            )
-            if interleaved or prose:
-                return True
-        previous[item.list_group] = item
-    return False
+            key = (item.list_block, item.list_depth, preset)
+        elif not preset.startswith("NUMBERED"):
+            # A bullet list continues across blank lines and nested content,
+            # and ends at a block of its own container.
+            key = (key, item.list_epoch)
+        index = by_group.get(key)
+        if index is None:
+            if parent is not None and parent.style["bulletPreset"] == preset:
+                slot = (owner[id(parent)], id(parent), item.list_depth)
+                if slot not in used:
+                    used.add(slot)
+                    index = owner[id(parent)]
+            if index is None:
+                index = len(lists)
+                lists.append([])
+            by_group[key] = index
+        lists[index].append(item)
+        owner[id(item)] = index
+    return lists
 
 
 def _native_list_requests(parsed: ParsedMarkdown, insert_index: int,

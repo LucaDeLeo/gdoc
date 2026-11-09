@@ -238,6 +238,12 @@ def markdown_hazards(
                 )
             if "content" in value and isinstance(value["content"], list):
                 numbering.update(_numbered_list_hazards(value["content"], lists))
+            if isinstance(value.get("body"), dict):
+                # A nesting level Markdown cannot spell reads one level up;
+                # rewriting the read would re-level the item.
+                from gdoc.api.docs import list_level_gaps
+
+                hazards.update(list_level_gaps(value))
             if "sectionBreak" in value:
                 # Tab deletion starts at 1: the initial [0, 1) marker and
                 # its section style survive, even in an otherwise blank tab.

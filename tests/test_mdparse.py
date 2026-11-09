@@ -737,16 +737,6 @@ class TestFencedCode:
         assert result.plain_text == "  indented\n"
 
 
-# #80 (main) parses list nesting relative to the parent item, as CommonMark
-# does; #72 maps every two leading spaces to one level so nesting depth
-# round-trips exactly. These #80 expectations stay pending until that
-# product decision is made; strict, so a decision for #80 flips them loudly.
-_DIALECT = (
-    "#80 CommonMark-relative nesting vs #72 absolute two-space levels: "
-    "pending product decision"
-)
-
-
 class TestNestedLists:
     def test_nested_bullet_gets_leading_tab(self):
         result = parse_markdown("- a\n  - b")
@@ -754,12 +744,6 @@ class TestNestedLists:
         bullets = [s for s in result.styles if s.type == "bullets"]
         assert len(bullets) == 2
 
-    def test_four_space_indent_is_two_levels(self):
-        # #72: two leading spaces per level, so depth round-trips exactly.
-        result = parse_markdown("- a\n    - b")
-        assert result.plain_text == "a\n\t\tb\n"
-
-    @pytest.mark.xfail(strict=True, reason=_DIALECT)
     def test_four_space_indent_is_one_level(self):
         # Nesting is relative to the parent item, as in CommonMark (#67).
         result = parse_markdown("- a\n    - b\n        - c")
@@ -773,7 +757,6 @@ class TestNestedLists:
         result = parse_markdown("1. a\n   1. b")
         assert result.plain_text == "a\n\tb\n"
 
-    @pytest.mark.xfail(strict=True, reason=_DIALECT)
     def test_sub_items_under_two_digit_numbers(self):
         result = parse_markdown("9. a\n   - b\n10. c\n    - d")
         assert result.plain_text == "a\n\tb\nc\n\td\n"
@@ -786,7 +769,6 @@ class TestNestedLists:
         result = parse_markdown("- a\n - b")
         assert result.plain_text == "a\nb\n"
 
-    @pytest.mark.xfail(strict=True, reason=_DIALECT)
     def test_paragraph_ends_the_list_nesting(self):
         result = parse_markdown("- a\n\np\n\n  - b")
         assert result.plain_text == "a\n\np\n\nb\n"

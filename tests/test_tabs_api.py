@@ -393,7 +393,8 @@ class TestGetTabTextListMarkdown:
             _para(_run("two\n"), bullet={"listId": "L2", "nestingLevel": 0}),
         ]}}
         assert get_tab_text(tab, markdown=True) == (
-            "1. one\n  1. a\n  2. b\n2. two\n"
+            # A child is indented to its parent's content column.
+            "1. one\n   1. a\n   2. b\n2. two\n"
         )
 
     def test_lists_ignored_in_plain_mode(self):

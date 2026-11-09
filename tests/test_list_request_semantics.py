@@ -168,7 +168,10 @@ def test_isolated_child_restart_retains_parent_and_continuing_child_ids():
     assert paragraphs[0]['list'] == paragraphs[6]['list']
     assert paragraphs[1]['list'] == paragraphs[3]['list']
     assert paragraphs[4]['list'] == paragraphs[5]['list']
-    assert len({paragraphs[i]['list'] for i in [0, 1, 2, 4]}) == 4
+    # The first numbered child list shares its parent's native list, as
+    # Docs' Tab key makes it; the bullet and the restart are lists of their own.
+    assert paragraphs[0]['list'] == paragraphs[1]['list']
+    assert len({paragraphs[i]['list'] for i in [0, 2, 4]}) == 3
     assert [p['depth'] for p in paragraphs] == [0, 1, 1, 1, 1, 1, 0]
 
 

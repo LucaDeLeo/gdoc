@@ -87,8 +87,12 @@ def test_r3_12_level_change_names_nest_only_when_it_would_work(route):
     _written(route, "1. a\n2. b\n3. c\n")
     code, output, error = route.call("edit", old_text="b", new_text="  1. b")
     assert code != 0 and "gdoc nest" in output + error
-    # A loose list is one native list per item, which nest refuses.
+    # A loose list is one native list, as in CommonMark, so nest works.
     _written(route, "- a\n\n- b\n")
+    code, output, error = route.call("edit", old_text="b", new_text="  - b")
+    assert code != 0 and "gdoc nest" in output + error
+    # nest moves sub-items too, which this edit doesn't ask: write it.
+    _written(route, "- a\n- b\n  - c\n")
     code, output, error = route.call("edit", old_text="b", new_text="  - b")
     assert code != 0 and "gdoc nest" not in output + error
     assert "write" in output + error
