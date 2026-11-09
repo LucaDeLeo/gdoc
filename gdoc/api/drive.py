@@ -198,7 +198,7 @@ def update_doc_content(
     if not tabs:
         raise GdocError("cannot identify document tabs before writing", exit_code=3)
 
-    require_write_version(doc_id, expected_version)
+    require_write_version(doc_id, expected_version, document.get("revisionId", ""))
     result = insert_markdown_into_tab(
         doc_id, tabs[0]["id"], content, replace=True,
         allow_lossy=allow_lossy, document=document, image_aliases=image_aliases,
@@ -230,14 +230,29 @@ def version_after_write(doc_id: str) -> int | None:
         return None
 
 
-def require_write_version(doc_id: str, expected_version: int) -> None:
+def require_write_version(doc_id: str, expected_version: int,
+                          revision_id: str = "") -> None:
+    """Refuse a write when the document changed since *expected_version*.
+
+    Drive's version also counts changes that are not to the content: a new
+    document's moves shortly after creation. A write pinned to the Docs
+    *revision_id* it was prepared from proceeds while that revision is
+    still current.
+    """
     current = get_file_version(doc_id).get("version")
-    if current is None or current != expected_version:
-        raise GdocError(
-            "conflict: document changed while preparing the write; "
-            "content was not uploaded. Read the document again before writing.",
-            exit_code=3,
-        )
+    if current is not None and current == expected_version:
+        return
+    if current is not None and revision_id:
+        from gdoc.api.docs import get_document_structure
+
+        latest = get_document_structure(doc_id, fields="revisionId")
+        if latest.get("revisionId") == revision_id:
+            return
+    raise GdocError(
+        "conflict: document changed while preparing the write; "
+        "content was not uploaded. Read the document again before writing.",
+        exit_code=3,
+    )
 
 
 def get_file_version(doc_id: str) -> dict:

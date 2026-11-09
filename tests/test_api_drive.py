@@ -326,3 +326,36 @@ class TestUpdateDocContent:
 
         with pytest.raises(GdocError, match="Document not found"):
             update_doc_content("abc123", "content")
+
+
+class TestRequireWriteVersion:
+    """Drive's version can move without a content change (a new document's
+    settles after creation); the Docs revision decides."""
+
+    def _run(self, mocker, version, revision):
+        from gdoc.api.drive import require_write_version
+
+        mocker.patch("gdoc.api.drive.get_file_version",
+                     return_value={"version": version})
+        structure = mocker.patch("gdoc.api.docs.get_document_structure",
+                                 return_value={"revisionId": revision})
+        require_write_version("doc", 5, "rev-a")
+        return structure
+
+    def test_same_version_needs_no_revision_read(self, mocker):
+        assert not self._run(mocker, 5, "rev-b").called
+
+    def test_moved_version_with_the_same_revision_proceeds(self, mocker):
+        structure = self._run(mocker, 6, "rev-a")
+        structure.assert_called_once_with("doc", fields="revisionId")
+
+    def test_moved_revision_is_a_conflict(self, mocker):
+        with pytest.raises(GdocError, match="changed while preparing"):
+            self._run(mocker, 6, "rev-b")
+
+    def test_without_a_revision_a_moved_version_is_a_conflict(self, mocker):
+        from gdoc.api.drive import require_write_version
+
+        mocker.patch("gdoc.api.drive.get_file_version", return_value={"version": 6})
+        with pytest.raises(GdocError, match="changed while preparing"):
+            require_write_version("doc", 5)

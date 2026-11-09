@@ -279,22 +279,26 @@ All notable changes to `gdoc` are documented here. This project follows
   lookup. Markdown `export` and `pull` name the tab they read. Sync hooks
   report skips to the agent, identical local replacements leave the file in
   place, and comment anchors no longer match through escapes in code.
-<!-- Merge note (#72 x #80): #72's compiler keeps two leading spaces per
-level, so the relative-nesting sentences below hold only if #80's dialect
-is adopted, and #72 continues numbering across a table, bullet list or
-tab-indented line instead of keeping the lists separate. Edit these two
-entries to match the dialect chosen before release. -->
-- **`write --tab` and `insert` keep nested Markdown lists nested** (#67).
-  Every child item used to land at its parent's level. Levels are now
-  relative to the enclosing item, as in CommonMark, so `- a` then
-  `    - b` is one level deep, as are sub-items under `1.` and `10.`.
-  Bullets nested under numbered items join the numbered list (shown as
-  "a.", as when Tab indents them in the Docs editor). This holds for loose
-  lists too (blank lines between items).
-- **A numbered list that resumes after other paragraphs keeps its
-  numbers.** `10.` below a heading used to restart at 1; it now continues
-  the numbered list above it. Lists separated by a table, a bullet list or
-  a line starting with a tab (such as an indented code line) stay separate.
+- **Nested Markdown lists nest one level at a time, as in CommonMark** (#67).
+  `write --tab` and `insert` used to put every child item at its parent's
+  level. Every write path now nests an item under the item above it when it
+  is indented at least two columns past that item's marker (a tab counts as
+  four columns), so `- a` then `    - b` is one level deep, as are sub-items
+  under `1.` and `10.`, in tight and loose lists alike. A nested list of the
+  same type is part of its parent's native list, as when Tab indents items
+  in the Docs editor, so Tab, Shift+Tab and numbering work across the
+  levels; a nested list of the other type is a list of its own. A bullet
+  list continues across blank lines and ends at a paragraph, heading, rule,
+  code block, table or quote. `cat` indents a child to its parent's content
+  column (two spaces under `- `, three under `1. `), so a list reads back as
+  written. A Docs item more than one level below the item above it has no
+  Markdown spelling: `cat` shows it one level below its parent and names it,
+  and rewriting the tab needs `--allow-lossy`.
+- **A numbered list that resumes after other blocks keeps its numbers.**
+  `10.` below a heading used to restart at 1. A numbered item whose number
+  continues the list above it now joins that list across headings,
+  paragraphs, bullet lists, tables and code blocks, so Docs shows the
+  number the Markdown has; an item numbered `1.` starts a new list.
 - **`cat`, `pull`, `diff`, `push` and revision exports no longer show
   `&nbsp;` for empty paragraphs.** The Drive markdown export renders every
   empty paragraph as a line holding only `&nbsp;`. Agents that read a doc
@@ -306,16 +310,11 @@ entries to match the dialect chosen before release. -->
   backslash-escaped `\&nbsp;` (a paragraph whose text is the literal
   string) and inline `&nbsp;` are left as they are; `--plain` output is
   untouched.
-- **`edit` no longer strips formatting outside the matched text.** Every
-  plain line of the replacement carried an explicit `NORMAL_TEXT`
-  paragraph style, and that request covers the whole paragraph the
-  replacement lands in: setting a named style re-resolves every run's
-  character formatting, so bold and italic elsewhere in the paragraph were
-  lost (links survived) and an edit inside a heading demoted it to normal
-  text. The replacement's first and last paragraphs join existing text, so
-  they no longer get the implicit `NORMAL_TEXT`; wholly new middle
-  paragraphs and explicit block Markdown (`# Heading`, `> quote`) are
-  styled as before.
+- **`edit` no longer strips formatting outside the matched text.** Wording
+  replaced inside a paragraph reset the paragraph's named style, so bold and
+  italic elsewhere in it were lost and an edit inside a heading demoted it to
+  normal text. The paragraph now keeps its style and the formatting of the
+  text around the replacement.
 - **Whole-doc `write`, `push` and the sync hook keep the document's style.**
   They now replace the first tab with native Docs requests instead of
   re-importing Markdown through Drive, whose import reset `documentStyle` (a

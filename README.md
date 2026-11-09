@@ -661,8 +661,14 @@ colors and arbitrary layout are outside the Markdown promise.
 Write the canonical spellings that exports use; other spellings of the same
 structure may read differently:
 
-- Nest a list item two spaces per level under any marker (`- a` then `  - b`;
-  `10. a` then `  - b`). Each further two spaces adds a level. gdoc writes
+- Nest a list item under its parent's content, as CommonMark does: two spaces
+  under `- ` (`- a` then `  - b`), three under `1. `, four under `10. `. An
+  item indented at least two columns past the marker above it is that item's
+  child, one level deeper, so four-space indents also nest one level; a tab
+  counts as four columns. A same-type nested list is part of its parent's
+  native list. A Docs item more than one level below the item above it has
+  no Markdown spelling: `cat` reads it one level below its parent and names
+  it, and rewriting the tab needs `--allow-lossy`. gdoc writes
   nesting as native list levels, and a Docs list's
   [`nestingLevels`](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents#listproperties)
   hold nine. gdoc has no representation for deeper nesting (such as extra

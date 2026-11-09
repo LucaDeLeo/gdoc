@@ -542,14 +542,29 @@ def test_native_collapse_checks_version_and_pins_each_batch(api, drive_api):
 
 
 @pytest.mark.parametrize("current", [11, None])
-def test_drive_collapse_refuses_changed_or_missing_version(drive_api, current):
+def test_drive_collapse_refuses_changed_or_missing_version(mocker, drive_api, current):
     files, version, read = drive_api
     multi_tab(read)
     version.return_value = {"version": current}
+    structure = mocker.patch("gdoc.api.docs.get_document_structure",
+                             return_value={"revisionId": "r2"})
     with pytest.raises(GdocError, match="content was not uploaded") as caught:
         update_doc_content("synthetic", "New body", expected_version=10)
     assert caught.value.exit_code == 3
+    assert structure.called == (current is not None)
     files.update.return_value.execute.assert_not_called()
+
+
+def test_version_moved_without_a_revision_change_still_writes(mocker, api, drive_api):
+    """A new document's Drive version moves after creation with no content
+    change; the write is pinned to the unchanged revision and proceeds."""
+    files, version, read = drive_api
+    version.side_effect = [{"version": 11}, {"version": 12}]
+    mocker.patch("gdoc.api.docs.get_document_structure",
+                 return_value={"revisionId": "r1"})
+    assert update_doc_content("synthetic", "New body", expected_version=10) == 12
+    assert batches(api)[0]["writeControl"] == {"requiredRevisionId": "r1"}
+    files.update.assert_not_called()
 
 
 def test_native_collapse_lost_response_is_uncertain_and_not_retried(api, drive_api):
