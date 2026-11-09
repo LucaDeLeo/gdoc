@@ -83,6 +83,22 @@ class TestExportDoc:
         result = export_doc("abc123")
         assert result == "# Hello"
 
+    def test_export_markdown_collapses_nbsp_lines(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().export_media().execute.return_value = (
+            b"# Hello\n\n&nbsp;\n\nBody\n"
+        )
+
+        assert export_doc("abc123") == "# Hello\n\n\n\nBody\n"
+
+    def test_export_plain_text_keeps_nbsp_lines(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().export_media().execute.return_value = b"a\n&nbsp;\nb"
+
+        assert export_doc("abc123", mime_type="text/plain") == "a\n&nbsp;\nb"
+
     def test_export_plain_text(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
@@ -243,9 +259,11 @@ class TestGetFileInfo:
             get_file_info("abc")
 
 
+@patch("gdoc.api.docs.restore_document_style")
+@patch("gdoc.api.docs.get_document_style", return_value={})
 @patch("gdoc.api.drive.get_drive_service")
 class TestUpdateDocContent:
-    def test_success(self, mock_get_service):
+    def test_success(self, mock_get_service, _read, _restore):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         mock_service.files().update().execute.return_value = {
@@ -255,7 +273,7 @@ class TestUpdateDocContent:
         result = update_doc_content("abc123", "# Hello")
         assert result == 42
 
-    def test_request_params(self, mock_get_service):
+    def test_request_params(self, mock_get_service, _read, _restore):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         mock_service.files().update().execute.return_value = {
@@ -271,7 +289,7 @@ class TestUpdateDocContent:
             "application/vnd.google-apps.document"
         )
 
-    def test_http_error_401(self, mock_get_service):
+    def test_http_error_401(self, mock_get_service, _read, _restore):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         mock_service.files().update().execute.side_effect = (
@@ -281,7 +299,7 @@ class TestUpdateDocContent:
         with pytest.raises(AuthError, match="Authentication expired"):
             update_doc_content("abc123", "content")
 
-    def test_http_error_403(self, mock_get_service):
+    def test_http_error_403(self, mock_get_service, _read, _restore):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         mock_service.files().update().execute.side_effect = (
@@ -291,7 +309,7 @@ class TestUpdateDocContent:
         with pytest.raises(GdocError, match="Permission denied"):
             update_doc_content("abc123", "content")
 
-    def test_http_error_404(self, mock_get_service):
+    def test_http_error_404(self, mock_get_service, _read, _restore):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         mock_service.files().update().execute.side_effect = (

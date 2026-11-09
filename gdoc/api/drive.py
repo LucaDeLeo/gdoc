@@ -3,6 +3,7 @@
 from googleapiclient.errors import HttpError
 
 from gdoc.api import get_drive_service
+from gdoc.mdimport import collapse_nbsp_lines
 from gdoc.util import AuthError, GdocError
 
 
@@ -41,9 +42,14 @@ def _escape_query_value(value: str) -> str:
 def export_doc(doc_id: str, mime_type: str = "text/markdown") -> str:
     """Export a Google Docs document as the given MIME type.
 
-    Returns the decoded UTF-8 content string.
+    Returns the decoded UTF-8 content string. Markdown exports have the
+    export's ``&nbsp;``-only lines (its rendering of empty paragraphs)
+    collapsed to empty lines, so the text round-trips through ``write``.
     """
-    return export_doc_bytes(doc_id, mime_type).decode("utf-8")
+    content = export_doc_bytes(doc_id, mime_type).decode("utf-8")
+    if mime_type == "text/markdown":
+        content = collapse_nbsp_lines(content)
+    return content
 
 
 def export_doc_bytes(doc_id: str, mime_type: str) -> bytes:
@@ -163,18 +169,28 @@ def update_doc_content(doc_id: str, content: str) -> int:
     """Overwrite a Google Doc's content with markdown.
 
     Uploads markdown content via files.update with media, triggering
-    automatic conversion to Google Docs format.
+    automatic conversion to Google Docs format. That import also resets the
+    document's style (pageless becomes paged, and margins, page size and
+    background go to their defaults), so the style is read first and restored
+    afterwards.
 
     Args:
         doc_id: The document ID.
         content: Markdown content string to upload.
 
     Returns:
-        The new document version (int) from the API response.
+        The new document version (int) from the upload response. A file stamp
+        relies on it being that response's and not a later read. Drive doesn't
+        count a style restore in this version straight away.
     """
     import io
 
     from googleapiclient.http import MediaIoBaseUpload
+
+    from gdoc.api.docs import get_document_style
+
+    # Nothing has been written yet, so a failed read safely aborts the write.
+    style = get_document_style(doc_id)
 
     try:
         service = get_drive_service()
@@ -198,9 +214,36 @@ def update_doc_content(doc_id: str, content: str) -> int:
             )
             .execute()
         )
-        return int(result["version"])
+        version = int(result["version"])
     except HttpError as e:
         _translate_http_error(e, doc_id)
+    _restore_style_after_import(doc_id, style)
+    return version
+
+
+def _restore_style_after_import(doc_id: str, style: dict) -> None:
+    """Put back the style a document had before an import.
+
+    Best-effort: the content is already written, so a failure here must not
+    stop the caller from recording that write. The warning carries the old
+    style, because the next write would otherwise take the reset style as the
+    one to keep. A style change made during the import is overwritten, as a
+    content edit made then would be.
+    """
+    import json
+    import sys
+
+    from gdoc.api.docs import restore_document_style
+
+    try:
+        restore_document_style(doc_id, style)
+    except Exception as e:
+        print(
+            f"WARN: content written, but the document style could not be "
+            f"restored: {e}. Reset it under File > Page setup. It was: "
+            f"{json.dumps(style)}",
+            file=sys.stderr,
+        )
 
 
 def get_file_version(doc_id: str) -> dict:

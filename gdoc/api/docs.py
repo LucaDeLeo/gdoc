@@ -194,6 +194,17 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
         pageless: If True, set PAGELESS; otherwise PAGES (paged).
     """
     mode = "PAGELESS" if pageless else "PAGES"
+    _update_document_style(
+        doc_id, {"documentFormat": {"documentMode": mode}},
+        "documentFormat.documentMode",
+    )
+
+
+def _update_document_style(doc_id: str, style: dict, fields: str) -> None:
+    """Apply an updateDocumentStyle, retrying transient failures.
+
+    Retrying is safe because setting a style is idempotent.
+    """
     try:
         service = get_docs_service()
         service.documents().batchUpdate(
@@ -202,17 +213,87 @@ def set_page_mode(doc_id: str, pageless: bool) -> None:
                 "requests": [
                     {
                         "updateDocumentStyle": {
-                            "documentStyle": {
-                                "documentFormat": {"documentMode": mode},
-                            },
-                            "fields": "documentFormat.documentMode",
+                            "documentStyle": style,
+                            "fields": fields,
                         }
                     }
                 ]
             },
-        ).execute()
+        ).execute(num_retries=_STYLE_RETRIES)
     except HttpError as e:
         _translate_http_error(e, doc_id)
+
+
+# documentStyle fields updateDocumentStyle can write. The others, such as
+# defaultHeaderId and useCustomHeaderFooterMargins, are read-only.
+_WRITABLE_STYLE_FIELDS = (
+    "documentFormat",
+    "background",
+    "pageSize",
+    "flipPageOrientation",
+    "marginTop",
+    "marginBottom",
+    "marginLeft",
+    "marginRight",
+    "marginHeader",
+    "marginFooter",
+    "pageNumberStart",
+    "useFirstPageHeaderFooter",
+    "useEvenPageHeaderFooter",
+)
+_WHITE = {"rgbColor": {"red": 1, "green": 1, "blue": 1}}
+_STYLE_RETRIES = 2
+
+
+def get_document_style(doc_id: str) -> dict:
+    """Return a document's documentStyle (page mode, margins, page size...)."""
+    try:
+        service = get_docs_service()
+        document = (
+            service.documents()
+            .get(documentId=doc_id, fields="documentStyle")
+            .execute(num_retries=_STYLE_RETRIES)
+        )
+        return document.get("documentStyle", {})
+    except HttpError as e:
+        _translate_http_error(e, doc_id)
+
+
+def _comparable_style_value(name: str, value):
+    """A style value for comparing, with an unset and a white background equal.
+
+    A blank doc reports white and a markdown import reports unset, which look
+    the same on screen. Without this, every whole-doc write to a default doc
+    would need a style write.
+    """
+    if name == "background":
+        color = (value or {}).get("color", {}).get("color")
+        return None if color == _WHITE else color
+    return value
+
+
+def restore_document_style(doc_id: str, style: dict) -> None:
+    """Write back the fields of *style* that the document no longer has.
+
+    Args:
+        doc_id: The document ID.
+        style: A documentStyle from get_document_style.
+
+    """
+    current = get_document_style(doc_id)
+    changed = [
+        name for name in _WRITABLE_STYLE_FIELDS
+        if _comparable_style_value(name, style.get(name))
+        != _comparable_style_value(name, current.get(name))
+    ]
+    if not changed:
+        return
+    # A masked field absent from the style resets to its default.
+    _update_document_style(
+        doc_id,
+        {name: style[name] for name in changed if name in style},
+        ",".join(changed),
+    )
 
 
 def _extract_paragraphs_text(content: list[dict]) -> str:
@@ -1498,6 +1579,30 @@ def _strip_trailing_newline_unless_hr(parsed) -> None:
                 s.end = old_len - 1
 
 
+def _keep_boundary_paragraph_styles(parsed) -> None:
+    """Drop the implicit NORMAL_TEXT from paragraphs that join existing text.
+
+    A replacement's first paragraph merges into the paragraph holding the
+    start of the match, and its last into the one holding the end. A
+    paragraph-style request covers the whole paragraph, and setting
+    ``namedStyleType`` re-resolves the character formatting of every run in
+    it — so the bare NORMAL_TEXT that plain lines carry would strip bold and
+    italic from text outside the match and demote a heading. Explicit block
+    Markdown (headings, blockquotes, rules) keeps its paragraph style.
+    Wholly new middle paragraphs keep NORMAL_TEXT too. Call after
+    ``_strip_trailing_newline_unless_hr``. Mutates ``parsed`` in place.
+    """
+    end = len(parsed.plain_text)
+    parsed.styles = [
+        s for s in parsed.styles
+        if not (
+            s.type == "paragraph_style"
+            and s.style == {"namedStyleType": "NORMAL_TEXT"}
+            and (s.start == 0 or s.end == end)
+        )
+    ]
+
+
 def insert_markdown_into_tab(
     doc_id: str,
     tab_id: str,
@@ -1670,6 +1775,7 @@ def replace_formatted(
     _reject_overlapping_matches(matches)
 
     _strip_trailing_newline_unless_hr(parsed)
+    _keep_boundary_paragraph_styles(parsed)
 
     sorted_matches, all_requests = _build_replacement_requests(
         parsed, matches, tab_id=tab_id,
