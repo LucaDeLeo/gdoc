@@ -111,6 +111,12 @@ class TestCatJson:
 
 
 class TestCatComments:
+
+    @pytest.fixture(autouse=True)
+    def _export_bytes(self, mocker):
+        # Main's #71 collapses `&nbsp;` lines in Markdown exports, so the
+        # mocked Drive export must hand back real bytes, not a MagicMock.
+        mocker.patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Hello\n")
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
     @patch("gdoc.api.comments.get_drive_service")
@@ -250,6 +256,12 @@ class TestCatPlainCommentsConflict:
 
 
 class TestCatAwareness:
+
+    @pytest.fixture(autouse=True)
+    def _export_bytes(self, mocker):
+        # Main's #71 collapses `&nbsp;` lines in Markdown exports, so the
+        # mocked Drive export must hand back real bytes, not a MagicMock.
+        mocker.patch("gdoc.api.drive.export_doc_bytes", return_value=b"# Hello\n")
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight")
     @patch("gdoc.api.drive.get_drive_service")

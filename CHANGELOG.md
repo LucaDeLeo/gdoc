@@ -13,6 +13,46 @@ All notable changes to `gdoc` are documented here. This project follows
 - `write` and `push` refuse identified rich-content loss before mutation.
   `--allow-lossy` permits that loss independently of revision conflicts and
   explicit sibling-tab collapse. Supported Markdown needs no loss override.
+- **`gdoc rename-tab DOC TAB TITLE`.** Retitles an existing tab, named by
+  its current title or ID, via the Docs API's
+  `updateDocumentTabProperties` request; content and position are
+  untouched. Output matches `add-tab` (tab ID, new title and a `?tab=`
+  URL; `--json`/`--plain` also report the old title). The main use is
+  renaming the default "Tab 1" of a doc made with `gdoc new`, which was
+  otherwise only possible in the Docs UI. Exposed over MCP as
+  `gdoc_rename_tab` (a write tool).
+- **Native comment and suggestion threads (Docs API developer preview).**
+  Three new commands, `suggestions`, `suggestion` and `edit-comment`, plus
+  native options on `comment`, `reply` and `delete-comment`:
+  - `suggestions DOC [SUGGESTION_ID] [--all]` lists Google's suggestion
+    threads, or shows one, with the tab and UTF-16 range(s) each touches
+    (derived from the `SUGGESTIONS_INLINE` structure, kept apart from the
+    raw thread in `--json`). The listing covers every tab; like
+    `comments`, it notes on stderr that it ignores a URL's `?tab=`.
+  - `suggestion DOC ID --accept | --reject | --delete [--force]` decides
+    one suggestion. Accept is always pinned to `requiredRevisionId`;
+    reject/delete are pinned when the read returned a revision.
+  - `comment --quote TEXT --assign EMAIL` creates an assigned anchored
+    comment; `reply --reassign EMAIL` hands an assigned thread on and
+    refuses (exit 3) before writing when the head post has no assignee.
+  - `reply`, `edit-comment DOC THREAD_ID POST_ID TEXT` and
+    `delete-comment DOC THREAD_ID POST_ID` act on suggestion threads when
+    `THREAD_ID` starts with `suggest.`. `delete-comment` without `POST_ID`
+    still deletes the whole comment through Drive.
+
+  Threads are read with `documents.get?commentsViewMode=
+  COMMENTS_VIEW_MODE_INCLUDED` over the authorized transport (the public
+  Discovery document doesn't list the parameter). Every write requires
+  `commentUpdateState: ALL_SAVED`, then reads the thread back and prints
+  `OK` only when it shows the requested state; when that read fails, the
+  error says the write may have landed. Pre-write refusals cover unknown
+  or already-decided suggestions, a suggestion's generated head post,
+  action/assignment replies and other users' posts. There is no Drive
+  fallback: a project without preview access gets an explicit error and
+  no change. Ordinary comment reads and writes and the awareness system
+  stay on Drive. Over MCP, `suggestions` is read-only, `suggestion` and
+  `edit-comment` are writes, and `suggestion --delete` and
+  `delete-comment` require `force: true`.
 
 ### Changed
 
@@ -125,6 +165,12 @@ All notable changes to `gdoc` are documented here. This project follows
   `diff`, `comments`, `comment` and `images` still note and ignore it.
 - **`--tab` matches a tab ID before a title**, and a title shared by two tabs
   is refused as ambiguous. A URL's tab is still matched by ID only.
+- **`gdoc mcp` warms up at startup.** While the client initializes, a
+  background thread imports the Google client, refreshes the access token,
+  builds the Drive and Docs services and opens the Drive connection. The
+  first tool call of a session waits for it instead of repeating that work;
+  on a hosted server this saves about 0.5 s on that call. The warm-up is
+  skipped when the account has no token and never reports errors itself.
 
 ### Fixed
 
@@ -233,6 +279,43 @@ All notable changes to `gdoc` are documented here. This project follows
   lookup. Markdown `export` and `pull` name the tab they read. Sync hooks
   report skips to the agent, identical local replacements leave the file in
   place, and comment anchors no longer match through escapes in code.
+<!-- Merge note (#72 x #80): #72's compiler keeps two leading spaces per
+level, so the relative-nesting sentences below hold only if #80's dialect
+is adopted, and #72 continues numbering across a table, bullet list or
+tab-indented line instead of keeping the lists separate. Edit these two
+entries to match the dialect chosen before release. -->
+- **`write --tab` and `insert` keep nested Markdown lists nested** (#67).
+  Every child item used to land at its parent's level. Levels are now
+  relative to the enclosing item, as in CommonMark, so `- a` then
+  `    - b` is one level deep, as are sub-items under `1.` and `10.`.
+  Bullets nested under numbered items join the numbered list (shown as
+  "a.", as when Tab indents them in the Docs editor). This holds for loose
+  lists too (blank lines between items).
+- **A numbered list that resumes after other paragraphs keeps its
+  numbers.** `10.` below a heading used to restart at 1; it now continues
+  the numbered list above it. Lists separated by a table, a bullet list or
+  a line starting with a tab (such as an indented code line) stay separate.
+- **`cat`, `pull`, `diff`, `push` and revision exports no longer show
+  `&nbsp;` for empty paragraphs.** The Drive markdown export renders every
+  empty paragraph as a line holding only `&nbsp;`. Agents that read a doc
+  this way and echo the convention back through `write`/`edit` inserted the
+  six characters as literal text, because the Markdown importer has no
+  HTML entity decoding. Markdown exports now collapse those lines to empty
+  lines at the API boundary (`export_doc`, `export_revision`), so every
+  command sees the same text and a read/write round-trip is clean. A
+  backslash-escaped `\&nbsp;` (a paragraph whose text is the literal
+  string) and inline `&nbsp;` are left as they are; `--plain` output is
+  untouched.
+- **`edit` no longer strips formatting outside the matched text.** Every
+  plain line of the replacement carried an explicit `NORMAL_TEXT`
+  paragraph style, and that request covers the whole paragraph the
+  replacement lands in: setting a named style re-resolves every run's
+  character formatting, so bold and italic elsewhere in the paragraph were
+  lost (links survived) and an edit inside a heading demoted it to normal
+  text. The replacement's first and last paragraphs join existing text, so
+  they no longer get the implicit `NORMAL_TEXT`; wholly new middle
+  paragraphs and explicit block Markdown (`# Heading`, `> quote`) are
+  styled as before.
 - **Whole-doc `write`, `push` and the sync hook keep the document's style.**
   They now replace the first tab with native Docs requests instead of
   re-importing Markdown through Drive, whose import reset `documentStyle` (a

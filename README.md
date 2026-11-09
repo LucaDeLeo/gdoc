@@ -206,6 +206,8 @@ gdoc cat 1aBcDeFg...
 | `write DOC FILE` | Replace the first tab from Markdown; `--tab NAME` selects another tab and siblings survive |
 | `cells SHEET RANGE` | Write values into a spreadsheet range (`-v VALUE` per cell, `--file rows.csv`, `--stdin` for TSV; `--append` adds rows, `--user-entered` parses formulas/dates) |
 | `new TITLE` | Create a blank document (`--folder` to specify location, `--file` to import markdown with images) |
+| `add-tab DOC TITLE` | Add a tab to a document |
+| `rename-tab DOC TAB TITLE` | Rename a tab, given its current title or ID |
 | `insert-image DOC IMG` | Insert a local image or public URL (`--after TEXT`, `--index N`, or `--end`; `--tab` for multi-tab docs; `--width`/`--height` in points) |
 | `replace-image DOC ID IMG` | Swap an image's content in place, keeping its size (IDs from `gdoc images`) |
 | `cp DOC TITLE` | Duplicate a document |
@@ -227,12 +229,40 @@ gdoc cat 1aBcDeFg...
 | Command | Description |
 |---------|-------------|
 | `comments DOC` | List all open comments (`--all` to include resolved) |
-| `comment DOC TEXT` | Add a comment (`--quote` to anchor it to text — see below) |
+| `comment DOC TEXT` | Add a comment (`--quote` to anchor it to text — see below; `--assign EMAIL` to assign it, preview) |
 | `comment-info DOC ID` | Get a single comment with full detail |
-| `reply DOC COMMENT_ID TEXT` | Reply to a comment |
+| `reply DOC THREAD_ID TEXT` | Reply to a comment, or to a suggestion thread when `THREAD_ID` is a suggestion ID (preview); `--reassign EMAIL` hands an assigned comment on (preview) |
 | `resolve DOC COMMENT_ID` | Resolve a comment (`--message` to include a note) |
 | `reopen DOC COMMENT_ID` | Reopen a resolved comment |
-| `delete-comment DOC ID` | Delete a comment (`--force` to skip confirmation) |
+| `delete-comment DOC THREAD_ID [POST_ID]` | Delete a comment; with `POST_ID`, delete one reply you wrote on a comment or suggestion thread (preview). `--force` skips confirmation |
+| `edit-comment DOC THREAD_ID POST_ID TEXT` | Edit a post you wrote on a comment or suggestion thread (preview) |
+
+### Suggestions (Docs API developer preview)
+
+| Command | Description |
+|---------|-------------|
+| `suggestions DOC [SUGGESTION_ID]` | List open suggestion threads with author, summary, and the tab/UTF-16 range(s) each touches (`--all` to include accepted/rejected); with an ID, show that thread in full (`--json` returns the raw thread plus derived `locations`) |
+| `suggestion DOC SUGGESTION_ID --accept` | Accept a suggested edit (requires edit access) |
+| `suggestion DOC SUGGESTION_ID --reject` | Reject a suggested edit (edit access, or the suggestion's author) |
+| `suggestion DOC SUGGESTION_ID --delete` | Delete a suggestion thread you authored (`--force` to skip confirmation) |
+
+These read Google's native suggestion threads (`documents.get` with
+`commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED`) and send one
+`acceptSuggestion`/`rejectSuggestion`/`deleteSuggestion` request per command.
+`--accept` is always pinned to the revision that was just read (it needs edit
+access, which is also what Google requires for a `revisionId`); `--reject` and
+`--delete` are pinned whenever the read returned a revision and are sent
+unpinned only when it did not (a suggestion's author may be a commenter). Unlike comments there is **no Drive fallback**: the OAuth client's Cloud project must be enrolled in the
+[Workspace Developer Preview Program](https://developers.google.com/workspace/preview),
+otherwise the commands fail with an explicit "not enrolled" error (exit 1) and
+nothing is changed. A decision is only reported as `OK` after a read-back shows
+the thread in the requested state; accepted and rejected threads stay listed
+under `--all` with that status, deleted ones disappear. Suggestion threads carry
+no range of their own, so the `@Tab start-end kind` lines (and `locations` in
+`--json`) are derived from the `SUGGESTIONS_INLINE` document structure keyed by
+suggestion ID — they are kept separate from the raw thread. Header, footer,
+and footnote ranges are labelled with their segment ID (their indexes restart
+at 0); marks with no range at all (document/named styles) print `(no range)`.
 
 `comment --quote "some doc text"` requires a unique match across all tabs
 (including child tabs), searching the body, headers, footers and footnotes.
@@ -266,6 +296,39 @@ before retrying, since the first write may have saved. Comment creation never
 replays a wire request after a lost response and never falls back in that
 case. Other API errors exit **1**, authentication errors **2**. Errors retain
 the usual `ERR:` stderr format even with `--json`.
+
+#### Native thread operations (developer preview)
+
+Ordinary comment reads and writes stay on the Drive API. A few operations
+only exist in the Docs API's native comment threads, and the commands marked
+*preview* above use them — there is no Drive fallback, so they require an
+enrolled Cloud project and fail with a message naming the reason otherwise:
+
+- `comment DOC TEXT --quote "doc text" --assign EMAIL` creates an anchored
+  comment assigned to `EMAIL` (`insertComment.assigneeEmailAddress`). It
+  requires `--quote` and never degrades to an unassigned comment.
+- `reply DOC COMMENT_ID TEXT --reassign EMAIL` hands an **already assigned**
+  thread to someone else. The thread is read first and the command stops
+  (exit 3) unless its head post carries an assignee — Google rejects
+  reassignment of an unassigned thread — so start with `comment --assign`.
+- `reply`, `edit-comment` and `delete-comment` act on a suggestion thread
+  when `THREAD_ID` is a suggestion ID. Google's suggestion IDs start with
+  `suggest.` (as `gdoc suggestions` prints them); comment IDs never contain
+  a dot.
+- `edit-comment` changes the text of a post you wrote; `delete-comment DOC
+  THREAD_ID POST_ID` removes one reply you wrote. `POST_ID` is a reply's
+  `id` in `comment-info --json` (native post IDs and Drive reply IDs are the
+  same; a comment's head post ID equals its comment ID), or the `[ID]` on
+  each reply in `suggestions DOC SUGGESTION_ID --verbose`. A suggestion's
+  generated head post cannot be edited,
+  replies that carry a resolve/reopen action or an assignment cannot be
+  deleted, and an already-deleted post is refused — all before any write.
+
+Every native write requires `commentUpdateState: ALL_SAVED` and is verified
+by reading the thread back (an assignment must appear on the thread, not
+just in the response); `--json` reports `postId` (comment-thread replies also
+keep `replyId`, the same value) plus `assignee` for `--assign`/`--reassign`. The awareness system is unchanged: comment threads
+keep their Drive IDs, and suggestion-thread posts are not tracked as comments.
 
 ### Other
 

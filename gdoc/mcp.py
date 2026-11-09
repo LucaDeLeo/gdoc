@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 from typing import Any
 
 from gdoc import __version__
@@ -57,6 +58,7 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "revisions": True,
     "comments": True,
     "comment-info": True,
+    "suggestions": True,
     "diff": True,
     "images": True,
     "structure": True,
@@ -72,11 +74,14 @@ EXPOSED_COMMANDS: dict[str, bool] = {
     "write": False,
     "cells": False,
     "add-tab": False,
+    "rename-tab": False,
     "comment": False,
     "reply": False,
     "resolve": False,
     "reopen": False,
     "delete-comment": False,
+    "suggestion": False,
+    "edit-comment": False,
     "new": False,
     "cp": False,
     "mkdir": False,
@@ -146,6 +151,11 @@ _EXTRA_REQUIRED: dict[str, tuple[str, ...]] = {
     "suggest": ("old_text", "new_text"),
 }
 
+# Commands whose `force` must be true over MCP (see _EXTRA_REQUIRED).
+_FORCE_REQUIRED = frozenset(
+    cmd for cmd, params in _EXTRA_REQUIRED.items() if "force" in params
+)
+
 # Cross-parameter requirements JSON Schema could only express with a
 # root-level oneOf/anyOf, which several MCP clients reject or ignore.
 # Stated in the tool description instead; the CLI repeats the same
@@ -161,6 +171,16 @@ _DESCRIPTION_NOTES: dict[str, str] = {
         "Needs `old_text` and `new_text`. The replacement lands as a "
         "suggested edit for review, not a direct change; inline markdown "
         "only."
+    ),
+    "comment": "`assign` requires `quote` (Docs API preview, no Drive fallback).",
+    "reply": (
+        "A suggestion ID (`suggest.xxx`) replies on a suggestion thread. "
+        "`reassign` applies to comment threads only and needs a thread "
+        "that already has an assignee (Docs API preview)."
+    ),
+    "suggestion": (
+        "Exactly one of `accept`, `reject`, `delete` must be true. "
+        "`delete` also requires `force: true`."
     ),
 }
 
@@ -251,6 +271,10 @@ def _schema_for(command: str, parser: argparse.ArgumentParser) -> dict[str, Any]
             prop["enum"] = [c for c in prop["enum"] if c not in removed]
         if action.dest in extra_required and prop.get("type") == "array":
             prop["minItems"] = 1
+        if action.dest == "force" and command in _FORCE_REQUIRED:
+            # `required` alone would admit `force: false`, which always
+            # fails at runtime; say in the schema that only true is valid.
+            prop["const"] = True
         properties[action.dest] = prop
 
         is_positional = not action.option_strings
@@ -481,7 +505,10 @@ def call_command(
 
     # Schema `required` cannot force a boolean to be true, so guard here:
     # with stdin detached, confirm_destructive() can never prompt.
-    if command == "delete-comment" and not arguments.get("force"):
+    if (
+        command in _FORCE_REQUIRED
+        or (command == "suggestion" and arguments.get("delete"))
+    ) and not arguments.get("force"):
         raise ValueError(
             "`force: true` is required: deletion cannot prompt for "
             "confirmation over MCP"
@@ -646,6 +673,54 @@ class MCPServer:
         self.tools = build_tools(read_only=read_only, allow=allow)
         self.account = account
         self.protocol_version = DEFAULT_PROTOCOL_VERSION
+        self._warm_up_thread: threading.Thread | None = None
+
+    # -- warm-up ---------------------------------------------------------
+
+    def start_warm_up(self) -> None:
+        """Pay the first call's fixed costs while the client is still
+        initializing: importing the Google client, refreshing the access
+        token, building the Drive and Docs services, and opening the Drive
+        connection. Measured on a hosted server, these add about 0.5 s to
+        the first tool call of every session.
+        """
+        self._warm_up_thread = threading.Thread(
+            target=self._warm_up, name="gdoc-mcp-warm-up", daemon=True
+        )
+        self._warm_up_thread.start()
+
+    def _warm_up(self) -> None:
+        from gdoc.util import account_context, resolve_account, token_path_for
+
+        try:
+            account = self.account or resolve_account()
+            if not token_path_for(account).exists():
+                return  # nothing to warm; the first call reports the auth error
+            with account_context(account):
+                from gdoc.api import get_drive_service
+                from gdoc.api.docs import get_docs_service
+                from gdoc.auth import get_credentials
+
+                # Refresh before building services: a refresh rewrites the
+                # token file, which changes the services' cache key.
+                get_credentials(account)
+                get_docs_service()
+                get_drive_service().about().get(fields="user(emailAddress)").execute()
+        except Exception:
+            pass  # best effort; the first real call surfaces any failure
+
+    def _wait_for_warm_up(self) -> None:
+        # The Google HTTP client is not thread-safe, so a tool call must not
+        # share a service object with a warm-up that is still running. Wait
+        # until the thread has ended, with no timeout of our own: returning
+        # early would let the call reuse the cached service the warm-up is
+        # still using. The warm-up cannot hang, because every request it
+        # makes has a client timeout (120 s for the token refresh, 60 s for
+        # the Drive call).
+        thread = self._warm_up_thread
+        if thread is not None:
+            thread.join()
+            self._warm_up_thread = None
 
     # -- request handlers ------------------------------------------------
 
@@ -681,6 +756,7 @@ class MCPServer:
             arguments = {**arguments, "account": self.account}
 
         command = _command_name(name)
+        self._wait_for_warm_up()
         try:
             stdout, stderr, code = call_command(command, arguments)
         except Exception as e:  # surface as a tool error, never kill the server

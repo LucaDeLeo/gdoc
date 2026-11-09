@@ -204,6 +204,73 @@ class TestReplaceFormatted:
         assert "insertText" in req_types
         assert "updateTextStyle" in req_types
 
+    # #79's intent, checked on the document the requests produce. The CLI
+    # always passes the live body, and with it #72's native edit path keeps
+    # the boundary paragraphs' styles without a separate filter.
+    @staticmethod
+    def _native_edit(blocks, find, markdown, bold=None):
+        from native_model import NativeDoc, NativeService, styles
+
+        from gdoc.api.docs import find_text_in_document
+
+        doc = NativeDoc(*blocks)
+        for unit in doc.units[slice(*bold)] if bold else []:
+            unit.ts["bold"] = True
+        service = NativeService(doc)
+        snapshot = service.snapshot()
+        body = snapshot["tabs"][0]["documentTab"]["body"]
+        match = {**find_text_in_document(None, find, body=body)[0], "tabId": "t.0"}
+        with patch("gdoc.api.docs.get_docs_service", return_value=service):
+            replace_formatted("d1", [match], markdown, snapshot["revisionId"],
+                              "t.0", body=body)
+        kinds = [next(iter(r)) for batch in service.batches for r in batch]
+        bolded = "".join(u.ch for u in doc.units if u.ts.get("bold"))
+        return styles(doc), kinds, bolded
+
+    def test_inline_replacement_leaves_paragraph_style_alone(self):
+        """A NORMAL_TEXT reset covers the whole paragraph and re-resolves its
+        runs, stripping bold outside the match and demoting headings — so an
+        inline replacement must not send one."""
+        paragraphs, kinds, bolded = self._native_edit(
+            [("p", "Hello world and more")], "world",
+            "has a [cap](https://x.y)", bold=(1, 6),
+        )
+        assert "updateParagraphStyle" not in kinds
+        assert "updateTextStyle" in kinds
+        assert paragraphs == [("Hello has a cap and more", "NORMAL_TEXT", None)]
+        assert bolded == "Hello"
+        paragraphs, kinds, _ = self._native_edit(
+            [("p", "Big Title here", "HEADING_1"), ("p", "body")], "Title", "Name",
+        )
+        assert "updateParagraphStyle" not in kinds
+        assert paragraphs[0] == ("Big Name here", "HEADING_1", None)
+
+    def test_multi_paragraph_replacement_inside_a_paragraph_is_refused(self):
+        """#79 kept the joined paragraphs' styles; #72 refuses a replacement
+        that changes the paragraph count of a partial match before sending
+        anything, so no existing paragraph can be restyled."""
+        from native_model import NativeDoc, NativeService
+
+        from gdoc.api.docs import find_text_in_document
+
+        service = NativeService(NativeDoc(("p", "Big Title here", "HEADING_1")))
+        snapshot = service.snapshot()
+        body = snapshot["tabs"][0]["documentTab"]["body"]
+        match = {**find_text_in_document(None, "Title", body=body)[0], "tabId": "t.0"}
+        with patch("gdoc.api.docs.get_docs_service", return_value=service), \
+                pytest.raises(GdocError, match="paragraph count mismatch"):
+            replace_formatted("d1", [match], "first\nmiddle\nlast",
+                              snapshot["revisionId"], "t.0", body=body)
+        assert service.batches == []
+
+    def test_explicit_heading_replacement_still_styled(self):
+        paragraphs, kinds, _ = self._native_edit(
+            [("p", "Intro"), ("p", "after")], "Intro", "## Title",
+        )
+        assert "updateParagraphStyle" in kinds
+        assert paragraphs == [("Title", "HEADING_2", None),
+                              ("after", "NORMAL_TEXT", None)]
+
     @patch("gdoc.api.docs.get_docs_service")
     def test_empty_matches_returns_zero(self, mock_svc):
         result = replace_formatted("d1", [], "text", "r1")

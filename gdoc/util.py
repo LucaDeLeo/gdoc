@@ -28,8 +28,10 @@ class PreviewUnavailableError(GdocError):
     Raised when a preview-gated batchUpdate request (e.g. insertComment) is
     rejected because the Cloud project isn't enrolled in the Workspace
     Developer Preview Program, or the user's access level can't batchUpdate.
-    Callers catch this to fall back to a generally-available code path; it
-    should never surface to the user as a failure.
+    Callers with a generally-available equivalent (comment --quote → Drive
+    comment) catch it and fall back silently. Commands with no equivalent
+    (suggestion threads and decisions) let it surface as an ordinary
+    exit-1 error so nothing is mutated behind the user's back.
     """
 
 

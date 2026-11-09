@@ -83,6 +83,22 @@ class TestExportDoc:
         result = export_doc("abc123")
         assert result == "# Hello"
 
+    def test_export_markdown_collapses_nbsp_lines(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().export_media().execute.return_value = (
+            b"# Hello\n\n&nbsp;\n\nBody\n"
+        )
+
+        assert export_doc("abc123") == "# Hello\n\n\n\nBody\n"
+
+    def test_export_plain_text_keeps_nbsp_lines(self, mock_get_service):
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_service.files().export_media().execute.return_value = b"a\n&nbsp;\nb"
+
+        assert export_doc("abc123", mime_type="text/plain") == "a\n&nbsp;\nb"
+
     def test_export_plain_text(self, mock_get_service):
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
