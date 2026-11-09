@@ -632,10 +632,10 @@ class TestAddTab:
 
 
 class TestRenameTab:
-    @patch("gdoc.api.docs.get_docs_service")
-    def test_rename_tab_success(self, mock_svc):
+    def test_rename_tab_success(self, mocker):
         from gdoc.api.docs import rename_tab
 
+        mock_svc = mocker.patch("gdoc.api.docs.get_docs_service")
         rename_tab("doc1", "t.0", "Calls")
         mock_svc.return_value.documents.return_value.batchUpdate.assert_called_with(
             documentId="doc1",
@@ -645,25 +645,26 @@ class TestRenameTab:
             }}]},
         )
 
-    @patch("gdoc.api.docs.get_docs_service")
-    def test_rename_tab_404(self, mock_svc):
+    def test_rename_tab_404(self, mocker):
         from gdoc.api.docs import rename_tab
 
+        mock_svc = mocker.patch("gdoc.api.docs.get_docs_service")
         mock_svc.return_value.documents.return_value \
             .batchUpdate.return_value.execute.side_effect = _make_http_error(404)
 
         with pytest.raises(GdocError, match="Document not found: doc1"):
             rename_tab("doc1", "t.0", "Calls")
 
-    @patch("gdoc.api.docs.get_docs_service")
-    def test_rename_tab_401(self, mock_svc):
+    def test_rename_tab_401(self, mocker):
         from gdoc.api.docs import rename_tab
 
+        mock_svc = mocker.patch("gdoc.api.docs.get_docs_service")
         mock_svc.return_value.documents.return_value \
             .batchUpdate.return_value.execute.side_effect = _make_http_error(401)
 
         with pytest.raises(AuthError, match="Authentication expired"):
             rename_tab("doc1", "t.0", "Calls")
+
 
 def _capture_batch_updates(mock_svc):
     """Wire mock_svc so every documents().batchUpdate(...) is captured.

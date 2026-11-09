@@ -884,8 +884,20 @@ def cmd_rename_tab(args) -> int:
     old_title = tab["title"]
     rename_tab(doc_id, tab_id, title)
 
+    # The rename is done at this point. A failure of the follow-up version
+    # lookup must not report it as failed (a retry by the old title would
+    # then find no such tab): report success, warn, and leave state alone
+    # rather than record a version we could not read.
     from gdoc.api.drive import get_file_version
-    command_version = get_file_version(doc_id).get("version")
+
+    version_error = None
+    command_version = None
+    try:
+        command_version = get_file_version(doc_id).get("version")
+    except Exception as e:  # noqa: BLE001 — post-mutation; any failure here
+        # (GdocError from the API layer, or a transport error) must not
+        # hide the completed rename.
+        version_error = e
 
     from gdoc.util import build_doc_url
     url = build_doc_url(doc_id, tab_id=tab_id)
@@ -909,10 +921,22 @@ def cmd_rename_tab(args) -> int:
     else:
         print(f"{tab_id}\t{title}\t{url}")
 
+    if version_error is not None:
+        print(
+            f"WARN: tab renamed ({old_title} -> {title}) but the document "
+            f"version could not be refreshed: {version_error}; awareness "
+            "state not updated",
+            file=sys.stderr,
+        )
+        return 0
+
+    # A rename bumps the version without touching content, so a read
+    # baseline (whole-doc or per-tab) that was current at pre-flight is
+    # carried past our own bump instead of turning into a false conflict.
     from gdoc.state import update_state_after_command
     update_state_after_command(
         doc_id, change_info, command="rename-tab", quiet=quiet,
-        command_version=command_version,
+        command_version=command_version, metadata_only_write=True,
     )
 
     return 0
