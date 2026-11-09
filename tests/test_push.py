@@ -409,3 +409,49 @@ class TestPushCollapseSafety:
         # With the opt-in flag, no count lookup happens at all.
         mock_count.assert_not_called()
         mock_update.assert_called_once()
+
+
+class TestPushUrlTab:
+    """push ignores a URL tab in frontmatter but notes the discard."""
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.notify.pre_flight")
+    def test_non_t0_url_tab_notes_discard(
+        self, mock_pf, _update_doc, _drv, _update, tmp_path, capsys,
+    ):
+        f = tmp_path / "test.md"
+        f.write_text(
+            "---\n"
+            "gdoc: https://docs.google.com/document/d/abc123/edit?tab=t.second\n"
+            "title: My Doc\n"
+            "---\n# Hello\n"
+        )
+        mock_pf.return_value = ChangeInfo(current_version=10, last_read_version=10)
+        args = _make_args(file=str(f))
+        rc = cmd_push(args)
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "NOTE" in err
+        assert "t.second" in err
+
+    @patch("gdoc.state.update_state_after_command")
+    @patch("gdoc.api.drive.get_drive_service")
+    @patch("gdoc.api.drive.update_doc_content", return_value=42)
+    @patch("gdoc.notify.pre_flight")
+    def test_t0_url_tab_is_silent(
+        self, mock_pf, _update_doc, _drv, _update, tmp_path, capsys,
+    ):
+        f = tmp_path / "test.md"
+        f.write_text(
+            "---\n"
+            "gdoc: https://docs.google.com/document/d/abc123/edit?tab=t.0\n"
+            "title: My Doc\n"
+            "---\n# Hello\n"
+        )
+        mock_pf.return_value = ChangeInfo(current_version=10, last_read_version=10)
+        args = _make_args(file=str(f))
+        rc = cmd_push(args)
+        assert rc == 0
+        assert "NOTE" not in capsys.readouterr().err

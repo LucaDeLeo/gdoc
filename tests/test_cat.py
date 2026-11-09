@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
@@ -35,6 +35,14 @@ def _make_args(**overrides):
 @pytest.fixture(autouse=True)
 def _doc_mime(doc_mime):
     """Keep spreadsheet detection on the Docs path for this module."""
+
+
+@pytest.fixture(autouse=True)
+def _no_live_anchors(monkeypatch):
+    """Keep `cat --comments` off the network: no comment has a live anchor."""
+    monkeypatch.setattr(
+        "gdoc.api.docs.get_comment_anchors", lambda doc_id: {},
+    )
 
 class TestCatMarkdown:
     @patch("gdoc.state.update_state_after_command")
@@ -101,9 +109,10 @@ class TestCatComments:
         args = _make_args(comments=True, quiet=True)
         rc = cmd_cat(args)
         assert rc == 0
-        mock_list.assert_called_once_with(
+        # Listed before and after the export, to catch a change between.
+        assert mock_list.call_args_list == [call(
             "abc123", include_resolved=False, include_anchor=True,
-        )
+        )] * 2
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)
@@ -117,9 +126,10 @@ class TestCatComments:
         args = _make_args(comments=True, quiet=True, **{"all": True})
         rc = cmd_cat(args)
         assert rc == 0
-        mock_list.assert_called_once_with(
+        # Listed before and after the export, to catch a change between.
+        assert mock_list.call_args_list == [call(
             "abc123", include_resolved=True, include_anchor=True,
-        )
+        )] * 2
 
     @patch("gdoc.state.update_state_after_command")
     @patch("gdoc.notify.pre_flight", return_value=None)

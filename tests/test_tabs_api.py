@@ -430,6 +430,16 @@ class TestResolveTab:
         result = resolve_tab(tabs, "t2")
         assert result["id"] == "t1"  # title match wins
 
+    def test_by_id_ignores_titles(self):
+        """A URL's ?tab= is an ID: a tab titled like it must not win."""
+        tabs = [
+            {"id": "t1", "title": "t2", "index": 0, "nesting_level": 0, "body": {}},
+            {"id": "t2", "title": "Other", "index": 1, "nesting_level": 0, "body": {}},
+        ]
+        assert resolve_tab(tabs, "t2", by_id=True)["id"] == "t2"
+        with pytest.raises(GdocError, match="tab not found"):
+            resolve_tab(tabs, "Other", by_id=True)
+
     def test_not_found_raises(self):
         with pytest.raises(GdocError, match="tab not found: nope") as exc_info:
             resolve_tab(self._tabs(), "nope")
