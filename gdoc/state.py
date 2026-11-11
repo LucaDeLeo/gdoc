@@ -45,14 +45,18 @@ def load_state(doc_id: str) -> DocState | None:
 
 
 def save_state(doc_id: str, state: DocState) -> None:
-    """Save state atomically using temp file + rename."""
+    """Save state atomically using temp file + replace.
+
+    os.replace (not os.rename) so an existing state file is overwritten on
+    Windows too, where os.rename raises FileExistsError.
+    """
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     path = _state_path(doc_id)
     fd, tmp_path = tempfile.mkstemp(dir=STATE_DIR, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(asdict(state), f)
-        os.rename(tmp_path, path)
+        os.replace(tmp_path, path)
     except Exception:
         try:
             os.unlink(tmp_path)

@@ -78,6 +78,33 @@ class TestSaveLoadState:
             tmp_files = list(tmp_path.glob("*.tmp"))
             assert len(tmp_files) == 0
 
+    def test_save_overwrites_existing_state(self, tmp_path):
+        """A second save for the same doc replaces the first on every OS.
+
+        os.rename refuses to replace an existing file on Windows
+        (WinError 183), which broke every command after the first.
+        """
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_seen="2025-01-20T00:00:00Z"))
+            save_state("doc1", DocState(last_seen="2025-01-21T00:00:00Z"))
+            loaded = load_state("doc1")
+            assert loaded is not None
+            assert loaded.last_seen == "2025-01-21T00:00:00Z"
+            assert list(tmp_path.glob("*.tmp")) == []
+
+    def test_save_replaces_with_os_replace(self, tmp_path, monkeypatch):
+        """Pin the cross-platform primitive so POSIX CI also guards the bug."""
+        import gdoc.state as state_mod
+
+        def no_rename(*args, **kwargs):
+            raise AssertionError("save_state must use os.replace, not os.rename")
+
+        monkeypatch.setattr(state_mod.os, "rename", no_rename)
+        with patch("gdoc.state.STATE_DIR", tmp_path):
+            save_state("doc1", DocState(last_seen="a"))
+            save_state("doc1", DocState(last_seen="b"))
+            assert load_state("doc1").last_seen == "b"
+
     def test_load_ignores_unknown_fields(self, tmp_path):
         """Forward compatibility: unknown JSON keys are silently ignored."""
         with patch("gdoc.state.STATE_DIR", tmp_path):
