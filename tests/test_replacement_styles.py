@@ -294,8 +294,18 @@ def test_changed_coloured_prefix_does_not_colour_surviving_plain_suffix(
 ):
     body = _body(("L ", {}), ("Red", RED), (" unchanged plain prose\n", {}))
     if command == "suggest":
-        return _refused(mocker, body, "Red unchanged plain prose",
-                        "Blue unchanged plain prose")
+        # Only "Red" changes and it is uniformly coloured, so the suggestion
+        # carries just that word: its colour is kept and the plain suffix is
+        # never part of the suggestion (the whole match used to be refused).
+        requests = _batch(mocker, body, "Red unchanged plain prose",
+                          "Blue unchanged plain prose", command)
+        insert = next(r["insertText"] for r in requests if "insertText" in r)
+        assert insert["text"] == "Blue"
+        deletes = [r["deleteContentRange"]["range"] for r in requests
+                   if "deleteContentRange" in r]
+        assert [(d["startIndex"], d["endIndex"]) for d in deletes] == [(3, 6)]
+        assert _replacement_styles(requests, RED) == [RED] * 4
+        return
     requests = _batch(mocker, body, "Red unchanged plain prose",
                       "Blue unchanged plain prose", command)
     styles = _replacement_styles(requests, {})

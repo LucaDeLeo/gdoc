@@ -6336,7 +6336,9 @@ def build_parser() -> GdocArgumentParser:
                "(bold, italic, strikethrough, code, links). Inside a "
                "paragraph, block markers are literal text; a replacement that "
                "covers complete paragraphs rejects headings, lists, and "
-               "tables. Needs comment or edit access on the "
+               "tables. Only the words that change are suggested: shared "
+               "leading and trailing words of a plain-text replacement are "
+               "left as they are. Needs comment or edit access on the "
                "doc; never falls back to a direct edit.",
     )
     suggest_p.add_argument("doc", help="Document ID or URL")

@@ -6413,6 +6413,159 @@ def _reject_overlapping_matches(matches: list[dict]) -> None:
             )
 
 
+def _literal_markdown(markdown: str) -> bool:
+    """True when the text parses as itself: no Markdown, no line breaks.
+
+    Only then do code-point offsets in the replacement line up one-to-one
+    with offsets in the document text it replaces.
+    """
+    from gdoc.mdparse import parse_markdown
+
+    if not markdown or any(c in markdown for c in "\n\r\v"):
+        return False
+    parsed = parse_markdown(markdown)
+    return (
+        parsed.plain_text == markdown + "\n"
+        and all(s.type == "paragraph_style" for s in parsed.styles)
+        and not (parsed.tables or parsed.images or parsed.code_blocks)
+        and not parsed.removed_tabs
+    )
+
+
+def _match_text(content: list[dict], match: dict) -> str | None:
+    """The document text a match covers, or None unless it is plain text.
+
+    Only a match inside one paragraph, made of text runs with no pending
+    suggestion, is read; anything else (inline objects, chips, footnote
+    references, a paragraph break, suggested text) returns None.
+    """
+    from gdoc.mdparse import utf16_len
+
+    start, end = match["startIndex"], match["endIndex"]
+    found = _replacement_paragraph(content, match) if start < end else None
+    if found is None:
+        return None
+    out: list[str] = []
+    for element in found[0].get("elements", []):
+        el_start = element.get("startIndex", 0)
+        el_end = element.get("endIndex", el_start)
+        if el_end <= start or el_start >= end:
+            continue
+        run = element.get("textRun")
+        if run is None or run.get("suggestedInsertionIds") or run.get(
+            "suggestedDeletionIds"
+        ):
+            return None
+        pos = el_start
+        for ch in run.get("content", ""):
+            width = 2 if ord(ch) > 0xFFFF else 1
+            if start <= pos and pos + width <= end:
+                out.append(ch)
+            elif pos < end and pos + width > start:
+                return None  # a surrogate pair split by the range
+            pos += width
+        if pos != el_end:
+            return None  # snapshot offsets disagree with the run text
+    text = "".join(out)
+    return text if utf16_len(text) == end - start else None
+
+
+def _word_boundary(text: str, i: int) -> bool:
+    return i <= 0 or i >= len(text) or text[i - 1].isspace() or text[i].isspace()
+
+
+def _changed_word_span(old: str, new: str) -> tuple[int, int] | None:
+    """Unchanged (prefix, suffix) lengths, in code points, at word boundaries.
+
+    Whole words stay in the suggestion, as a reviewer marking up by hand
+    would strike them; something is always left to strike out, so a pure
+    insertion takes the neighbouring word with it. None when nothing can
+    be trimmed.
+    """
+    if old == new:
+        return None
+
+    def boundary(p_old: int, p_new: int) -> bool:
+        return _word_boundary(old, p_old) and _word_boundary(new, p_new)
+
+    limit = min(len(old), len(new))
+    prefix = 0
+    while prefix < limit and old[prefix] == new[prefix]:
+        prefix += 1
+    while prefix > 0 and not boundary(prefix, prefix):
+        prefix -= 1
+
+    def suffix_ok(s: int) -> bool:
+        return boundary(len(old) - s, len(new) - s)
+
+    limit -= prefix
+    suffix = 0
+    while suffix < limit and old[-1 - suffix] == new[-1 - suffix]:
+        suffix += 1
+    while suffix > 0 and not suffix_ok(suffix):
+        suffix -= 1
+
+    while not old[prefix:len(old) - suffix].strip():
+        if suffix > 0:
+            suffix -= 1
+            while suffix > 0 and not suffix_ok(suffix):
+                suffix -= 1
+        elif prefix > 0:
+            prefix -= 1
+            while prefix > 0 and not boundary(prefix, prefix):
+                prefix -= 1
+        else:
+            break
+    if prefix == 0 and suffix == 0:
+        return None
+    return prefix, suffix
+
+
+def _narrow_to_changed_words(
+    body: dict, matches: list[dict], new_markdown: str,
+) -> tuple[list[dict], str]:
+    """Shrink each match to the words that actually change.
+
+    A suggestion deletes and re-inserts its whole range, so a nine-word
+    match with two changed words used to strike out all nine. When the
+    replacement is literal text and every match reads the same plain text,
+    the shared unchanged prefix and suffix are left out of the range and
+    the replacement. Otherwise the matches come back unchanged.
+    """
+    from gdoc.mdparse import utf16_len
+
+    unchanged = (matches, new_markdown)
+    if not matches or not _literal_markdown(new_markdown):
+        return unchanged
+    texts = set()
+    for match in matches:
+        try:
+            scope = _replacement_body(body, match)
+        except GdocError:
+            return unchanged
+        text = _match_text((scope or {}).get("content", []), match)
+        if text is None:
+            return unchanged
+        texts.add(text)
+    if len(texts) != 1:
+        return unchanged
+    old = texts.pop()
+    span = _changed_word_span(old, new_markdown)
+    if span is None:
+        return unchanged
+    prefix, suffix = span
+    replacement = new_markdown[prefix:len(new_markdown) - suffix]
+    if replacement and not _literal_markdown(replacement):
+        return unchanged  # e.g. a lone "# x" would parse as a heading
+    head = utf16_len(old[:prefix])
+    tail = utf16_len(old[len(old) - suffix:])
+    narrowed = [
+        {**m, "startIndex": m["startIndex"] + head, "endIndex": m["endIndex"] - tail}
+        for m in matches
+    ]
+    return narrowed, replacement
+
+
 def suggest_replacement(
     doc_id: str,
     matches: list[dict],
@@ -6468,6 +6621,14 @@ def suggest_replacement(
     if body is None:
         check_inline_only_markdown(parsed)
     _reject_overlapping_matches(matches)
+    if body is not None:
+        # Strike out only the words that change, not the whole match.
+        narrowed, narrowed_markdown = _narrow_to_changed_words(
+            body, matches, new_markdown,
+        )
+        if narrowed is not matches:
+            matches, new_markdown = narrowed, narrowed_markdown
+            parsed = parse_markdown(new_markdown)
     _strip_trailing_newline_unless_hr(parsed)
     occurrence_count = len(matches)
     if body is None:

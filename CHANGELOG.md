@@ -6,6 +6,14 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`suggest` strikes out only the words that change.** A suggestion used to
+  delete and re-insert the whole matched text, so changing two words of a
+  nine-word quote struck out all nine. The shared leading and trailing words
+  are now left out of the suggestion (plain-text replacements of plain text in
+  one paragraph; anything else keeps the whole match).
+
 ### Security
 
 - **Auto-update no longer overrides pinned installs.** A `uv tool` install

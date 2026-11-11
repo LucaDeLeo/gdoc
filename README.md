@@ -1122,6 +1122,16 @@ Terse output names the review object: `OK suggested 1 occurrence (#suggest.abc)`
 Google may fold an edit adjacent to your own open suggestion into it instead of
 creating a new one; those IDs are reported under `updatedSuggestionIds`.
 
+**Only the changed words are suggested.** Quote enough text to find the spot;
+`suggest` leaves out the words the old and new text share at the start and end,
+so `gdoc suggest DOC "ship the beta in Q3 to all users" "ship the beta in Q4 to
+all users"` strikes out only `Q3` and suggests `Q4`. Trimming keeps whole words,
+and a pure insertion takes the next word with it, since a suggestion always
+strikes something out. It applies when the replacement is plain text (no
+Markdown, no line breaks) and the matched text is plain text in one paragraph;
+otherwise the whole match is suggested, as before. The pending-suggestion
+overlap check still covers the whole quoted text.
+
 Requirements and limits:
 
 - **Suggest mode is generally available.** `writeMode: SUGGEST` left the

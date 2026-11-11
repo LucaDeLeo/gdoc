@@ -1957,3 +1957,212 @@ def test_lost_suggest_response_is_sent_once_and_reported_unknown(mocker):
     assert "outcome is unknown" in str(exc.value)
     assert "re-run" not in str(exc.value)
     assert connection.request.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Only the changed words become the suggestion
+# ---------------------------------------------------------------------------
+
+_FOX = "The quick brown fox jumps over the lazy dog"
+
+
+def _fox_body(text=_FOX, start=1):
+    from gdoc.mdparse import utf16_len
+
+    end = start + utf16_len(text) + 1
+    return _body(_para(_run(text + "\n", start, end)))
+
+
+def _fox_match(text=_FOX, start=1):
+    from gdoc.mdparse import utf16_len
+
+    return [{"startIndex": start, "endIndex": start + utf16_len(text)}]
+
+
+def _suggest_requests(mocker, matches, new_text, body):
+    service = _service(_ok_response())
+    mocker.patch("gdoc.api.docs.get_docs_service", return_value=service)
+    mocker.patch("gdoc.api.docs.get_document_structure",
+                 return_value=_readback("suggest.abc"))
+    result = suggest_replacement(
+        "synthetic-doc", matches, new_text, "synthetic-rev", tab_id="t.0",
+        body=body,
+    )
+    assert result.occurrences == len(matches)
+    return _batch_call(service).kwargs["body"]["requests"]
+
+
+class TestSuggestOnlyChangedWords:
+    """A suggestion strikes out only what changes, as a reviewer would."""
+
+    def test_two_changed_words_in_a_nine_word_match(self, mocker):
+        reqs = _suggest_requests(
+            mocker, _fox_match(),
+            "The slow red fox jumps over the lazy dog", _fox_body(),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 16, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "slow red"}},
+        ]
+
+    def test_trims_to_whole_words(self, mocker):
+        # "colour" -> "color" shares "colo", but the suggestion names the word.
+        text = "the colour of money"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the color of money", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 11, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "color"}},
+        ]
+
+    def test_pure_deletion_strikes_only_the_removed_word(self, mocker):
+        text = "the big cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the cat sat", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 9, "tabId": "t.0"}}},
+        ]
+
+    def test_pure_insertion_widens_to_the_next_word(self, mocker):
+        # Nothing would be struck out; the next word anchors the insertion.
+        text = "the cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the big cat sat", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 8, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "big cat"}},
+        ]
+
+    def test_appending_at_the_end_widens_to_the_last_word(self, mocker):
+        text = "the cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the cat sat down", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 9, "endIndex": 12, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 9, "tabId": "t.0"},
+                            "text": "sat down"}},
+        ]
+
+    def test_utf16_offsets_after_astral_characters(self, mocker):
+        # U+1F600 is two UTF-16 code units; the trimmed range must count them.
+        text = "\U0001f600 alpha beta"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "\U0001f600 alpha gamma", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 10, "endIndex": 14, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 10, "tabId": "t.0"},
+                            "text": "gamma"}},
+        ]
+
+    def test_every_match_is_narrowed_with_all(self, mocker):
+        text = "red fish"
+        body = _body(
+            _para(_run(text + "\n", 1, 10)),
+            _para(_run(text + "\n", 10, 19)),
+        )
+        matches = [{"startIndex": 1, "endIndex": 9},
+                   {"startIndex": 10, "endIndex": 18}]
+        reqs = _suggest_requests(mocker, matches, "blue fish", body)
+        deletes = [r["deleteContentRange"]["range"] for r in reqs
+                   if "deleteContentRange" in r]
+        inserts = [r["insertText"]["text"] for r in reqs if "insertText" in r]
+        assert sorted((d["startIndex"], d["endIndex"]) for d in deletes) == [
+            (1, 4), (10, 13),
+        ]
+        assert inserts == ["blue", "blue"]
+
+    def test_markdown_replacement_keeps_the_whole_match(self, mocker):
+        reqs = _suggest_requests(
+            mocker, _fox_match(),
+            "The **slow** brown fox jumps over the lazy dog", _fox_body(),
+        )
+        assert reqs[0] == {"deleteContentRange": {"range": {
+            "startIndex": 1, "endIndex": 44, "tabId": "t.0"}}}
+
+    def test_non_text_element_in_match_keeps_the_whole_match(self):
+        body = _body(_para(
+            _run("see ", 1, 5),
+            {"startIndex": 5, "endIndex": 6,
+             "inlineObjectElement": {"inlineObjectId": "img"}},
+            _run(" here\n", 6, 12),
+        ))
+        from gdoc.api.docs import _narrow_to_changed_words
+
+        matches = [{"startIndex": 1, "endIndex": 11}]
+        assert _narrow_to_changed_words(body, matches, "see x there") == (
+            matches, "see x there",
+        )
+
+    def test_different_match_texts_keep_whole_matches(self, mocker):
+        # Folded matching can find differently spelled text; one replacement
+        # can only be trimmed when every match reads the same.
+        body = _body(
+            _para(_run("red fish\n", 1, 10)),
+            _para(_run("Red fish\n", 10, 19)),
+        )
+        matches = [{"startIndex": 1, "endIndex": 9},
+                   {"startIndex": 10, "endIndex": 18}]
+        reqs = _suggest_requests(mocker, matches, "blue fish", body)
+        deletes = sorted(
+            (r["deleteContentRange"]["range"]["startIndex"],
+             r["deleteContentRange"]["range"]["endIndex"])
+            for r in reqs if "deleteContentRange" in r
+        )
+        assert deletes == [(1, 9), (10, 18)]
+
+    def test_pending_suggestion_runs_are_never_trimmed(self):
+        from gdoc.api.docs import _narrow_to_changed_words
+
+        run = _run("red fish\n", 1, 10)
+        run["textRun"]["suggestedInsertionIds"] = ["suggest.other"]
+        matches = [{"startIndex": 1, "endIndex": 9}]
+        assert _narrow_to_changed_words(
+            _body(_para(run)), matches, "blue fish",
+        ) == (matches, "blue fish")
+
+    def test_trimmed_text_that_would_become_markdown_is_not_trimmed(self):
+        from gdoc.api.docs import _narrow_to_changed_words
+
+        # Whole text is literal; the changed span alone ("# x") would parse
+        # as a heading, so keep the whole match.
+        text = "see a here"
+        matches = _fox_match(text)
+        assert _narrow_to_changed_words(
+            _fox_body(text), matches, "see # x here",
+        ) == (matches, "see # x here")
+
+    def test_identical_replacement_is_not_trimmed_to_nothing(self, mocker):
+        text = "same words"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), text, _fox_body(text),
+        )
+        assert reqs[0] == {"deleteContentRange": {"range": {
+            "startIndex": 1, "endIndex": 11, "tabId": "t.0"}}}
+
+
+class TestChangedSpan:
+    @pytest.mark.parametrize("old, new, span", [
+        ("a b c", "a x c", (2, 2)),
+        ("a b c", "a b c d", (4, 0)),     # append: widen to the last word
+        ("a b c", "z a b c", (0, 4)),     # prepend: widen to the first word
+        ("colour", "color", None),        # one word: nothing to trim
+        ("a b", "a b", None),
+    ])
+    def test_spans(self, old, new, span):
+        from gdoc.api.docs import _changed_word_span
+
+        assert _changed_word_span(old, new) == span
