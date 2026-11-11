@@ -1382,6 +1382,24 @@ All files are stored under `~/.config/gdoc/`:
 | `state/<DOC_ID>.json` | Per-document state for change detection |
 | `update_check.json` | Cached result of the last update check |
 
+### Token storage
+
+Each `token.json` holds the OAuth refresh token in plain JSON. With the
+`drive` and `documents` scopes, anyone who can read it can read, change and
+delete every file in that Google account's Drive until the grant is revoked.
+
+- **macOS and Linux:** gdoc writes token files with mode `0600` (owner only),
+  replacing any existing file so a loose mode is not kept.
+- **Windows:** the mode has no effect. The file inherits the ACL of your
+  profile folder, which normally lets only you, administrators and SYSTEM
+  read it, but any process running as you can. Check with
+  `icacls %USERPROFILE%\.config\gdoc\accounts\<ACCOUNT>\token.json`.
+
+On every platform, treat the folder like an SSH key: keep it out of synced
+or backed-up folders you share, never commit it, and revoke the grant at
+<https://myaccount.google.com/permissions> if a copy leaks (`gdoc auth` then
+creates a new one).
+
 ## Development
 
 ```bash

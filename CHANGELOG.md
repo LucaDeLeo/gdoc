@@ -24,6 +24,9 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ### Security
 
+- **Token storage is documented.** The README now says what a `token.json`
+  grants, that it is plain JSON, that `0600` protects it only on macOS and
+  Linux, and how to check and revoke it on Windows.
 - **Auto-update no longer overrides pinned installs.** A `uv tool` install
   that requested a revision (`git+…@<sha|tag|branch>`) or came from a fork or
   local checkout was silently reinstalled from upstream main by bare `gdoc`,
