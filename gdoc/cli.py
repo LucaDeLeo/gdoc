@@ -7156,8 +7156,36 @@ def run_argv(argv: list[str] | None = None, *, check_updates: bool = True) -> in
         return 1
 
 
+def _ensure_utf8_stdio() -> None:
+    """Make stdin/stdout/stderr UTF-8 whatever the locale code page.
+
+    A redirected or piped stream on Windows defaults to the ANSI code page
+    (e.g. cp1252), which turned the awareness banner's emoji into literal
+    ``\\U0001f4c4`` escapes and mangled document text such as en dashes.
+    An explicit PYTHONIOENCODING is the user's choice and is left alone, as
+    is any stream that can't be reconfigured (e.g. a test capture). Each
+    stream keeps its error handler so piping behaves exactly as before.
+    """
+    import codecs
+
+    if os.environ.get("PYTHONIOENCODING"):
+        return
+    for name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            if codecs.lookup(stream.encoding or "ascii").name == "utf-8":
+                continue
+            reconfigure(encoding="utf-8", errors=stream.errors)
+        except (LookupError, ValueError, OSError):
+            continue
+
+
 def main() -> int:
     """Entry point for the gdoc CLI."""
+    _ensure_utf8_stdio()
     if _is_top_level_help_invocation(sys.argv):
         from gdoc.update import auto_update_for_help
         auto_update_for_help()
