@@ -38,6 +38,14 @@ gdoc update
 
 Other commands never auto-update — they print a notice to stderr (at most once per day) when a newer version is available.
 
+**Pinned installs are left alone.** An install that asked for a specific
+revision (`uv tool install "git+https://github.com/LucaDeLeo/gdoc.git@<sha-or-tag>"`)
+or came from another source (a fork, a local checkout) is never replaced by
+auto-update, and `gdoc update` declines to replace it, printing the command to
+run if you do want the latest upstream release. The update notice still says
+when one exists. Pinning is the way to control exactly which code holds your
+Drive token: reinstall at a new revision when you choose to.
+
 ## Setup
 
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)

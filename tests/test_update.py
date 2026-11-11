@@ -16,10 +16,17 @@ def cache_file(tmp_path, monkeypatch):
     return path
 
 
+UPSTREAM_UNPINNED = {
+    "url": "https://github.com/LucaDeLeo/gdoc.git",
+    "vcs_info": {"vcs": "git", "commit_id": "a" * 40},
+}
+
+
 @pytest.fixture
 def fake_uv_install(monkeypatch):
-    """Make _is_uv_tool_install() return True."""
+    """Make _is_uv_tool_install() return True, installed from upstream main."""
     monkeypatch.setattr(update, "_is_uv_tool_install", lambda: True)
+    monkeypatch.setattr(update, "_install_origin", lambda: UPSTREAM_UNPINNED)
 
 
 class TestIsUvToolInstall:
@@ -197,3 +204,126 @@ class TestTopLevelHelpDetection:
     def test_version_is_not_top_level(self):
         from gdoc.cli import _is_top_level_help_invocation
         assert _is_top_level_help_invocation(["gdoc", "--version"]) is False
+
+
+def _origin(url="https://github.com/LucaDeLeo/gdoc.git", rev=None, **extra):
+    vcs = {"vcs": "git", "commit_id": "b" * 40}
+    if rev is not None:
+        vcs["requested_revision"] = rev
+    return {"url": url, "vcs_info": vcs, **extra}
+
+
+class TestPinnedInstallReason:
+    """A deliberate install source must never be swapped for upstream main."""
+
+    @pytest.mark.parametrize("origin", [
+        UPSTREAM_UNPINNED,
+        _origin(url="https://github.com/LucaDeLeo/gdoc"),
+        _origin(url="https://github.com/lucadeleo/gdoc.git/"),
+        _origin(url="ssh://git@github.com/LucaDeLeo/gdoc.git"),
+        None,  # index or unknown install: unchanged behavior
+    ])
+    def test_upstream_main_is_not_pinned(self, monkeypatch, origin):
+        monkeypatch.setattr(update, "_install_origin", lambda: origin)
+        assert update.pinned_install_reason() is None
+
+    def test_requested_commit_is_pinned(self, monkeypatch):
+        monkeypatch.setattr(update, "_install_origin", lambda: _origin(rev="8bfe7f9"))
+        assert update.pinned_install_reason() == "pinned to 8bfe7f9"
+
+    def test_requested_tag_or_branch_is_pinned(self, monkeypatch):
+        monkeypatch.setattr(update, "_install_origin", lambda: _origin(rev="v0.24.0"))
+        assert "v0.24.0" in update.pinned_install_reason()
+
+    def test_fork_is_pinned_even_without_revision(self, monkeypatch):
+        monkeypatch.setattr(
+            update, "_install_origin",
+            lambda: _origin(url="https://github.com/someone/gdoc.git"),
+        )
+        assert update.pinned_install_reason() == (
+            "installed from https://github.com/someone/gdoc.git"
+        )
+
+    def test_local_directory_install_is_pinned(self, monkeypatch):
+        monkeypatch.setattr(
+            update, "_install_origin",
+            lambda: {"url": "file:///home/me/gdoc", "dir_info": {}},
+        )
+        assert update.pinned_install_reason() == (
+            "installed from file:///home/me/gdoc"
+        )
+
+    def test_credentials_in_url_are_never_shown(self, monkeypatch):
+        monkeypatch.setattr(
+            update, "_install_origin",
+            lambda: _origin(url="https://user:s3cret@example.com/x/gdoc.git"),
+        )
+        reason = update.pinned_install_reason()
+        assert "s3cret" not in reason and "user" not in reason
+        assert reason == "installed from https://example.com/x/gdoc.git"
+
+    def test_reads_pep610_direct_url_of_installed_dist(self, monkeypatch):
+        class Dist:
+            def read_text(self, name):
+                assert name == "direct_url.json"
+                return json.dumps(_origin(rev="abc123"))
+
+        monkeypatch.setattr(
+            "importlib.metadata.distribution", lambda name: Dist()
+        )
+        assert update._install_origin()["vcs_info"]["requested_revision"] == (
+            "abc123"
+        )
+
+    def test_unreadable_metadata_is_unknown(self, monkeypatch):
+        def boom(name):
+            raise RuntimeError("no metadata")
+
+        monkeypatch.setattr("importlib.metadata.distribution", boom)
+        assert update._install_origin() is None
+
+
+class TestPinnedInstallsAreNotReplaced:
+    @pytest.fixture
+    def pinned(self, monkeypatch):
+        monkeypatch.setattr(update, "_is_uv_tool_install", lambda: True)
+        monkeypatch.setattr(update, "_install_origin", lambda: _origin(rev="8bfe7f9"))
+        monkeypatch.delenv("GDOC_AUTO_UPDATE", raising=False)
+        monkeypatch.delenv("GDOC_SKIP_UPDATE_CHECK", raising=False)
+        monkeypatch.setattr(update, "_latest_version", lambda: "2.0.0")
+        monkeypatch.setattr(update, "_installed_version", lambda: "1.0.0")
+        ran = []
+        monkeypatch.setattr(
+            update.subprocess, "run",
+            lambda *a, **kw: ran.append(a[0]) or subprocess.CompletedProcess(a, 0),
+        )
+        monkeypatch.setattr(
+            update.os, "execvpe",
+            lambda *a, **kw: pytest.fail("pinned install must not re-exec"),
+        )
+        return ran
+
+    def test_help_does_not_auto_update_a_pinned_install(
+        self, pinned, cache_file, capsys
+    ):
+        update.auto_update_for_help()
+        assert pinned == []
+        assert capsys.readouterr().err == ""  # silent, like every other skip
+
+    def test_gdoc_update_declines_to_replace_a_pinned_install(
+        self, pinned, cache_file, capsys
+    ):
+        assert update.run_update() == 1
+        assert pinned == []
+        out = capsys.readouterr().out
+        assert "pinned to 8bfe7f9" in out
+        assert "uv tool install --force" in out
+
+    def test_notice_does_not_recommend_gdoc_update_when_pinned(
+        self, pinned, cache_file, capsys
+    ):
+        update.check_for_update()
+        err = capsys.readouterr().err
+        assert "1.0.0" in err and "2.0.0" in err
+        assert "pinned to 8bfe7f9" in err
+        assert "Run `gdoc update`" not in err

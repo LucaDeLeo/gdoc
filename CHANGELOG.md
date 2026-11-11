@@ -6,6 +6,15 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Security
+
+- **Auto-update no longer overrides pinned installs.** A `uv tool` install
+  that requested a revision (`git+…@<sha|tag|branch>`) or came from a fork or
+  local checkout was silently reinstalled from upstream main by bare `gdoc`,
+  `gdoc --help` or `gdoc -h`. Such installs (read from the PEP 610
+  `direct_url.json`) are now never auto-updated; `gdoc update` declines with
+  the manual command, and the update notice says the install is pinned.
+
 ### Changed
 
 - **Native comments and suggestions are generally available.** The Docs API
