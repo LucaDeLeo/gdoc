@@ -24,7 +24,10 @@ All notable changes to `gdoc` are documented here. This project follows
 - **Windows: console output is UTF-8.** Piped or redirected output used the
   ANSI code page, so the awareness banner's emoji printed as literal
   `\U0001f4c4` escapes and document text such as en dashes was mangled. gdoc
-  now writes UTF-8 to stdin/stdout/stderr unless `PYTHONIOENCODING` is set.
+  now uses UTF-8 for stdin, stdout and stderr unless `PYTHONIOENCODING` is
+  set, so text piped in (`-` arguments, `--stdin`) is read as UTF-8 too, like
+  `--file` input already was; pipe ANSI-encoded text through a converter or
+  set `PYTHONIOENCODING` to keep the old behaviour.
 - **`suggest` strikes out only the words that change.** A suggestion used to
   delete and re-insert the whole matched text, so changing two words of a
   nine-word quote struck out all nine. The shared leading and trailing words
