@@ -2275,3 +2275,85 @@ class TestSuggestNewParagraphs:
             {"insertText": {"location": {"index": 14, "tabId": "t.0"},
                             "text": "\nMore"}},
         ]
+
+
+# ---------------------------------------------------------------------------
+# Review regressions: narrowing never refuses what the whole match allowed;
+# new paragraphs never land on a pending suggestion
+# ---------------------------------------------------------------------------
+
+_LINK = {"link": {"url": "https://example.test/report"}}
+
+
+def _styled_body(*runs):
+    elements, index = [], 1
+    for text, style in runs:
+        from gdoc.mdparse import utf16_len
+
+        end = index + utf16_len(text)
+        elements.append({"startIndex": index, "endIndex": end,
+                         "textRun": {"content": text, "textStyle": style}})
+        index = end
+    return _body({"startIndex": 1, "endIndex": index,
+                  "paragraph": {"elements": elements}})
+
+
+class TestNarrowingFallsBackToTheWholeMatch:
+    def test_narrowed_word_inside_a_link_suggests_the_whole_match(self, mocker):
+        # "annual" alone sits inside a link the planner cannot restyle; the
+        # whole match "annual report today" was accepted before narrowing.
+        body = _styled_body(("Read the annual report ", _LINK), ("today\n", {}))
+        reqs = _suggest_requests(
+            mocker, [{"startIndex": 10, "endIndex": 29}],
+            "yearly report today", body,
+        )
+        deletes = [r["deleteContentRange"]["range"] for r in reqs
+                   if "deleteContentRange" in r]
+        assert [(d["startIndex"], d["endIndex"]) for d in deletes] == [(10, 29)]
+        inserts = [r["insertText"]["text"] for r in reqs if "insertText" in r]
+        assert inserts == ["yearly report today"]
+
+    def test_widened_word_across_a_style_boundary_is_not_refused(self, mocker):
+        bold = {"bold": True}
+        body = _styled_body(("a x. alph", bold), ("a alpha\n", {}))
+        reqs = _suggest_requests(
+            mocker, [{"startIndex": 1, "endIndex": 11}], "a x. beta alpha", body,
+        )
+        assert any("insertText" in r for r in reqs)
+
+    def test_whole_match_refusal_still_surfaces(self, mocker):
+        # Narrowed ("annual" inside the link) and whole ("annual report",
+        # the whole link label) are both refused: the refusal is reported.
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        body = _styled_body(("L ", {}), ("annual report", _LINK), (" right\n", {}))
+        with pytest.raises(GdocError, match="preserving its pending text style"):
+            suggest_replacement(
+                "synthetic-doc", [{"startIndex": 3, "endIndex": 16}],
+                "yearly report", "synthetic-rev", tab_id="t.0", body=body,
+            )
+        gate.assert_not_called()
+
+
+class TestNewParagraphOverlap:
+    def test_pending_suggestion_on_the_paragraph_mark_is_refused(self, mocker):
+        # A previous `suggest "Intro" "Intro\nMore"` left a pending insertion
+        # at the mark; suggesting it again must not stack another one.
+        # SUGGESTIONS_INLINE shows the suggested "\n" as the first
+        # paragraph's mark, and "More" as a paragraph of its own.
+        body = _body(
+            _para(_run("Intro", 1, 6), {
+                "startIndex": 6, "endIndex": 7, "textRun": {
+                    "content": "\n", "suggestedInsertionIds": ["suggest.prior"],
+                }}),
+            _para({"startIndex": 7, "endIndex": 11, "textRun": {
+                "content": "More", "suggestedInsertionIds": ["suggest.prior"],
+            }}, _run("\n", 11, 12)),
+        )
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="suggest.prior") as exc:
+            suggest_replacement(
+                "synthetic-doc", [{"startIndex": 1, "endIndex": 6}],
+                "Intro\nMore", "synthetic-rev", tab_id="t.0", body=body,
+            )
+        assert exc.value.exit_code == 3
+        gate.assert_not_called()

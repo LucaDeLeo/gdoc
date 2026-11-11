@@ -6613,6 +6613,16 @@ def _split_appended_paragraphs(
         # their existing handling and refusals; a table's rows each look
         # like plain text, so the whole replacement is checked too.
         return None
+    # The new paragraphs go in at the paragraph mark, just past the range the
+    # caller's overlap guard checks: a pending suggestion there (say, the
+    # same new paragraph suggested before) must refuse it too.
+    pending = find_suggestions_in_range(scope or {}, end, end + 1)
+    if pending:
+        raise GdocError(
+            f"the end of the paragraph at index {end} overlaps existing "
+            f"suggestion(s) {', '.join(sorted(pending))}; accept or reject "
+            "them in Docs first. Nothing was changed.", exit_code=3,
+        )
     location: dict = {"index": end}
     tab = match.get("tabId") or tab_id
     if tab:
@@ -6624,6 +6634,106 @@ def _split_appended_paragraphs(
         }},
         head_unchanged=_match_text(content, match) == head,
     )
+
+
+def _plan_suggest_body(
+    body: dict, matches: list[dict], new_markdown: str, parsed,
+    tab_id: str | None,
+) -> list[dict]:
+    """Plan suggest-mode requests against the source snapshot.
+
+    Pure: reads only *body*, so a refused plan can be retried with other
+    ranges before anything is sent.
+    """
+    if parsed.tables and any(
+        _covers_whole_paragraphs(
+            _replacement_body(body, match).get("content", []), match)
+        for match in matches
+    ):
+        # edit would insert a native table here; suggest cannot, and
+        # literal rows would misrepresent the request. Inside a
+        # paragraph the rows are literal text, as in edit.
+        check_inline_only_markdown(parsed)
+    if not new_markdown and any(
+        len(list(_replacement_paragraphs(
+            _replacement_body(body, match).get("content", []), match))) > 1
+        for match in matches
+    ):
+        # Suggestions keep every native paragraph mark, so accepting this
+        # would leave the paragraphs apart instead of joining them.
+        raise GdocError(
+            "cannot suggest deleting text across a paragraph break: the "
+            "suggestion would keep the break, so accepting it would not "
+            "join the paragraphs. Suggest each paragraph's deletion "
+            "separately, or use edit", exit_code=3,
+        )
+    planned = [part for match in matches
+               for part in _wording_contexts(
+                   _replacement_body(body, match), match, new_markdown,
+                   _open_items_before(body, match))]
+    # Validate each resolved context before planning suggestion requests.
+    for _, (selected, _) in planned:
+        check_inline_only_markdown(selected)
+    requests = []
+    for match, (selected, baseline) in sorted(
+            planned, key=lambda part: _replacement_order(part[0])):
+        # A SUGGEST style update changes the accepted preview only. Never
+        # mistake that proposal for the pending insertion's native style.
+        baseline = [s for s in baseline or [] if not s.get("retainedMark")]
+        scope = _replacement_body(body, match)
+        found = _replacement_paragraph(scope.get("content", []), match)
+        runs = [run for run in found[0].get("elements", [])
+                if "textRun" in run] if found else []
+        # Unlike EDIT, SUGGEST retains the original at paragraph start.
+        # Its first run supplies insertion style, not the following run
+        # used by the edit baseline; an empty field mask is not proof of
+        # safety. Check the desired native style at every target position.
+        pending_style = next(
+            (run["textRun"].get("textStyle", {}) for run in runs
+             if run.get("startIndex", 0) < match["startIndex"] <= run["endIndex"]),
+            runs[0]["textRun"].get("textStyle", {}) if runs else {},
+        )
+        at_target_end = bool(selected.plain_text and any(
+            s["fields"] or s["textStyle"] != pending_style for s in baseline))
+        if at_target_end:
+            source_style = next((
+                run["textRun"].get("textStyle", {})
+                for run in found[0].get("elements", [])
+                if "textRun" in run and run.get("startIndex", 0)
+                < match["endIndex"] <= run["endIndex"]
+            ), {}) if found else {}
+            if (not found or "link" in source_style
+                    or any(s["textStyle"] != source_style for s in baseline)):
+                raise GdocError(
+                    "cannot suggest this replacement while preserving its pending "
+                    "text style: mixed or linked targets require "
+                    "formatting that the API can only propose for acceptance; "
+                    "use narrower uniformly styled, unlinked matches "
+                    "or edit instead",
+                    exit_code=3,
+                )
+            # Insert while the matched run still exists so its own style
+            # is inherited. Suggest deletion afterwards; the native pending
+            # order is old+new, and rejecting retains the untouched original.
+            insertion = {**match, "startIndex": match["endIndex"]}
+            context = (_inline_only(selected), [])
+            _, built = _build_replacement_requests(
+                parsed, [insertion], tab_id=tab_id,
+                contexts={_match_key(insertion): context},
+            )
+            delete_range = {key: match[key] for key in
+                            ("startIndex", "endIndex", "tabId", "segmentId")
+                            if key in match}
+            if tab_id and "tabId" not in delete_range:
+                delete_range["tabId"] = tab_id
+            built.append({"deleteContentRange": {"range": delete_range}})
+        else:
+            _, built = _build_replacement_requests(
+                parsed, [match], tab_id=tab_id,
+                contexts={_match_key(match): (_inline_only(selected), baseline)},
+            )
+        requests.extend(built)
+    return requests
 
 
 def suggest_replacement(
@@ -6688,12 +6798,14 @@ def suggest_replacement(
     if body is None:
         check_inline_only_markdown(parsed)
     _reject_overlapping_matches(matches)
+    original = None  # (matches, markdown, parsed) before narrowing
     if body is not None:
         # Strike out only the words that change, not the whole match.
         narrowed, narrowed_markdown = _narrow_to_changed_words(
             body, matches, new_markdown,
         )
         if narrowed is not matches:
+            original = (matches, new_markdown, parsed)
             matches, new_markdown = narrowed, narrowed_markdown
             parsed = parse_markdown(new_markdown)
     _strip_trailing_newline_unless_hr(parsed)
@@ -6704,94 +6816,21 @@ def suggest_replacement(
         _, requests = _build_replacement_requests(_inline_only(parsed), matches,
                                                  tab_id=tab_id)
     else:
-        if parsed.tables and any(
-            _covers_whole_paragraphs(
-                _replacement_body(body, match).get("content", []), match)
-            for match in matches
-        ):
-            # edit would insert a native table here; suggest cannot, and
-            # literal rows would misrepresent the request. Inside a
-            # paragraph the rows are literal text, as in edit.
-            check_inline_only_markdown(parsed)
-        if not new_markdown and any(
-            len(list(_replacement_paragraphs(
-                _replacement_body(body, match).get("content", []), match))) > 1
-            for match in matches
-        ):
-            # Suggestions keep every native paragraph mark, so accepting this
-            # would leave the paragraphs apart instead of joining them.
-            raise GdocError(
-                "cannot suggest deleting text across a paragraph break: the "
-                "suggestion would keep the break, so accepting it would not "
-                "join the paragraphs. Suggest each paragraph's deletion "
-                "separately, or use edit", exit_code=3,
+        try:
+            requests = _plan_suggest_body(
+                body, matches, new_markdown, parsed, tab_id,
             )
-        planned = [part for match in matches
-                   for part in _wording_contexts(
-                       _replacement_body(body, match), match, new_markdown,
-                       _open_items_before(body, match))]
-        # Validate each resolved context before planning suggestion requests.
-        for _, (selected, _) in planned:
-            check_inline_only_markdown(selected)
-        requests = []
-        for match, (selected, baseline) in sorted(
-                planned, key=lambda part: _replacement_order(part[0])):
-            # A SUGGEST style update changes the accepted preview only. Never
-            # mistake that proposal for the pending insertion's native style.
-            baseline = [s for s in baseline or [] if not s.get("retainedMark")]
-            scope = _replacement_body(body, match)
-            found = _replacement_paragraph(scope.get("content", []), match)
-            runs = [run for run in found[0].get("elements", [])
-                    if "textRun" in run] if found else []
-            # Unlike EDIT, SUGGEST retains the original at paragraph start.
-            # Its first run supplies insertion style, not the following run
-            # used by the edit baseline; an empty field mask is not proof of
-            # safety. Check the desired native style at every target position.
-            pending_style = next(
-                (run["textRun"].get("textStyle", {}) for run in runs
-                 if run.get("startIndex", 0) < match["startIndex"] <= run["endIndex"]),
-                runs[0]["textRun"].get("textStyle", {}) if runs else {},
+        except GdocError:
+            if original is None:
+                raise
+            # A narrowed word can sit inside a link or straddle a style
+            # boundary that the whole match did not: suggest the whole
+            # match, exactly as before narrowing existed.
+            matches, new_markdown, parsed = original
+            _strip_trailing_newline_unless_hr(parsed)
+            requests = _plan_suggest_body(
+                body, matches, new_markdown, parsed, tab_id,
             )
-            at_target_end = bool(selected.plain_text and any(
-                s["fields"] or s["textStyle"] != pending_style for s in baseline))
-            if at_target_end:
-                source_style = next((
-                    run["textRun"].get("textStyle", {})
-                    for run in found[0].get("elements", [])
-                    if "textRun" in run and run.get("startIndex", 0)
-                    < match["endIndex"] <= run["endIndex"]
-                ), {}) if found else {}
-                if (not found or "link" in source_style
-                        or any(s["textStyle"] != source_style for s in baseline)):
-                    raise GdocError(
-                        "cannot suggest this replacement while preserving its pending "
-                        "text style: mixed or linked targets require "
-                        "formatting that the API can only propose for acceptance; "
-                        "use narrower uniformly styled, unlinked matches "
-                        "or edit instead",
-                        exit_code=3,
-                    )
-                # Insert while the matched run still exists so its own style
-                # is inherited. Suggest deletion afterwards; the native pending
-                # order is old+new, and rejecting retains the untouched original.
-                insertion = {**match, "startIndex": match["endIndex"]}
-                context = (_inline_only(selected), [])
-                _, built = _build_replacement_requests(
-                    parsed, [insertion], tab_id=tab_id,
-                    contexts={_match_key(insertion): context},
-                )
-                delete_range = {key: match[key] for key in
-                                ("startIndex", "endIndex", "tabId", "segmentId")
-                                if key in match}
-                if tab_id and "tabId" not in delete_range:
-                    delete_range["tabId"] = tab_id
-                built.append({"deleteContentRange": {"range": delete_range}})
-            else:
-                _, built = _build_replacement_requests(
-                    parsed, [match], tab_id=tab_id,
-                    contexts={_match_key(match): (_inline_only(selected), baseline)},
-                )
-            requests.extend(built)
     if appended is not None:
         # The paragraph mark is the highest index this batch touches, so
         # inserting there first keeps every other request's index valid. A
