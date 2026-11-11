@@ -35,18 +35,18 @@ gdoc comments DOC_ID                         # List open comments
 gdoc comments DOC_ID --all                   # Include resolved
 gdoc comment DOC_ID "comment text"           # Add unanchored comment
 gdoc reply DOC_ID COMMENT_ID "reply text"    # Reply to a comment
-gdoc comment DOC_ID "text" --quote "doc text" --assign EMAIL   # Assigned anchored comment (preview)
-gdoc reply DOC_ID COMMENT_ID "text" --reassign EMAIL          # Reassign an assigned thread (preview)
-gdoc reply DOC_ID suggest.xxx "text"                          # Reply on a suggestion thread (preview)
-gdoc edit-comment DOC_ID THREAD_ID POST_ID "new text"         # Edit a post you wrote; THREAD_ID may be suggest.xxx (preview)
+gdoc comment DOC_ID "text" --quote "doc text" --assign EMAIL   # Assigned anchored comment (Docs API)
+gdoc reply DOC_ID COMMENT_ID "text" --reassign EMAIL          # Reassign an assigned thread (Docs API)
+gdoc reply DOC_ID suggest.xxx "text"                          # Reply on a suggestion thread (Docs API)
+gdoc edit-comment DOC_ID THREAD_ID POST_ID "new text"         # Edit a post you wrote; THREAD_ID may be suggest.xxx (Docs API)
 gdoc delete-comment DOC_ID COMMENT_ID --force                 # Delete a whole comment
-gdoc delete-comment DOC_ID THREAD_ID POST_ID --force          # Delete one reply you wrote (preview)
+gdoc delete-comment DOC_ID THREAD_ID POST_ID --force          # Delete one reply you wrote (Docs API)
 gdoc resolve DOC_ID COMMENT_ID              # Resolve a comment
 gdoc reopen DOC_ID COMMENT_ID               # Reopen a resolved comment
 
-gdoc suggestions DOC_ID                      # List open suggestion threads (--all: decided too; preview)
-gdoc suggestions DOC_ID suggest.xxx          # One suggestion thread in full (preview)
-gdoc suggestion DOC_ID suggest.xxx --accept  # Or --reject, or --delete [--force] (preview)
+gdoc suggestions DOC_ID                      # List open suggestion threads (--all: decided too; Docs API)
+gdoc suggestions DOC_ID suggest.xxx          # One suggestion thread in full (Docs API)
+gdoc suggestion DOC_ID suggest.xxx --accept  # Or --reject, or --delete [--force] (Docs API)
 
 gdoc info DOC_ID                             # Title, owner, last modified, word count
 gdoc share DOC_ID EMAIL [--role reader|writer|commenter] [--no-notify]  # --no-notify skips Google's email
@@ -88,7 +88,7 @@ The agent sees exactly what it can `edit` (numbered lines) and what's discussion
 context (un-numbered lines). This matches the Read/Edit pattern from Claude Code —
 line numbers are a display prefix, not part of the content.
 
-Placement uses each comment's live anchor from the Docs API Developer Preview
+Placement uses each comment's live anchor from the Docs API comments view
 (`documents.get` with `commentsViewMode`): the text the comment covers now. The
 CLI finds that text in the markdown and places the annotation after the line
 where the anchor ends. Drive's `quotedFileContent` can't show whether a comment
@@ -112,7 +112,7 @@ heading text that a table of contents may repeat, or the document or its
 comments changed while it was being read. `--json` reports the
 source as `"anchors"`: `live`, `live_no_locations` (lines dropped; status from
 a read just before the text shown), `quoted_text`, or `none` (no
-comments). When live anchors can't be read (no preview access, no comment
+comments). When live anchors can't be read (the comments view is rejected, no comment
 access, or the request fails), the CLI warns and places every comment by its
 quoted text instead; if the comments also keep changing during the read, the
 warning says so and no comment is placed. The labels say what was matched,
@@ -425,7 +425,7 @@ No other dependencies. Intentionally minimal.
 
 3. **`edit` is the workhorse for agents** — mirrors Claude Code's Edit tool. Agents `cat` the doc, find the text to change, and `edit` it with an exact unique match. No index math needed.
 
-4. **Ordinary comment CRUD uses the Drive API; a few operations use the Docs API preview** — Listing, creating, replying, resolving, reopening and deleting comments go through Drive v3 `comments`/`replies`. Anchored comments (`comment --quote`), assignment (`--assign`, `reply --reassign`), suggestion-thread replies, and editing or deleting a single post use the Docs API's native comment threads (`documents.batchUpdate` `insertComment` / `addCommentReply` / `updateCommentPost` / `deleteCommentReply`, Workspace Developer Preview), verified by `documents.get` with `commentsViewMode`. Drive reply IDs and native post IDs are the same values.
+4. **Ordinary comment CRUD uses the Drive API; a few operations use the Docs API's native threads** — Listing, creating, replying, resolving, reopening and deleting comments go through Drive v3 `comments`/`replies`. Anchored comments (`comment --quote`), assignment (`--assign`, `reply --reassign`), suggestion-thread replies, and editing or deleting a single post use the Docs API's native comment threads (`documents.batchUpdate` `insertComment` / `addCommentReply` / `updateCommentPost` / `deleteCommentReply`, generally available since 30 September 2026; no Developer Preview enrollment needed), verified by `documents.get` with `commentsViewMode`. Drive reply IDs and native post IDs are the same values.
 
 5. **`write` is destructive** — Full doc replacement. Blocked when doc changed since last read unless `--force` is passed. Agents should prefer `edit` for targeted edits.
 

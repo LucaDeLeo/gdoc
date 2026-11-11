@@ -726,9 +726,12 @@ class TestSuggestErrors:
                  b'Unknown name \\"write_mode\\" at \'write_control\'"}}',
             reason="Bad Request",
         ))
-        with pytest.raises(GdocError, match="not enrolled") as exc:
+        with pytest.raises(
+            GdocError, match="rejected the suggest-mode request"
+        ) as exc:
             suggest_replacement("doc1", MATCH, "x", "rev", tab_id="t.0")
         assert "No change was made" in str(exc.value)
+        assert "enrol" not in str(exc.value).lower()
         assert exc.value.exit_code == 1
 
     @patch("gdoc.api.docs.get_docs_service")
@@ -769,13 +772,13 @@ class TestSuggestErrors:
         assert "re-run it" not in str(exc.value)
 
     @patch("gdoc.api.docs.get_docs_service")
-    def test_403_reports_both_possibilities(self, mock_svc):
+    def test_403_names_document_access_not_preview(self, mock_svc):
         mock_svc.return_value = _service(batch_error=_http_error(403))
         with pytest.raises(GdocError, match="Permission denied: doc1") as exc:
             suggest_replacement("doc1", MATCH, "x", "rev", tab_id="t.0")
         msg = str(exc.value)
         assert "comment or edit access" in msg
-        assert "Developer Preview" in msg
+        assert "Developer Preview" not in msg
 
     @patch("gdoc.api.docs.get_docs_service")
     def test_401_is_auth_error(self, mock_svc):
@@ -1000,7 +1003,9 @@ class TestPreviewGate:
         }
 
     def test_unregistered_project_400_unknown_name(self):
-        with pytest.raises(GdocError, match="not enrolled") as exc:
+        with pytest.raises(
+            GdocError, match="rejected the comments view read field"
+        ) as exc:
             self._run(_gate_response(
                 400,
                 text='{"error": {"message": "Invalid JSON payload received. '

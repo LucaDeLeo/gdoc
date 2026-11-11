@@ -231,17 +231,19 @@ class TestGetDocumentThreads:
             400,
             'Invalid JSON payload received. Unknown name "comments_view_mode"',
         )
-        with pytest.raises(GdocError, match="not enrolled") as ei:
+        with pytest.raises(GdocError, match="did not accept or apply") as ei:
             get_document_threads("abc123")
         assert not isinstance(ei.value, PreviewUnavailableError)
         assert ei.value.exit_code == 1
+        # GA since 2026-09-30: never tell users to enroll in a preview.
+        assert "enrol" not in str(ei.value).lower()
 
     @patch("gdoc.api.docs._documents_get_raw")
     @patch("gdoc.api.docs.get_docs_service")
     def test_silently_dropped_view_mode_is_preview_unavailable(self, _svc, mock_raw):
         # No 400, but no echo and no thread lists: must not read as "no threads".
         mock_raw.return_value = {"documentId": "abc123", "revisionId": "r"}
-        with pytest.raises(GdocError, match="not enrolled"):
+        with pytest.raises(GdocError, match="did not accept or apply"):
             get_document_threads("abc123")
 
     @patch("gdoc.api.docs.get_docs_service")
@@ -329,8 +331,8 @@ class TestInsertCommentAssignee:
         mock_read.assert_not_called()
 
     @pytest.mark.parametrize("message, expect", [
-        ('Unknown name "insert_comment"', "preview not enabled"),
-        ("Invalid requests[0]: No request set.", "preview not enabled"),
+        ('Unknown name "insert_comment"', "rejected by the Docs API"),
+        ("Invalid requests[0]: No request set.", "rejected by the Docs API"),
     ])
     @patch("gdoc.api.docs.get_docs_service")
     def test_distinct_preview_reasons(self, mock_svc, message, expect):
@@ -547,7 +549,7 @@ class TestAddCommentReply:
         mock_svc.return_value = _mock_docs_service(
             batch_error=_http_error(400, message)
         )
-        with pytest.raises(GdocError, match="not enrolled") as ei:
+        with pytest.raises(GdocError, match="did not accept or apply") as ei:
             add_comment_reply("abc123", "c1", content="x")
         assert not isinstance(ei.value, PreviewUnavailableError)
 
@@ -762,7 +764,7 @@ class TestDispatchFailureIsAmbiguous:
         mock_svc.return_value = _mock_docs_service(
             batch_error=_http_error(400, 'Unknown name "insert_comment"')
         )
-        with pytest.raises(PreviewUnavailableError, match="preview not enabled"):
+        with pytest.raises(PreviewUnavailableError, match="rejected by the Docs API"):
             insert_comment("abc123", "hi", 5, 9)
         mock_svc.return_value = _mock_docs_service(
             batch_error=_http_error(400, "Only the author can edit this post.")

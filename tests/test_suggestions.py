@@ -201,7 +201,7 @@ class TestGetDocumentThreads:
         if mode is not None:
             doc["commentsViewMode"] = mode
         mock_raw.return_value = doc
-        with pytest.raises(GdocError, match="not enrolled") as e:
+        with pytest.raises(GdocError, match="did not accept or apply") as e:
             get_document_threads("doc1")
         assert type(e.value) is GdocError
 
@@ -215,7 +215,7 @@ class TestGetDocumentThreads:
             b'received. Unknown name \\"comments_view_mode\\": Cannot bind '
             b'query parameter.", "status": "INVALID_ARGUMENT"}}',
         )
-        with pytest.raises(GdocError, match="not enrolled") as e:
+        with pytest.raises(GdocError, match="did not accept or apply") as e:
             get_document_threads("doc1")
         # Plain GdocError, not PreviewUnavailableError: nothing may treat
         # a missing thread view as a cue to fall back to Drive.

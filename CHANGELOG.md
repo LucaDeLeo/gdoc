@@ -6,6 +6,17 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Native comments and suggestions are generally available.** The Docs API
+  moved comments and suggestions (`commentsViewMode`, `insertComment`,
+  `writeMode: SUGGEST`, accept/reject/delete suggestion, post edits and reply
+  deletion) out of the Workspace Developer Preview on 30 September 2026. The
+  README, help texts and error messages no longer say a Cloud project must be
+  enrolled. The fail-closed checks stay: an unexpected rejection still stops
+  the command with no change, and `comment --quote` still falls back to a
+  Drive comment (`reason: preview_unavailable`, kept for compatibility).
+
 ## [0.24.0] — 2026-11-09
 
 ### Added

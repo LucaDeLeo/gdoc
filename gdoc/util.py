@@ -23,11 +23,13 @@ class AuthError(GdocError):
 
 
 class PreviewUnavailableError(GdocError):
-    """A Docs API developer-preview feature isn't available to this caller.
+    """A Docs API comments feature isn't available to this caller.
 
-    Raised when a preview-gated batchUpdate request (e.g. insertComment) is
-    rejected because the Cloud project isn't enrolled in the Workspace
-    Developer Preview Program, or the user's access level can't batchUpdate.
+    Raised when a native-comments batchUpdate request (e.g. insertComment)
+    is rejected as unknown by the server, or the user's access level can't
+    batchUpdate. (The name predates these features' general availability
+    on 30 September 2026, when they left the Workspace Developer Preview;
+    no enrollment is needed any more.)
     Callers with a generally-available equivalent (comment --quote → Drive
     comment) catch it and fall back silently. Commands with no equivalent
     (suggestion threads and decisions) let it surface as an ordinary

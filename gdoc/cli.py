@@ -1826,7 +1826,7 @@ def cmd_suggest(args) -> int:
     """Handler for `gdoc suggest`: a find/replace made as a suggested edit.
 
     Same matching as `edit`, but the batchUpdate runs with
-    writeControl.writeMode=SUGGEST (Docs API Developer Preview) so the
+    writeControl.writeMode=SUGGEST (Docs API) so the
     change lands as a reviewable suggestion — the original text stays in
     place until someone accepts it. There is no fallback: if suggest mode
     is unavailable or unverifiable the command fails and nothing is
@@ -4044,7 +4044,7 @@ def cmd_delete_comment(args) -> int:
     """Handler for `gdoc delete-comment`.
 
     Without POST_ID, deletes the whole comment through Drive. With POST_ID,
-    deletes that one reply through the Docs API preview, on a comment or a
+    deletes that one reply through the Docs API, on a comment or a
     suggestion thread.
     """
     from gdoc.api.docs import is_suggestion_id
@@ -4883,7 +4883,7 @@ def cmd_replace_image(args) -> int:
     return 0
 
 
-# --- Suggestion threads (Docs API developer preview) ----------------------
+# --- Suggestion threads (Docs API) ----------------------------------------
 
 
 def _suggestion_range(loc: dict) -> str:
@@ -6330,15 +6330,14 @@ def build_parser() -> GdocArgumentParser:
     suggest_p = sub.add_parser(
         "suggest", parents=[output_parent],
         help="Find and replace text as a suggested edit (review, not commit)",
-        epilog="Like `edit`, but the change is made in suggest mode (Docs API "
-               "Developer Preview): the original text stays until a reviewer "
+        epilog="Like `edit`, but the change is made in suggest mode (Docs "
+               "API): the original text stays until a reviewer "
                "accepts it. Replacement text supports inline markdown only "
                "(bold, italic, strikethrough, code, links). Inside a "
                "paragraph, block markers are literal text; a replacement that "
                "covers complete paragraphs rejects headings, lists, and "
                "tables. Needs comment or edit access on the "
-               "doc and an OAuth client from a preview-enrolled Cloud "
-               "project; never falls back to a direct edit.",
+               "doc; never falls back to a direct edit.",
     )
     suggest_p.add_argument("doc", help="Document ID or URL")
     suggest_p.add_argument(
@@ -6607,7 +6606,7 @@ def build_parser() -> GdocArgumentParser:
         help=(
             "Text to anchor uniquely across tabs and body/header/footer/footnote "
             "segments. "
-            "If the Docs API preview is unavailable, creates an unanchored "
+            "If the Docs API refuses the anchored comment, creates an unanchored "
             "comment with quote metadata for cat --comments. No match or ambiguity: "
             "exit 3. One fresh attempt after a rejected revision; uncertain writes: "
             "exit 1, inspect comments before retrying"
@@ -6628,7 +6627,7 @@ def build_parser() -> GdocArgumentParser:
         "--assign",
         metavar="EMAIL",
         help=(
-            "Assign the new comment to this user (Docs API preview; "
+            "Assign the new comment to this user (Docs API; "
             "requires --quote, no Drive fallback)"
         ),
     )
@@ -6647,7 +6646,7 @@ def build_parser() -> GdocArgumentParser:
         "comment_id",
         help=(
             "Comment ID to reply to, or a suggestion ID (suggest.xxx) to "
-            "reply on a suggestion thread (Docs API preview)"
+            "reply on a suggestion thread (Docs API)"
         ),
     )
     reply_p.add_argument("text", help="Reply text")
@@ -6655,7 +6654,7 @@ def build_parser() -> GdocArgumentParser:
         "--reassign", metavar="EMAIL",
         help=(
             "Reassign an already-assigned comment thread to this user "
-            "(Docs API preview)"
+            "(Docs API)"
         ),
     )
     reply_p.add_argument(
@@ -6690,7 +6689,7 @@ def build_parser() -> GdocArgumentParser:
         help="Delete a comment, or one reply on a comment or suggestion thread",
         description=(
             "Without POST_ID, delete the whole comment. With POST_ID, "
-            "delete that one reply you wrote (Docs API preview); THREAD_ID "
+            "delete that one reply you wrote (Docs API); THREAD_ID "
             "may then be a comment ID or a suggestion ID (suggest.xxx)."
         ),
     )
@@ -6711,13 +6710,13 @@ def build_parser() -> GdocArgumentParser:
     )
     del_comment_p.set_defaults(func=cmd_delete_comment)
 
-    # edit-comment (Docs API preview)
+    # edit-comment (Docs API)
     ep = sub.add_parser(
         "edit-comment", parents=[output_parent],
         help="Edit the text of a comment or reply you wrote",
         description=(
             "Edit one post you wrote on a comment thread or a suggestion "
-            "thread (Docs API preview). A suggestion ID (suggest.xxx) "
+            "thread (Docs API). A suggestion ID (suggest.xxx) "
             "selects the suggestion thread; its generated head post "
             "cannot be edited."
         ),
@@ -6745,15 +6744,14 @@ def build_parser() -> GdocArgumentParser:
     )
     ci_p.set_defaults(func=cmd_comment_info)
 
-    # suggestions (Docs API developer preview)
+    # suggestions (Docs API)
     sugg_p = sub.add_parser(
         "suggestions", parents=[output_parent],
         help="List suggested edits, or show one (native suggestion threads)",
         description=(
             "List the document's native suggestion threads, or show one "
-            "in full when SUGGESTION_ID is given (Docs API Workspace "
-            "Developer Preview; requires an enrolled OAuth client "
-            "project). Each thread shows its ID, status, author, summary, "
+            "in full when SUGGESTION_ID is given (Docs API). Each thread "
+            "shows its ID, status, author, summary, "
             "and the tab/UTF-16 range(s) it touches, derived from the "
             "SUGGESTIONS_INLINE structure. Read-only."
         ),
@@ -6772,13 +6770,13 @@ def build_parser() -> GdocArgumentParser:
     )
     sugg_p.set_defaults(func=cmd_suggestions)
 
-    # suggestion (Docs API developer preview)
+    # suggestion (Docs API)
     sd_p = sub.add_parser(
         "suggestion", parents=[output_parent],
         help="Accept, reject, or delete one suggested edit",
         description=(
-            "Decide one native suggestion thread (Docs API Workspace "
-            "Developer Preview). --accept needs edit access; --reject "
+            "Decide one native suggestion thread (Docs API). --accept "
+            "needs edit access; --reject "
             "needs edit access or authorship of the suggestion; --delete "
             "needs authorship. The result is read back before OK is "
             "printed."

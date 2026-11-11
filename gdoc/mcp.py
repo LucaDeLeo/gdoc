@@ -172,11 +172,11 @@ _DESCRIPTION_NOTES: dict[str, str] = {
         "suggested edit for review, not a direct change; inline markdown "
         "only."
     ),
-    "comment": "`assign` requires `quote` (Docs API preview, no Drive fallback).",
+    "comment": "`assign` requires `quote` (Docs API, no Drive fallback).",
     "reply": (
         "A suggestion ID (`suggest.xxx`) replies on a suggestion thread. "
         "`reassign` applies to comment threads only and needs a thread "
-        "that already has an assignee (Docs API preview)."
+        "that already has an assignee (Docs API)."
     ),
     "suggestion": (
         "Exactly one of `accept`, `reject`, `delete` must be true. "

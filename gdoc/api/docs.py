@@ -136,10 +136,11 @@ def insert_comment(
 
     Unlike Drive's quotedFileContent (display metadata only), this creates a
     real anchored comment — highlighted in the Docs UI like one created by
-    hand. The request is a Workspace Developer Preview feature: projects not
-    enrolled get a 400 for the unknown request type, and comment-only access
-    can't batchUpdate at all (403) but can still comment via the Drive API.
-    Definite preview rejection raises PreviewUnavailableError. A revision
+    hand. The request is generally available in the Docs API (it left the
+    Workspace Developer Preview on 30 September 2026), but a backend that
+    still rejects it answers 400 for the unknown request type, and
+    comment-only access can't batchUpdate at all (403) but can still comment
+    via the Drive API. Definite rejection raises PreviewUnavailableError. A revision
     mismatch raises CommentRevisionConflictError so callers can re-read the
     anchor. Uncertain write outcomes never permit fallback or blind replay.
 
@@ -190,9 +191,9 @@ def insert_comment(
                 "Document changed before the comment could be anchored",
                 exit_code=3,
             ) from e
-        # A non-enrolled project sees insertComment as an unknown field:
+        # A backend without insertComment sees it as an unknown field:
         # rejected by name, or silently dropped so the request union is
-        # empty ("No request set", the observed live behavior).
+        # empty ("No request set", the behavior observed before GA).
         if status == 400 and (
             "No request set" in detail
             or (
@@ -201,7 +202,7 @@ def insert_comment(
             )
         ):
             raise PreviewUnavailableError(
-                "insertComment not available (preview not enabled)"
+                "insertComment not available (rejected by the Docs API)"
             ) from e
         if status == 403 and _is_permission_rejection(e):
             raise PreviewUnavailableError(
@@ -251,7 +252,7 @@ def insert_comment(
     return comment_id
 
 
-# --- Native comment/suggestion threads (Docs API developer preview) ---
+# --- Native comment/suggestion threads (Docs API, GA since 2026-09-30) ---
 #
 # Drive v3 remains gdoc's default read and mutation path for ordinary
 # comments (listing, pagination, tombstones and the awareness system all
@@ -264,19 +265,30 @@ _DOCS_BASE_URL = "https://docs.googleapis.com/v1/documents/"
 SUGGESTIONS_VIEW_MODE_INLINE = "SUGGESTIONS_INLINE"
 COMMENTS_VIEW_MODE_INCLUDED = "COMMENTS_VIEW_MODE_INCLUDED"
 
+# Comments and suggestions in the Docs API left the Workspace Developer
+# Preview and became generally available on 30 September 2026
+# (https://developers.google.com/workspace/docs/release-notes), so no
+# enrollment is needed. The rejection paths below stay as fail-closed
+# guards; their messages no longer send users to enroll.
+_GA_REJECTION_NOTE = (
+    "these Docs API features are generally available, so this is "
+    "unexpected; please report it with the server error"
+)
+
 _PREVIEW_UNAVAILABLE_MSG = (
-    "native comment threads are not available: the OAuth client's Cloud "
-    "project is not enrolled in the Google Workspace Developer Preview "
-    "(the Docs API rejected the preview field). No change was made."
+    "native comment threads are not available: the Docs API did not "
+    f"accept or apply the comments view field ({_GA_REJECTION_NOTE}). "
+    "No change was made."
 )
 
 
 def _preview_parse_error(e: HttpError) -> bool:
-    """True when a 400 says the server didn't understand a preview field.
+    """True when a 400 says the server didn't understand a comments field.
 
-    A project not enrolled in the Developer Preview sees preview fields as
-    unknown — rejected by name ("Unknown name", "Cannot find field") or
-    silently dropped so the request union is empty ("No request set").
+    Before GA, a project not enrolled in the Developer Preview saw these
+    fields as unknown — rejected by name ("Unknown name", "Cannot find
+    field") or silently dropped so the request union is empty ("No request
+    set"). Kept so an unexpected rejection still fails closed.
     """
     if int(e.resp.status) != 400:
         return False
@@ -307,8 +319,8 @@ def _same_email(saved, requested: str) -> bool:
 def _documents_get_raw(service, doc_id: str, params: dict) -> dict:
     """documents.get through the service's authorized transport.
 
-    Bypasses the discovery-generated method so preview query parameters
-    the public Discovery document doesn't list (``commentsViewMode``) can
+    Bypasses the discovery-generated method so query parameters the
+    bundled Discovery document doesn't list (``commentsViewMode``) can
     be sent: the generated ``documents().get`` rejects them client-side
     ("Got an unexpected keyword argument"). Uses the service's authorized
     transport (``service._http``, the same object every discovery call
@@ -335,7 +347,7 @@ def get_document_threads(doc_id: str) -> dict:
     thread with ``headPost`` and ``replies[]`` of Posts) plus
     ``revisionId``. Both lists are always present in the result.
 
-    Raises GdocError (exit 1) naming preview enrollment when Google rejects
+    Raises GdocError (exit 1) when Google rejects or ignores
     ``commentsViewMode``; other HttpErrors are translated as usual.
     """
     params = {
@@ -5810,7 +5822,7 @@ def replace_formatted(
 
 
 # ---------------------------------------------------------------------------
-# Suggested edits (Docs API Developer Preview: writeControl.writeMode=SUGGEST)
+# Suggested edits (Docs API writeControl.writeMode=SUGGEST, GA 2026-09-30)
 # ---------------------------------------------------------------------------
 
 SUGGESTIONS_INLINE = "SUGGESTIONS_INLINE"
@@ -6042,15 +6054,14 @@ def _classify_suggest_error(e: HttpError, doc_id: str) -> None:
         or "writemode" in lowered
     ):
         raise GdocError(
-            "suggest mode not available: the OAuth client's Cloud project "
-            "is not enrolled in the Google Workspace Developer Preview "
-            f"(server rejected the request: {e.reason}). No change was made."
+            "suggest mode not available: the Docs API rejected the "
+            f"suggest-mode request (server: {e.reason}; {_GA_REJECTION_NOTE})."
+            " No change was made."
         )
     if status == 403:
         raise GdocError(
             f"Permission denied: {doc_id} (suggesting through the API needs "
-            "comment or edit access on the document, or the project lacks "
-            "Developer Preview access)"
+            "comment or edit access on the document)"
         )
     if status >= 500:
         # A 5xx can arrive after Google applied the mutation: like a
@@ -6067,9 +6078,9 @@ def _classify_suggest_error(e: HttpError, doc_id: str) -> None:
 def _token_identity(account: str | None) -> tuple[str | None, str | None]:
     """The (client_id, refresh_token) pair in the account's token file.
 
-    The identity that must hold still between the enrollment gate and the
-    write: Developer Preview enrollment belongs to the OAuth client
-    project (client_id), and the suggestion's author is the granted user
+    The identity that must hold still between the suggest-mode gate and the
+    write: the gate's answer belongs to the OAuth client project
+    (client_id), and the suggestion's author is the granted user
     (refresh_token — any new grant mints a new one, whether the client or
     the Google user changed). A routine access-token refresh rewrites the
     file but keeps both. Missing or unreadable token reads as (None, None).
@@ -6089,7 +6100,7 @@ def _token_identity(account: str | None) -> tuple[str | None, str | None]:
 
 
 def _comments_view_get(doc_id: str, fields: str | None = None):
-    """Raw ``documents.get`` with the preview-only ``commentsViewMode``.
+    """Raw ``documents.get`` with ``commentsViewMode``.
 
     Sent as a raw authorized GET because the bundled discovery document
     predates the field and the generated client refuses unknown parameters.
@@ -6119,7 +6130,7 @@ def _comments_view_get(doc_id: str, fields: str | None = None):
 
 
 def _preview_field_rejected(resp) -> bool:
-    """400 naming the preview field: the project is not preview-enrolled."""
+    """400 naming the comments view field as unknown to the server."""
     if resp.status_code != 400:
         return False
     detail = resp.text.lower()
@@ -6127,15 +6138,16 @@ def _preview_field_rejected(resp) -> bool:
 
 
 def check_suggest_preview_access(doc_id: str) -> None:
-    """Non-mutating gate: is this OAuth client's project preview-enrolled?
+    """Non-mutating gate: does this backend honour suggest mode?
 
-    An unenrolled backend has been observed *ignoring* ``writeMode: SUGGEST``
-    and applying the batch as a direct edit, so enrollment must be proven
-    before the write, not inferred from its response. The decisive probe
-    is a ``documents.get`` with the preview-only ``commentsViewMode`` field:
-    a registered project echoes it (HTTP 200), an unregistered one rejects
-    it (400 ``Unknown name "comments_view_mode"``). Same account, document,
-    and scopes — only the client project changes the answer.
+    Suggest mode is generally available since 30 September 2026. Before
+    that, a backend without it was observed *ignoring* ``writeMode:
+    SUGGEST`` and applying the batch as a direct edit, so support is still
+    proven before the write, not inferred from its response — a cheap read
+    that keeps a misbehaving backend from turning a suggestion into a
+    direct edit. The probe is a ``documents.get`` with ``commentsViewMode``:
+    a supporting backend echoes it (HTTP 200); one without the feature
+    rejects it (400 ``Unknown name "comments_view_mode"``).
     """
     from google.auth.exceptions import GoogleAuthError, TransportError
     from requests.exceptions import RequestException
@@ -6169,15 +6181,14 @@ def check_suggest_preview_access(doc_id: str) -> None:
         if mode != "COMMENTS_VIEW_MODE_INCLUDED":
             raise GdocError(
                 "suggest mode not available: the server accepted but did "
-                "not apply the Developer Preview read field, so suggest "
-                "mode cannot be trusted. No change was made."
+                "not apply the comments view read field, so suggest mode "
+                f"cannot be trusted ({_GA_REJECTION_NOTE}). No change was made."
             )
         return
     if _preview_field_rejected(resp):
         raise GdocError(
-            "suggest mode not available: the OAuth client's Cloud project "
-            "is not enrolled in the Google Workspace Developer Preview "
-            "(preview read field rejected). No change was made."
+            "suggest mode not available: the Docs API rejected the comments "
+            f"view read field ({_GA_REJECTION_NOTE}). No change was made."
         )
     if status == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
@@ -6192,7 +6203,7 @@ def check_suggest_preview_access(doc_id: str) -> None:
 
 
 def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
-    """Live comment anchors, from the Docs API Developer Preview.
+    """Live comment anchors, from the Docs API comments view.
 
     Drive's comment fields (``anchor``, ``quotedFileContent``) never change
     after an edit, so they cannot show whether a comment is still attached.
@@ -6201,7 +6212,7 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     the Docs UI highlights. A comment with an anchor ID but no range left
     is detached (the UI says "Original content deleted").
 
-    Returns ``{comment_id: anchor}`` for every comment the preview reports
+    Returns ``{comment_id: anchor}`` for every comment the view reports
     with an anchor ID. ``anchor`` is None when detached (no range left),
     otherwise:
 
@@ -6218,8 +6229,8 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     comments created through the Drive API with only a quote).
 
     Raises PreviewUnavailableError whenever the anchors can't be read but
-    the document otherwise can: the OAuth client's project is not
-    preview-enrolled (the field is rejected, or accepted but not applied),
+    the document otherwise can: the comments view field is rejected, or
+    accepted but not applied,
     access is refused (403), or the request fails (network, rate limit,
     server error). Callers fall back to quoted text. Only expired
     credentials (AuthError) and a missing document (GdocError) propagate.
@@ -6240,8 +6251,7 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     status = resp.status_code
     if _preview_field_rejected(resp):
         raise PreviewUnavailableError(
-            "the OAuth client's Cloud project is not enrolled in the "
-            "Google Workspace Developer Preview"
+            "the Docs API rejected the comments view field"
         )
     if status == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
@@ -6260,7 +6270,7 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
         raise PreviewUnavailableError("unreadable document response")
     if document.get("commentsViewMode") != "COMMENTS_VIEW_MODE_INCLUDED":
         raise PreviewUnavailableError(
-            "the server did not apply the Developer Preview comments view"
+            "the server did not apply the comments view"
         )
 
     def walk(ts: list[dict]):
@@ -6417,9 +6427,9 @@ def suggest_replacement(
     One batchUpdate carries the delete + insert + inline-style requests for
     every match, with ``writeControl.requiredRevisionId`` pinned to the
     revision the matches were computed against. Before it, a non-mutating
-    preview read (``check_suggest_preview_access``) proves the project is
-    enrolled, because an unenrolled backend may silently apply the batch as
-    a direct edit. Success requires all of:
+    read (``check_suggest_preview_access``) proves the backend honours
+    suggest mode, because one without it was seen silently applying the
+    batch as a direct edit. Success requires all of:
     HTTP 200, ``commentUpdateState == ALL_SAVED``, at least one created or
     updated suggestion ID in ``suggestionResponses``, and a SUGGESTIONS_INLINE
     read-back containing every one of those IDs. Anything less raises —
@@ -6555,11 +6565,11 @@ def suggest_replacement(
     if not requests:
         return SuggestionResult(occurrences=0)
 
-    # Prove enrollment with a read before the write (see the gate's doc),
-    # pinning one OAuth identity across both: a re-auth landing between
-    # them could otherwise swap the client project (proving enrollment for
-    # one project while the batch goes through another — which an
-    # unenrolled backend may apply as a direct edit) or the granted user
+    # Prove suggest support with a read before the write (see the gate's
+    # doc), pinning one OAuth identity across both: a re-auth landing
+    # between them could otherwise swap the client project (proving support
+    # for one project while the batch goes through another — which a
+    # backend without suggest mode may apply as a direct edit) or the granted user
     # (authoring the suggestion as someone else). The pin is the token's
     # (client_id, refresh_token) pair, not the file's identity: a routine
     # access-token refresh (the gate's own get_credentials persists one
@@ -6593,7 +6603,7 @@ def suggest_replacement(
         if _token_identity(account) != gate_identity:
             raise GdocError(
                 "credentials changed while preparing the suggest write "
-                "(the account was re-authenticated between the enrollment "
+                "(the account was re-authenticated between the suggest-mode "
                 "check and the write, so the check may have proven a "
                 "different OAuth client project or user). No change was "
                 "made — rerun the command."
@@ -6655,8 +6665,8 @@ def suggest_replacement(
 
         if state != "ALL_SAVED" or not outcome.suggestion_ids:
             # The server answered 200 but produced no durable review object:
-            # either it ignored writeMode (an unenrolled backend has been
-            # seen applying the change directly) or the suggestion thread
+            # either it ignored writeMode (a backend without suggest mode
+            # was seen applying the change directly) or the suggestion thread
             # failed to save. Say so loudly; the caller must inspect the
             # document.
             raise GdocError(
@@ -6671,7 +6681,7 @@ def suggest_replacement(
                     if outcome.suggestion_ids
                     else ""
                 )
-                + ". The Cloud project may lack Developer Preview access. "
+                + ". The server may not have honoured suggest mode. "
                 "Check the document — the text may have been edited "
                 "directly."
             )
@@ -6705,12 +6715,12 @@ def suggest_replacement(
         return outcome
 
 
-# --- Suggestion threads (Workspace Developer Preview) ---------------------
+# --- Suggestion threads (Docs API, GA since 2026-09-30) -------------------
 #
 # documents.get?commentsViewMode=COMMENTS_VIEW_MODE_INCLUDED returns native
 # `suggestions[]` (and `comments[]`) threads. The parameter, the thread
-# schema, and the accept/reject/deleteSuggestion requests are preview-only:
-# the public Discovery document doesn't list them, so the discovery-built
+# schema, and the accept/reject/deleteSuggestion requests predate the
+# bundled Discovery document, which doesn't list them, so the discovery-built
 # client rejects the query parameter client-side ("unexpected keyword
 # argument"). The read therefore goes over the service's authorized HTTP
 # transport directly (get_document_threads, shared with the comment-thread
@@ -6945,7 +6955,7 @@ def decide_suggestion(
         GdocError: revision mismatch (exit 1, "re-run"), permission denied
             with the rule for this decision, missing revision ID, or other
             API errors.
-        PreviewUnavailableError: the project lacks preview access.
+        PreviewUnavailableError: the Docs API rejected the request as unknown.
     """
     if decision not in SUGGESTION_DECISIONS:
         raise ValueError(f"unknown suggestion decision: {decision}")
@@ -6978,8 +6988,8 @@ def decide_suggestion(
         status = int(e.resp.status)
         if _preview_parse_error(e):
             raise PreviewUnavailableError(
-                f"{request_key} is not available: the OAuth client's Cloud "
-                "project is not enrolled in the Workspace Developer Preview"
+                f"{request_key} is not available: the Docs API rejected the "
+                f"request ({_GA_REJECTION_NOTE})"
             )
         if status >= 500:
             # Like a dropped connection: Google may have applied the
