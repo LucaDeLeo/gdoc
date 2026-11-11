@@ -122,34 +122,40 @@ def _install_origin() -> dict | None:
 
 
 def _strip_userinfo(url: str) -> str:
-    """Drop any ``user:password@`` from a URL so it is safe to print."""
+    """The URL with any ``user:password@``, query and fragment removed, so it
+    is safe to print (tokens can ride in any of them)."""
     from urllib.parse import urlsplit, urlunsplit
 
     try:
         parts = urlsplit(url)
-    except ValueError:
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        netloc = host if "@" in parts.netloc else parts.netloc
+        return urlunsplit(parts._replace(netloc=netloc, query="", fragment=""))
+    except ValueError:  # e.g. a non-numeric port
         return "an unrecognized source"
-    if parts.username is None and parts.password is None:
-        return url
-    host = parts.hostname or ""
-    if parts.port:
-        host = f"{host}:{parts.port}"
-    return urlunsplit(parts._replace(netloc=host))
 
 
-def _repo_key(url: str) -> str:
-    """Host and path of a repository URL, ignoring scheme, user, case,
-    a trailing slash and a ``.git`` suffix."""
+def _repo_key(url: str) -> str | None:
+    """Host, port and path of an https or ssh repository URL, ignoring user,
+    case, a trailing slash and a ``.git`` suffix; None for anything else."""
     from urllib.parse import urlsplit
 
     try:
         parts = urlsplit(url.strip())
+        port = parts.port
     except ValueError:
-        return url
+        return None
+    if parts.scheme.lower() not in ("https", "ssh"):
+        return None
     path = parts.path.rstrip("/")
     if path.endswith(".git"):
         path = path[:-4]
-    return f"{(parts.hostname or '').lower()}{path.lower()}"
+    host = (parts.hostname or "").lower()
+    if port is not None and port not in (443, 22):
+        host = f"{host}:{port}"
+    return f"{host}{path.lower()}"
 
 
 def pinned_install_reason() -> str | None:
@@ -159,22 +165,27 @@ def pinned_install_reason() -> str | None:
     branch) or came from another source (a fork, a local checkout) was a
     deliberate choice. Auto-update and ``gdoc update`` reinstall from
     upstream main, which would silently undo that choice: for a tool holding
-    a Drive token, a pin is how a user controls what code runs.
+    a Drive token, a pin is how a user controls what code runs. Metadata
+    that can't be understood counts as pinned: skipping an update is the
+    safe failure.
     """
     origin = _install_origin()
     if origin is None:
         return None
-    url = origin.get("url")
-    if not isinstance(url, str):
+    try:
+        url = origin.get("url")
+        if not isinstance(url, str):
+            return None
+        vcs = origin.get("vcs_info")
+        if isinstance(vcs, dict) and vcs.get("requested_revision"):
+            return f"pinned to {vcs['requested_revision']}"
+        key = _repo_key(url)
+        if (not isinstance(vcs, dict) or key is None
+                or key != _repo_key(f"https://github.com/{_GITHUB_REPO}")):
+            return f"installed from {_strip_userinfo(url)}"
         return None
-    vcs = origin.get("vcs_info")
-    if isinstance(vcs, dict) and vcs.get("requested_revision"):
-        return f"pinned to {vcs['requested_revision']}"
-    if not isinstance(vcs, dict) or _repo_key(url) != _repo_key(
-        f"https://github.com/{_GITHUB_REPO}"
-    ):
-        return f"installed from {_strip_userinfo(url)}"
-    return None
+    except Exception:  # noqa: BLE001 — never let metadata break help output
+        return "installed from an unrecognized source"
 
 
 def _is_uv_tool_install() -> bool:

@@ -327,3 +327,44 @@ class TestPinnedInstallsAreNotReplaced:
         assert "1.0.0" in err and "2.0.0" in err
         assert "pinned to 8bfe7f9" in err
         assert "Run `gdoc update`" not in err
+
+
+class TestPinnedInstallUrlEdgeCases:
+    @pytest.mark.parametrize("url", [
+        "http://github.com/LucaDeLeo/gdoc.git",          # not https or ssh
+        "https://github.com:8443/LucaDeLeo/gdoc.git",    # another port
+        "https://u:p@host:abc/x/gdoc.git",               # unparseable port
+    ])
+    def test_unusual_urls_count_as_pinned(self, monkeypatch, url):
+        monkeypatch.setattr(update, "_install_origin", lambda: _origin(url=url))
+        assert update.pinned_install_reason() is not None
+
+    def test_bad_port_never_breaks_help(self, monkeypatch, cache_file):
+        monkeypatch.setattr(update, "_is_uv_tool_install", lambda: True)
+        monkeypatch.setattr(
+            update, "_install_origin",
+            lambda: _origin(url="https://u:p@host:abc/x/gdoc.git"),
+        )
+        monkeypatch.delenv("GDOC_AUTO_UPDATE", raising=False)
+        monkeypatch.delenv("GDOC_SKIP_UPDATE_CHECK", raising=False)
+        monkeypatch.setattr(
+            update.subprocess, "run",
+            lambda *a, **kw: pytest.fail("must not reinstall"),
+        )
+        update.auto_update_for_help()  # no exception, no reinstall
+
+    def test_query_and_fragment_secrets_are_never_shown(self, monkeypatch):
+        monkeypatch.setattr(
+            update, "_install_origin",
+            lambda: _origin(url="https://example.com/x/gdoc.git?token=SECRET#frag"),
+        )
+        reason = update.pinned_install_reason()
+        assert "SECRET" not in reason and "frag" not in reason
+        assert reason == "installed from https://example.com/x/gdoc.git"
+
+    def test_explicit_default_ports_are_still_upstream(self, monkeypatch):
+        monkeypatch.setattr(
+            update, "_install_origin",
+            lambda: _origin(url="https://github.com:443/LucaDeLeo/gdoc.git"),
+        )
+        assert update.pinned_install_reason() is None
