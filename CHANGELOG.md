@@ -16,6 +16,15 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ### Fixed
 
+- **Windows: every command after the first on a document failed.** Saving
+  the per-document state used `os.rename`, which cannot replace an existing
+  file on Windows (WinError 183), so the second command on a document ended
+  in `ERR: unexpected error` and writes warned that local state could not be
+  updated. It now uses `os.replace`.
+- **Windows: console output is UTF-8.** Piped or redirected output used the
+  ANSI code page, so the awareness banner's emoji printed as literal
+  `\U0001f4c4` escapes and document text such as en dashes was mangled. gdoc
+  now writes UTF-8 to stdin/stdout/stderr unless `PYTHONIOENCODING` is set.
 - **`suggest` strikes out only the words that change.** A suggestion used to
   delete and re-insert the whole matched text, so changing two words of a
   nine-word quote struck out all nine. The shared leading and trailing words
