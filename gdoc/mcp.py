@@ -170,7 +170,8 @@ _DESCRIPTION_NOTES: dict[str, str] = {
     "suggest": (
         "Needs `old_text` and `new_text`. The replacement lands as a "
         "suggested edit for review, not a direct change; inline markdown "
-        "only."
+        "only. Only changed words are suggested; extra plain-text lines "
+        "after a quote that ends its paragraph become new paragraphs."
     ),
     "comment": "`assign` requires `quote` (Docs API, no Drive fallback).",
     "reply": (

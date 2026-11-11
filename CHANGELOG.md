@@ -6,6 +6,14 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- **`suggest` can add paragraphs.** `gdoc suggest DOC "OLD" $'OLD\nnew
+  paragraph'` used to be refused with `paragraph count mismatch`. When the
+  quoted text ends its paragraph, extra plain-text lines are now suggested as
+  new paragraphs after it (one suggested insertion, like Enter in Suggesting
+  mode); an unchanged first line is not suggested at all.
+
 ### Fixed
 
 - **`suggest` strikes out only the words that change.** A suggestion used to

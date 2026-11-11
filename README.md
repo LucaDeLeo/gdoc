@@ -1158,6 +1158,15 @@ Requirements and limits:
   whole paragraphs. Fenced code blocks are
   accepted as code-font paragraphs only when the paragraph-boundary contract
   is satisfied.
+- **New paragraphs.** When the quoted text runs to the end of its paragraph,
+  extra lines in the replacement are suggested as new paragraphs after it,
+  as if you pressed Enter there in *Suggesting* mode:
+  `gdoc suggest DOC "First point." $'First point.\nSecond point.'` suggests
+  only the new paragraph "Second point." (the first line is unchanged, so it
+  is not suggested). Docs gives new paragraphs the style of the one they
+  follow, list membership included. Each added line must be plain, non-empty
+  text, and this works for a single match (no `--all`). Other replacements
+  with more lines than matched paragraphs are refused as before.
 - **No overlap with existing suggestions.** The document is read with
   suggestions inline; a match that touches text someone else has already
   suggested inserting, deleting, or restyling is refused, so a review thread is

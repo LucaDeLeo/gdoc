@@ -6566,6 +6566,66 @@ def _narrow_to_changed_words(
     return narrowed, replacement
 
 
+@dataclass
+class _AppendedParagraphs:
+    """New paragraphs a suggestion adds after the matched paragraph."""
+
+    head: str               # replacement for the matched text itself
+    request: dict           # one suggested insertText of "\n" + the lines
+    head_unchanged: bool    # the matched text is kept as it is
+
+
+def _split_appended_paragraphs(
+    body: dict, matches: list[dict], new_markdown: str, tab_id: str | None,
+) -> _AppendedParagraphs | None:
+    """Recognise ``suggest OLD "OLD\\nnew paragraph"``.
+
+    When the one match ends where its paragraph's text ends and the
+    replacement has extra lines, the extra lines become new paragraphs
+    after it: a single suggested ``insertText`` of ``"\\n" + lines`` just
+    before the paragraph mark, as pressing Enter at the end of the
+    paragraph in Suggesting mode would. Docs copies the paragraph's style
+    (including list membership) to the new paragraphs. Returns None for any
+    other shape, which keeps the existing paragraph-count rules.
+    """
+    source = new_markdown.removesuffix("\n")
+    if "\n" not in source or "\r" in new_markdown or len(matches) != 1:
+        return None
+    match = matches[0]
+    try:
+        scope = _replacement_body(body, match)
+    except GdocError:
+        return None
+    content = (scope or {}).get("content", [])
+    paragraphs = list(_replacement_paragraphs(content, match))
+    if len(paragraphs) != 1:
+        return None
+    _, start, end = paragraphs[0]
+    if match["startIndex"] < start or match["endIndex"] != end:
+        return None
+    from gdoc.mdparse import parse_markdown
+
+    whole = parse_markdown(new_markdown)
+    head, *extra = source.split("\n")
+    if (whole.tables or whole.code_blocks or whole.images
+            or not all(_literal_markdown(line) for line in extra)):
+        # Structural Markdown (tables, fences, lists) and blank lines keep
+        # their existing handling and refusals; a table's rows each look
+        # like plain text, so the whole replacement is checked too.
+        return None
+    location: dict = {"index": end}
+    tab = match.get("tabId") or tab_id
+    if tab:
+        location["tabId"] = tab
+    return _AppendedParagraphs(
+        head=head,
+        request={"insertText": {
+            "location": location, "text": "\n" + "\n".join(extra),
+        }},
+        head_unchanged=_match_text(content, match) == head,
+    )
+
+
 def suggest_replacement(
     doc_id: str,
     matches: list[dict],
@@ -6618,6 +6678,13 @@ def suggest_replacement(
 
     parsed = parse_markdown(new_markdown)
     check_segment_replacement(parsed, new_markdown, matches)
+    appended = None
+    if body is not None:
+        # Extra lines after a whole-paragraph-end match: new paragraphs.
+        appended = _split_appended_paragraphs(body, matches, new_markdown, tab_id)
+        if appended is not None:
+            new_markdown = appended.head
+            parsed = parse_markdown(new_markdown)
     if body is None:
         check_inline_only_markdown(parsed)
     _reject_overlapping_matches(matches)
@@ -6631,7 +6698,9 @@ def suggest_replacement(
             parsed = parse_markdown(new_markdown)
     _strip_trailing_newline_unless_hr(parsed)
     occurrence_count = len(matches)
-    if body is None:
+    if appended is not None and appended.head_unchanged:
+        requests = []  # the matched text stays; only paragraphs are added
+    elif body is None:
         _, requests = _build_replacement_requests(_inline_only(parsed), matches,
                                                  tab_id=tab_id)
     else:
@@ -6723,6 +6792,11 @@ def suggest_replacement(
                     contexts={_match_key(match): (_inline_only(selected), baseline)},
                 )
             requests.extend(built)
+    if appended is not None:
+        # The paragraph mark is the highest index this batch touches, so
+        # inserting there first keeps every other request's index valid. A
+        # replacement inserted at the same index later lands before it.
+        requests.insert(0, appended.request)
     if not requests:
         return SuggestionResult(occurrences=0)
 

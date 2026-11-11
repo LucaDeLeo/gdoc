@@ -2166,3 +2166,112 @@ class TestChangedSpan:
         from gdoc.api.docs import _changed_word_span
 
         assert _changed_word_span(old, new) == span
+
+
+# ---------------------------------------------------------------------------
+# Suggesting new paragraphs after the matched one
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestNewParagraphs:
+    """`suggest DOC OLD "OLD\\nnew paragraph"` suggests the new paragraph,
+    exactly like pressing Enter at the end of OLD in Suggesting mode."""
+
+    def test_unchanged_first_line_suggests_only_the_new_paragraph(self, mocker):
+        text = "First point."
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "First point.\nSecond point.",
+            _fox_body(text),
+        )
+        assert reqs == [
+            {"insertText": {"location": {"index": 13, "tabId": "t.0"},
+                            "text": "\nSecond point."}},
+        ]
+
+    def test_several_new_paragraphs_in_one_insertion(self, mocker):
+        text = "Intro"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "Intro\nOne\nTwo\n", _fox_body(text),
+        )
+        assert reqs == [
+            {"insertText": {"location": {"index": 6, "tabId": "t.0"},
+                            "text": "\nOne\nTwo"}},
+        ]
+
+    def test_changed_first_line_and_new_paragraph_in_one_batch(self, mocker):
+        text = "the cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the dog sat\nThen it left.",
+            _fox_body(text),
+        )
+        # The new paragraph goes in first, at the paragraph mark (the
+        # highest index), so the word change's indexes stay valid.
+        assert reqs == [
+            {"insertText": {"location": {"index": 12, "tabId": "t.0"},
+                            "text": "\nThen it left."}},
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 8, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "dog"}},
+        ]
+
+    def test_match_ending_mid_paragraph_is_still_refused(self, mocker):
+        body = _fox_body("alpha beta")
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch"):
+            suggest_replacement(
+                "synthetic-doc", [{"startIndex": 1, "endIndex": 6}],
+                "alpha\nnew", "synthetic-rev", tab_id="t.0", body=body,
+            )
+        gate.assert_not_called()
+
+    def test_markdown_in_a_new_paragraph_is_refused_before_any_call(self, mocker):
+        # Only plain lines become new paragraphs; anything else keeps the
+        # existing paragraph-count refusal.
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch") as exc:
+            suggest_replacement(
+                "synthetic-doc", _fox_match("Intro"), "Intro\n- a list item",
+                "synthetic-rev", tab_id="t.0", body=_fox_body("Intro"),
+            )
+        assert exc.value.exit_code == 3
+        gate.assert_not_called()
+
+    def test_blank_new_paragraph_is_refused(self, mocker):
+        mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch"):
+            suggest_replacement(
+                "synthetic-doc", _fox_match("Intro"), "Intro\n\nAfter",
+                "synthetic-rev", tab_id="t.0", body=_fox_body("Intro"),
+            )
+
+    def test_new_paragraph_with_several_matches_is_refused(self, mocker):
+        body = _body(
+            _para(_run("red fish\n", 1, 10)),
+            _para(_run("red fish\n", 10, 19)),
+        )
+        mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch"):
+            suggest_replacement(
+                "synthetic-doc",
+                [{"startIndex": 1, "endIndex": 9},
+                 {"startIndex": 10, "endIndex": 18}],
+                "red fish\nmore", "synthetic-rev", tab_id="t.0", body=body,
+            )
+
+    def test_new_paragraph_in_a_table_cell(self, mocker):
+        cell_para = _para(_run("Cell text\n", 5, 15))
+        body = _body({
+            "startIndex": 2, "endIndex": 17,
+            "table": {"tableRows": [{"tableCells": [
+                {"content": [cell_para]},
+            ]}]},
+        })
+        reqs = _suggest_requests(
+            mocker, [{"startIndex": 5, "endIndex": 14}],
+            "Cell text\nMore", body,
+        )
+        assert reqs == [
+            {"insertText": {"location": {"index": 14, "tabId": "t.0"},
+                            "text": "\nMore"}},
+        ]
