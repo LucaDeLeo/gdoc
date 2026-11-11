@@ -6,6 +6,57 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- **`suggest` can add paragraphs.** `gdoc suggest DOC "OLD" $'OLD\nnew
+  paragraph'` used to be refused with `paragraph count mismatch`. When the
+  quoted text ends its paragraph, extra plain-text lines are now suggested as
+  new paragraphs after it (one suggested insertion, like Enter in Suggesting
+  mode); an unchanged first line is not suggested at all.
+
+### Fixed
+
+- **Windows: every command after the first on a document failed.** Saving
+  the per-document state used `os.rename`, which cannot replace an existing
+  file on Windows (WinError 183), so the second command on a document ended
+  in `ERR: unexpected error` and writes warned that local state could not be
+  updated. It now uses `os.replace`.
+- **Windows: console output is UTF-8.** Piped or redirected output used the
+  ANSI code page, so the awareness banner's emoji printed as literal
+  `\U0001f4c4` escapes and document text such as en dashes was mangled. gdoc
+  now uses UTF-8 for stdin, stdout and stderr unless `PYTHONIOENCODING` is
+  set, so text piped in (`-` arguments, `--stdin`) is read as UTF-8 too, like
+  `--file` input already was; pipe ANSI-encoded text through a converter or
+  set `PYTHONIOENCODING` to keep the old behaviour.
+- **`suggest` strikes out only the words that change.** A suggestion used to
+  delete and re-insert the whole matched text, so changing two words of a
+  nine-word quote struck out all nine. The shared leading and trailing words
+  are now left out of the suggestion (plain-text replacements of plain text in
+  one paragraph; anything else keeps the whole match).
+
+### Security
+
+- **Token storage is documented.** The README now says what a `token.json`
+  grants, that it is plain JSON, that `0600` protects it only on macOS and
+  Linux, and how to check and revoke it on Windows.
+- **Auto-update no longer overrides pinned installs.** A `uv tool` install
+  that requested a revision (`git+…@<sha|tag|branch>`) or came from a fork or
+  local checkout was silently reinstalled from upstream main by bare `gdoc`,
+  `gdoc --help` or `gdoc -h`. Such installs (read from the PEP 610
+  `direct_url.json`) are now never auto-updated; `gdoc update` declines with
+  the manual command, and the update notice says the install is pinned.
+
+### Changed
+
+- **Native comments and suggestions are generally available.** The Docs API
+  moved comments and suggestions (`commentsViewMode`, `insertComment`,
+  `writeMode: SUGGEST`, accept/reject/delete suggestion, post edits and reply
+  deletion) out of the Workspace Developer Preview on 30 September 2026. The
+  README, help texts and error messages no longer say a Cloud project must be
+  enrolled. The fail-closed checks stay: an unexpected rejection still stops
+  the command with no change, and `comment --quote` still falls back to a
+  Drive comment (`reason: preview_unavailable`, kept for compatibility).
+
 ## [0.24.0] — 2026-11-09
 
 ### Added

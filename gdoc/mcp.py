@@ -170,13 +170,14 @@ _DESCRIPTION_NOTES: dict[str, str] = {
     "suggest": (
         "Needs `old_text` and `new_text`. The replacement lands as a "
         "suggested edit for review, not a direct change; inline markdown "
-        "only."
+        "only. Only changed words are suggested; extra plain-text lines "
+        "after a quote that ends its paragraph become new paragraphs."
     ),
-    "comment": "`assign` requires `quote` (Docs API preview, no Drive fallback).",
+    "comment": "`assign` requires `quote` (Docs API, no Drive fallback).",
     "reply": (
         "A suggestion ID (`suggest.xxx`) replies on a suggestion thread. "
         "`reassign` applies to comment threads only and needs a thread "
-        "that already has an assignee (Docs API preview)."
+        "that already has an assignee (Docs API)."
     ),
     "suggestion": (
         "Exactly one of `accept`, `reject`, `delete` must be true. "

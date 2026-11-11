@@ -726,9 +726,12 @@ class TestSuggestErrors:
                  b'Unknown name \\"write_mode\\" at \'write_control\'"}}',
             reason="Bad Request",
         ))
-        with pytest.raises(GdocError, match="not enrolled") as exc:
+        with pytest.raises(
+            GdocError, match="rejected the suggest-mode request"
+        ) as exc:
             suggest_replacement("doc1", MATCH, "x", "rev", tab_id="t.0")
         assert "No change was made" in str(exc.value)
+        assert "enrol" not in str(exc.value).lower()
         assert exc.value.exit_code == 1
 
     @patch("gdoc.api.docs.get_docs_service")
@@ -769,13 +772,13 @@ class TestSuggestErrors:
         assert "re-run it" not in str(exc.value)
 
     @patch("gdoc.api.docs.get_docs_service")
-    def test_403_reports_both_possibilities(self, mock_svc):
+    def test_403_names_document_access_not_preview(self, mock_svc):
         mock_svc.return_value = _service(batch_error=_http_error(403))
         with pytest.raises(GdocError, match="Permission denied: doc1") as exc:
             suggest_replacement("doc1", MATCH, "x", "rev", tab_id="t.0")
         msg = str(exc.value)
         assert "comment or edit access" in msg
-        assert "Developer Preview" in msg
+        assert "Developer Preview" not in msg
 
     @patch("gdoc.api.docs.get_docs_service")
     def test_401_is_auth_error(self, mock_svc):
@@ -1000,7 +1003,9 @@ class TestPreviewGate:
         }
 
     def test_unregistered_project_400_unknown_name(self):
-        with pytest.raises(GdocError, match="not enrolled") as exc:
+        with pytest.raises(
+            GdocError, match="rejected the comments view read field"
+        ) as exc:
             self._run(_gate_response(
                 400,
                 text='{"error": {"message": "Invalid JSON payload received. '
@@ -1952,3 +1957,403 @@ def test_lost_suggest_response_is_sent_once_and_reported_unknown(mocker):
     assert "outcome is unknown" in str(exc.value)
     assert "re-run" not in str(exc.value)
     assert connection.request.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Only the changed words become the suggestion
+# ---------------------------------------------------------------------------
+
+_FOX = "The quick brown fox jumps over the lazy dog"
+
+
+def _fox_body(text=_FOX, start=1):
+    from gdoc.mdparse import utf16_len
+
+    end = start + utf16_len(text) + 1
+    return _body(_para(_run(text + "\n", start, end)))
+
+
+def _fox_match(text=_FOX, start=1):
+    from gdoc.mdparse import utf16_len
+
+    return [{"startIndex": start, "endIndex": start + utf16_len(text)}]
+
+
+def _suggest_requests(mocker, matches, new_text, body):
+    service = _service(_ok_response())
+    mocker.patch("gdoc.api.docs.get_docs_service", return_value=service)
+    mocker.patch("gdoc.api.docs.get_document_structure",
+                 return_value=_readback("suggest.abc"))
+    result = suggest_replacement(
+        "synthetic-doc", matches, new_text, "synthetic-rev", tab_id="t.0",
+        body=body,
+    )
+    assert result.occurrences == len(matches)
+    return _batch_call(service).kwargs["body"]["requests"]
+
+
+class TestSuggestOnlyChangedWords:
+    """A suggestion strikes out only what changes, as a reviewer would."""
+
+    def test_two_changed_words_in_a_nine_word_match(self, mocker):
+        reqs = _suggest_requests(
+            mocker, _fox_match(),
+            "The slow red fox jumps over the lazy dog", _fox_body(),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 16, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "slow red"}},
+        ]
+
+    def test_trims_to_whole_words(self, mocker):
+        # "colour" -> "color" shares "colo", but the suggestion names the word.
+        text = "the colour of money"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the color of money", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 11, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "color"}},
+        ]
+
+    def test_pure_deletion_strikes_only_the_removed_word(self, mocker):
+        text = "the big cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the cat sat", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 9, "tabId": "t.0"}}},
+        ]
+
+    def test_pure_insertion_widens_to_the_next_word(self, mocker):
+        # Nothing would be struck out; the next word anchors the insertion.
+        text = "the cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the big cat sat", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 8, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "big cat"}},
+        ]
+
+    def test_appending_at_the_end_widens_to_the_last_word(self, mocker):
+        text = "the cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the cat sat down", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 9, "endIndex": 12, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 9, "tabId": "t.0"},
+                            "text": "sat down"}},
+        ]
+
+    def test_utf16_offsets_after_astral_characters(self, mocker):
+        # U+1F600 is two UTF-16 code units; the trimmed range must count them.
+        text = "\U0001f600 alpha beta"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "\U0001f600 alpha gamma", _fox_body(text),
+        )
+        assert reqs == [
+            {"deleteContentRange": {"range": {
+                "startIndex": 10, "endIndex": 14, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 10, "tabId": "t.0"},
+                            "text": "gamma"}},
+        ]
+
+    def test_every_match_is_narrowed_with_all(self, mocker):
+        text = "red fish"
+        body = _body(
+            _para(_run(text + "\n", 1, 10)),
+            _para(_run(text + "\n", 10, 19)),
+        )
+        matches = [{"startIndex": 1, "endIndex": 9},
+                   {"startIndex": 10, "endIndex": 18}]
+        reqs = _suggest_requests(mocker, matches, "blue fish", body)
+        deletes = [r["deleteContentRange"]["range"] for r in reqs
+                   if "deleteContentRange" in r]
+        inserts = [r["insertText"]["text"] for r in reqs if "insertText" in r]
+        assert sorted((d["startIndex"], d["endIndex"]) for d in deletes) == [
+            (1, 4), (10, 13),
+        ]
+        assert inserts == ["blue", "blue"]
+
+    def test_markdown_replacement_keeps_the_whole_match(self, mocker):
+        reqs = _suggest_requests(
+            mocker, _fox_match(),
+            "The **slow** brown fox jumps over the lazy dog", _fox_body(),
+        )
+        assert reqs[0] == {"deleteContentRange": {"range": {
+            "startIndex": 1, "endIndex": 44, "tabId": "t.0"}}}
+
+    def test_non_text_element_in_match_keeps_the_whole_match(self):
+        body = _body(_para(
+            _run("see ", 1, 5),
+            {"startIndex": 5, "endIndex": 6,
+             "inlineObjectElement": {"inlineObjectId": "img"}},
+            _run(" here\n", 6, 12),
+        ))
+        from gdoc.api.docs import _narrow_to_changed_words
+
+        matches = [{"startIndex": 1, "endIndex": 11}]
+        assert _narrow_to_changed_words(body, matches, "see x there") == (
+            matches, "see x there",
+        )
+
+    def test_different_match_texts_keep_whole_matches(self, mocker):
+        # Folded matching can find differently spelled text; one replacement
+        # can only be trimmed when every match reads the same.
+        body = _body(
+            _para(_run("red fish\n", 1, 10)),
+            _para(_run("Red fish\n", 10, 19)),
+        )
+        matches = [{"startIndex": 1, "endIndex": 9},
+                   {"startIndex": 10, "endIndex": 18}]
+        reqs = _suggest_requests(mocker, matches, "blue fish", body)
+        deletes = sorted(
+            (r["deleteContentRange"]["range"]["startIndex"],
+             r["deleteContentRange"]["range"]["endIndex"])
+            for r in reqs if "deleteContentRange" in r
+        )
+        assert deletes == [(1, 9), (10, 18)]
+
+    def test_pending_suggestion_runs_are_never_trimmed(self):
+        from gdoc.api.docs import _narrow_to_changed_words
+
+        run = _run("red fish\n", 1, 10)
+        run["textRun"]["suggestedInsertionIds"] = ["suggest.other"]
+        matches = [{"startIndex": 1, "endIndex": 9}]
+        assert _narrow_to_changed_words(
+            _body(_para(run)), matches, "blue fish",
+        ) == (matches, "blue fish")
+
+    def test_trimmed_text_that_would_become_markdown_is_not_trimmed(self):
+        from gdoc.api.docs import _narrow_to_changed_words
+
+        # Whole text is literal; the changed span alone ("# x") would parse
+        # as a heading, so keep the whole match.
+        text = "see a here"
+        matches = _fox_match(text)
+        assert _narrow_to_changed_words(
+            _fox_body(text), matches, "see # x here",
+        ) == (matches, "see # x here")
+
+    def test_identical_replacement_is_not_trimmed_to_nothing(self, mocker):
+        text = "same words"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), text, _fox_body(text),
+        )
+        assert reqs[0] == {"deleteContentRange": {"range": {
+            "startIndex": 1, "endIndex": 11, "tabId": "t.0"}}}
+
+
+class TestChangedSpan:
+    @pytest.mark.parametrize("old, new, span", [
+        ("a b c", "a x c", (2, 2)),
+        ("a b c", "a b c d", (4, 0)),     # append: widen to the last word
+        ("a b c", "z a b c", (0, 4)),     # prepend: widen to the first word
+        ("colour", "color", None),        # one word: nothing to trim
+        ("a b", "a b", None),
+    ])
+    def test_spans(self, old, new, span):
+        from gdoc.api.docs import _changed_word_span
+
+        assert _changed_word_span(old, new) == span
+
+
+# ---------------------------------------------------------------------------
+# Suggesting new paragraphs after the matched one
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestNewParagraphs:
+    """`suggest DOC OLD "OLD\\nnew paragraph"` suggests the new paragraph,
+    exactly like pressing Enter at the end of OLD in Suggesting mode."""
+
+    def test_unchanged_first_line_suggests_only_the_new_paragraph(self, mocker):
+        text = "First point."
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "First point.\nSecond point.",
+            _fox_body(text),
+        )
+        assert reqs == [
+            {"insertText": {"location": {"index": 13, "tabId": "t.0"},
+                            "text": "\nSecond point."}},
+        ]
+
+    def test_several_new_paragraphs_in_one_insertion(self, mocker):
+        text = "Intro"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "Intro\nOne\nTwo\n", _fox_body(text),
+        )
+        assert reqs == [
+            {"insertText": {"location": {"index": 6, "tabId": "t.0"},
+                            "text": "\nOne\nTwo"}},
+        ]
+
+    def test_changed_first_line_and_new_paragraph_in_one_batch(self, mocker):
+        text = "the cat sat"
+        reqs = _suggest_requests(
+            mocker, _fox_match(text), "the dog sat\nThen it left.",
+            _fox_body(text),
+        )
+        # The new paragraph goes in first, at the paragraph mark (the
+        # highest index), so the word change's indexes stay valid.
+        assert reqs == [
+            {"insertText": {"location": {"index": 12, "tabId": "t.0"},
+                            "text": "\nThen it left."}},
+            {"deleteContentRange": {"range": {
+                "startIndex": 5, "endIndex": 8, "tabId": "t.0"}}},
+            {"insertText": {"location": {"index": 5, "tabId": "t.0"},
+                            "text": "dog"}},
+        ]
+
+    def test_match_ending_mid_paragraph_is_still_refused(self, mocker):
+        body = _fox_body("alpha beta")
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch"):
+            suggest_replacement(
+                "synthetic-doc", [{"startIndex": 1, "endIndex": 6}],
+                "alpha\nnew", "synthetic-rev", tab_id="t.0", body=body,
+            )
+        gate.assert_not_called()
+
+    def test_markdown_in_a_new_paragraph_is_refused_before_any_call(self, mocker):
+        # Only plain lines become new paragraphs; anything else keeps the
+        # existing paragraph-count refusal.
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch") as exc:
+            suggest_replacement(
+                "synthetic-doc", _fox_match("Intro"), "Intro\n- a list item",
+                "synthetic-rev", tab_id="t.0", body=_fox_body("Intro"),
+            )
+        assert exc.value.exit_code == 3
+        gate.assert_not_called()
+
+    def test_blank_new_paragraph_is_refused(self, mocker):
+        mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch"):
+            suggest_replacement(
+                "synthetic-doc", _fox_match("Intro"), "Intro\n\nAfter",
+                "synthetic-rev", tab_id="t.0", body=_fox_body("Intro"),
+            )
+
+    def test_new_paragraph_with_several_matches_is_refused(self, mocker):
+        body = _body(
+            _para(_run("red fish\n", 1, 10)),
+            _para(_run("red fish\n", 10, 19)),
+        )
+        mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="paragraph count mismatch"):
+            suggest_replacement(
+                "synthetic-doc",
+                [{"startIndex": 1, "endIndex": 9},
+                 {"startIndex": 10, "endIndex": 18}],
+                "red fish\nmore", "synthetic-rev", tab_id="t.0", body=body,
+            )
+
+    def test_new_paragraph_in_a_table_cell(self, mocker):
+        cell_para = _para(_run("Cell text\n", 5, 15))
+        body = _body({
+            "startIndex": 2, "endIndex": 17,
+            "table": {"tableRows": [{"tableCells": [
+                {"content": [cell_para]},
+            ]}]},
+        })
+        reqs = _suggest_requests(
+            mocker, [{"startIndex": 5, "endIndex": 14}],
+            "Cell text\nMore", body,
+        )
+        assert reqs == [
+            {"insertText": {"location": {"index": 14, "tabId": "t.0"},
+                            "text": "\nMore"}},
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Review regressions: narrowing never refuses what the whole match allowed;
+# new paragraphs never land on a pending suggestion
+# ---------------------------------------------------------------------------
+
+_LINK = {"link": {"url": "https://example.test/report"}}
+
+
+def _styled_body(*runs):
+    elements, index = [], 1
+    for text, style in runs:
+        from gdoc.mdparse import utf16_len
+
+        end = index + utf16_len(text)
+        elements.append({"startIndex": index, "endIndex": end,
+                         "textRun": {"content": text, "textStyle": style}})
+        index = end
+    return _body({"startIndex": 1, "endIndex": index,
+                  "paragraph": {"elements": elements}})
+
+
+class TestNarrowingFallsBackToTheWholeMatch:
+    def test_narrowed_word_inside_a_link_suggests_the_whole_match(self, mocker):
+        # "annual" alone sits inside a link the planner cannot restyle; the
+        # whole match "annual report today" was accepted before narrowing.
+        body = _styled_body(("Read the annual report ", _LINK), ("today\n", {}))
+        reqs = _suggest_requests(
+            mocker, [{"startIndex": 10, "endIndex": 29}],
+            "yearly report today", body,
+        )
+        deletes = [r["deleteContentRange"]["range"] for r in reqs
+                   if "deleteContentRange" in r]
+        assert [(d["startIndex"], d["endIndex"]) for d in deletes] == [(10, 29)]
+        inserts = [r["insertText"]["text"] for r in reqs if "insertText" in r]
+        assert inserts == ["yearly report today"]
+
+    def test_widened_word_across_a_style_boundary_is_not_refused(self, mocker):
+        bold = {"bold": True}
+        body = _styled_body(("a x. alph", bold), ("a alpha\n", {}))
+        reqs = _suggest_requests(
+            mocker, [{"startIndex": 1, "endIndex": 11}], "a x. beta alpha", body,
+        )
+        assert any("insertText" in r for r in reqs)
+
+    def test_whole_match_refusal_still_surfaces(self, mocker):
+        # Narrowed ("annual" inside the link) and whole ("annual report",
+        # the whole link label) are both refused: the refusal is reported.
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        body = _styled_body(("L ", {}), ("annual report", _LINK), (" right\n", {}))
+        with pytest.raises(GdocError, match="preserving its pending text style"):
+            suggest_replacement(
+                "synthetic-doc", [{"startIndex": 3, "endIndex": 16}],
+                "yearly report", "synthetic-rev", tab_id="t.0", body=body,
+            )
+        gate.assert_not_called()
+
+
+class TestNewParagraphOverlap:
+    def test_pending_suggestion_on_the_paragraph_mark_is_refused(self, mocker):
+        # A previous `suggest "Intro" "Intro\nMore"` left a pending insertion
+        # at the mark; suggesting it again must not stack another one.
+        # SUGGESTIONS_INLINE shows the suggested "\n" as the first
+        # paragraph's mark, and "More" as a paragraph of its own.
+        body = _body(
+            _para(_run("Intro", 1, 6), {
+                "startIndex": 6, "endIndex": 7, "textRun": {
+                    "content": "\n", "suggestedInsertionIds": ["suggest.prior"],
+                }}),
+            _para({"startIndex": 7, "endIndex": 11, "textRun": {
+                "content": "More", "suggestedInsertionIds": ["suggest.prior"],
+            }}, _run("\n", 11, 12)),
+        )
+        gate = mocker.patch("gdoc.api.docs.check_suggest_preview_access")
+        with pytest.raises(GdocError, match="suggest.prior") as exc:
+            suggest_replacement(
+                "synthetic-doc", [{"startIndex": 1, "endIndex": 6}],
+                "Intro\nMore", "synthetic-rev", tab_id="t.0", body=body,
+            )
+        assert exc.value.exit_code == 3
+        gate.assert_not_called()

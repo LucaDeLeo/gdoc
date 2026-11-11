@@ -38,6 +38,14 @@ gdoc update
 
 Other commands never auto-update — they print a notice to stderr (at most once per day) when a newer version is available.
 
+**Pinned installs are left alone.** An install that asked for a specific
+revision (`uv tool install "git+https://github.com/LucaDeLeo/gdoc.git@<sha-or-tag>"`)
+or came from another source (a fork, a local checkout) is never replaced by
+auto-update, and `gdoc update` declines to replace it, printing the command to
+run if you do want the latest upstream release. The update notice still says
+when one exists. Pinning is the way to control exactly which code holds your
+Drive token: reinstall at a new revision when you choose to.
+
 ## Setup
 
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
@@ -229,15 +237,15 @@ gdoc cat 1aBcDeFg...
 | Command | Description |
 |---------|-------------|
 | `comments DOC` | List all open comments (`--all` to include resolved) |
-| `comment DOC TEXT` | Add a comment (`--quote` to anchor it to text — see below; `--assign EMAIL` to assign it, preview) |
+| `comment DOC TEXT` | Add a comment (`--quote` to anchor it to text — see below; `--assign EMAIL` to assign it, Docs API) |
 | `comment-info DOC ID` | Get a single comment with full detail |
-| `reply DOC THREAD_ID TEXT` | Reply to a comment, or to a suggestion thread when `THREAD_ID` is a suggestion ID (preview); `--reassign EMAIL` hands an assigned comment on (preview) |
+| `reply DOC THREAD_ID TEXT` | Reply to a comment, or to a suggestion thread when `THREAD_ID` is a suggestion ID (Docs API); `--reassign EMAIL` hands an assigned comment on (Docs API) |
 | `resolve DOC COMMENT_ID` | Resolve a comment (`--message` to include a note) |
 | `reopen DOC COMMENT_ID` | Reopen a resolved comment |
-| `delete-comment DOC THREAD_ID [POST_ID]` | Delete a comment; with `POST_ID`, delete one reply you wrote on a comment or suggestion thread (preview). `--force` skips confirmation |
-| `edit-comment DOC THREAD_ID POST_ID TEXT` | Edit a post you wrote on a comment or suggestion thread (preview) |
+| `delete-comment DOC THREAD_ID [POST_ID]` | Delete a comment; with `POST_ID`, delete one reply you wrote on a comment or suggestion thread (Docs API). `--force` skips confirmation |
+| `edit-comment DOC THREAD_ID POST_ID TEXT` | Edit a post you wrote on a comment or suggestion thread (Docs API) |
 
-### Suggestions (Docs API developer preview)
+### Suggestions (Docs API)
 
 | Command | Description |
 |---------|-------------|
@@ -252,10 +260,11 @@ These read Google's native suggestion threads (`documents.get` with
 `--accept` is always pinned to the revision that was just read (it needs edit
 access, which is also what Google requires for a `revisionId`); `--reject` and
 `--delete` are pinned whenever the read returned a revision and are sent
-unpinned only when it did not (a suggestion's author may be a commenter). Unlike comments there is **no Drive fallback**: the OAuth client's Cloud project must be enrolled in the
-[Workspace Developer Preview Program](https://developers.google.com/workspace/preview),
-otherwise the commands fail with an explicit "not enrolled" error (exit 1) and
-nothing is changed. A decision is only reported as `OK` after a read-back shows
+unpinned only when it did not (a suggestion's author may be a commenter). Unlike comments there is **no Drive fallback**. Native comment and
+suggestion threads are generally available in the Docs API since
+[30 September 2026](https://developers.google.com/workspace/docs/release-notes), so no Workspace Developer Preview enrollment is
+needed; if the Docs API ever rejects the comments view, the commands fail with
+an explicit error (exit 1) and nothing is changed. A decision is only reported as `OK` after a read-back shows
 the thread in the requested state; accepted and rejected threads stay listed
 under `--all` with that status, deleted ones disappear. Suggestion threads carry
 no range of their own, so the `@Tab start-end kind` lines (and `locations` in
@@ -276,13 +285,13 @@ titles; duplicate titles require an ID. Matching folds typography and Unicode sp
 while preserving native UTF-16 coordinates. Comments can span non-text objects
 within a paragraph, but quotes cannot cross table/cell boundaries.
 
-With the OAuth project's
-[Workspace Developer Preview](https://developers.google.com/workspace/preview)
-access, the Docs API creates a native highlighted anchor. JSON/plain output
-reports `anchored: true` and `tabId`. Only a definite preview or permission
-rejection permits an unanchored Drive fallback: output reports
-`anchored: false`, `reason: preview_unavailable`, and stderr explains the
-rejection. The quote is stored as `quotedFileContent` metadata, without a
+The Docs API creates a native highlighted anchor (`insertComment`, generally
+available since [30 September 2026](https://developers.google.com/workspace/docs/release-notes)). JSON/plain output reports
+`anchored: true` and `tabId`. Only a definite rejection of the request, or a
+permission rejection (comment-only access cannot `batchUpdate`), permits an
+unanchored Drive fallback: output reports `anchored: false`,
+`reason: preview_unavailable` (the reason code predates GA and is kept for
+compatibility), and stderr explains the rejection. The quote is stored as `quotedFileContent` metadata, without a
 native highlight; fallback output omits tab/segment scope because no anchor
 was created. Comments without `--quote` report `anchored: false` and
 `reason: no_quote` in JSON/plain output.
@@ -297,12 +306,12 @@ replays a wire request after a lost response and never falls back in that
 case. Other API errors exit **1**, authentication errors **2**. Errors retain
 the usual `ERR:` stderr format even with `--json`.
 
-#### Native thread operations (developer preview)
+#### Native thread operations (Docs API)
 
 Ordinary comment reads and writes stay on the Drive API. A few operations
 only exist in the Docs API's native comment threads, and the commands marked
-*preview* above use them — there is no Drive fallback, so they require an
-enrolled Cloud project and fail with a message naming the reason otherwise:
+*Docs API* above use them — there is no Drive fallback, so they fail with a
+message naming the reason if the Docs API rejects them:
 
 - `comment DOC TEXT --quote "doc text" --assign EMAIL` creates an anchored
   comment assigned to `EMAIL` (`insertComment.assigneeEmailAddress`). It
@@ -869,7 +878,7 @@ the Sheets API, so no re-authentication is needed.
      5	Authentication uses OAuth2.
 ```
 
-Comments are placed from their live anchors: the text each comment covers now, as the Docs UI highlights it. This needs the same [Developer Preview](https://developers.google.com/workspace/preview) enrollment as anchored `comment --quote`. A comment whose anchored text is all gone is listed as `[detached]` (Docs shows "Original content deleted"); a `write --tab` that changes the tab detaches every comment in it, resolved ones included. A comment that is still attached is listed as `[attached, location not found]` when gdoc can't pin its text to one markdown line: for example, a comment on an image, on footnote text, or on heading text that a table of contents may repeat. The same label is used when the document kept changing while gdoc read it; a `WARN` says so. Comments that aren't placed inline are grouped in an `[UNANCHORED]` section at the end.
+Comments are placed from their live anchors: the text each comment covers now, as the Docs UI highlights it. This uses the same Docs API comments view as anchored `comment --quote` (generally available, no enrollment needed). A comment whose anchored text is all gone is listed as `[detached]` (Docs shows "Original content deleted"); a `write --tab` that changes the tab detaches every comment in it, resolved ones included. A comment that is still attached is listed as `[attached, location not found]` when gdoc can't pin its text to one markdown line: for example, a comment on an image, on footnote text, or on heading text that a table of contents may repeat. The same label is used when the document kept changing while gdoc read it; a `WARN` says so. Comments that aren't placed inline are grouped in an `[UNANCHORED]` section at the end.
 
 With `--json`, `"anchors"` says where the labels came from:
 
@@ -878,7 +887,7 @@ With `--json`, `"anchors"` says where the labels came from:
 - `"quoted_text"`: live anchors couldn't be read (see below).
 - `"none"`: there were no comments, so nothing was read.
 
-When live anchors can't be read (no preview access, no comment access on the document, or the request fails), gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment. If comments keep being added or removed during the read, a `WARN` says so and no comment is placed.
+When live anchors can't be read (the comments view is rejected, no comment access on the document, or the request fails), gdoc prints a `WARN` and places each comment where its quoted text occurs (`"anchors": "quoted_text"`). Drive never updates a comment's quoted text, so `[quoted text found]` is a location guess, not proof the comment is still attached, and `[quoted text not found (edited or detached)]` covers both a reworded anchor and a detached comment. If comments keep being added or removed during the read, a `WARN` says so and no comment is placed.
 
 ## Revision history & diffs
 
@@ -1113,15 +1122,25 @@ Terse output names the review object: `OK suggested 1 occurrence (#suggest.abc)`
 Google may fold an edit adjacent to your own open suggestion into it instead of
 creating a new one; those IDs are reported under `updatedSuggestionIds`.
 
+**Only the changed words are suggested.** Quote enough text to find the spot;
+`suggest` leaves out the words the old and new text share at the start and end,
+so `gdoc suggest DOC "ship the beta in Q3 to all users" "ship the beta in Q4 to
+all users"` strikes out only `Q3` and suggests `Q4`. Trimming keeps whole words,
+and a pure insertion takes the next word with it, since a suggestion always
+strikes something out. It applies when the replacement is plain text (no
+Markdown, no line breaks) and the matched text is plain text in one paragraph;
+otherwise the whole match is suggested, as before. The pending-suggestion
+overlap check still covers the whole quoted text.
+
 Requirements and limits:
 
-- **Developer Preview.** Suggest mode is a Docs API
-  [Workspace Developer Preview](https://developers.google.com/workspace/preview)
-  feature gated by the OAuth client's Cloud project. Because an unenrolled
-  backend has been seen silently applying `writeMode: SUGGEST` as a direct
-  edit, `suggest` first proves enrollment with a non-mutating preview-only
-  read (`commentsViewMode`); with an unenrolled project that read is rejected,
-  the command fails with `suggest mode not available`, and nothing is written.
+- **Suggest mode is generally available.** `writeMode: SUGGEST` left the
+  Workspace Developer Preview on [30 September 2026](https://developers.google.com/workspace/docs/release-notes); no enrollment is
+  needed. Because a backend without the feature was once seen silently
+  applying `writeMode: SUGGEST` as a direct edit, `suggest` still proves
+  support first with a cheap non-mutating read (`commentsViewMode`); if that
+  read is rejected or ignored, the command fails with `suggest mode not
+  available`, and nothing is written.
   Unlike `comment --quote`, there is **no fallback**: `suggest` never degrades to
   a direct edit.
 - **Comment or edit access.** The write is pinned to the revision the text was
@@ -1139,6 +1158,15 @@ Requirements and limits:
   whole paragraphs. Fenced code blocks are
   accepted as code-font paragraphs only when the paragraph-boundary contract
   is satisfied.
+- **New paragraphs.** When the quoted text runs to the end of its paragraph,
+  extra lines in the replacement are suggested as new paragraphs after it,
+  as if you pressed Enter there in *Suggesting* mode:
+  `gdoc suggest DOC "First point." $'First point.\nSecond point.'` suggests
+  only the new paragraph "Second point." (the first line is unchanged, so it
+  is not suggested). Docs gives new paragraphs the style of the one they
+  follow, list membership included. Each added line must be plain, non-empty
+  text, and this works for a single match (no `--all`). Other replacements
+  with more lines than matched paragraphs are refused as before.
 - **No overlap with existing suggestions.** The document is read with
   suggestions inline; a match that touches text someone else has already
   suggested inserting, deleting, or restyling is refused, so a review thread is
@@ -1353,6 +1381,24 @@ All files are stored under `~/.config/gdoc/`:
 | `config.json` | Default account preference and other local configuration |
 | `state/<DOC_ID>.json` | Per-document state for change detection |
 | `update_check.json` | Cached result of the last update check |
+
+### Token storage
+
+Each `token.json` holds the OAuth refresh token in plain JSON. With the
+`drive` and `documents` scopes, anyone who can read it can read, change and
+delete every file in that Google account's Drive until the grant is revoked.
+
+- **macOS and Linux:** gdoc writes token files with mode `0600` (owner only),
+  replacing any existing file so a loose mode is not kept.
+- **Windows:** the mode has no effect. The file inherits the ACL of your
+  profile folder, which normally lets only you, administrators and SYSTEM
+  read it, but any process running as you can. Check with
+  `icacls %USERPROFILE%\.config\gdoc\accounts\<ACCOUNT>\token.json`.
+
+On every platform, treat the folder like an SSH key: keep it out of synced
+or backed-up folders you share, never commit it, and revoke the grant at
+<https://myaccount.google.com/permissions> if a copy leaks (`gdoc auth` then
+creates a new one).
 
 ## Development
 

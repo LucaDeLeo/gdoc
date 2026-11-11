@@ -44,12 +44,13 @@ class TestRunUpdateStaleRemote:
         assert "Already up to date." in capsys.readouterr().out
         mock_run.assert_not_called()
 
+    @patch("gdoc.update._install_origin", return_value=None)
     @patch("gdoc.update._write_cache")
     @patch("gdoc.update.subprocess.run")
     @patch("gdoc.update._latest_version", return_value="0.8.1")
     @patch("gdoc.update._installed_version", return_value="0.8.0")
     def test_updates_when_remote_is_newer(
-        self, _cur, _latest, mock_run, _cache, capsys
+        self, _cur, _latest, mock_run, _cache, _origin, capsys
     ):
         mock_run.return_value.returncode = 0
         rc = run_update()
