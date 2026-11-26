@@ -49,6 +49,10 @@ def _google_403(message, reason, domain, status="PERMISSION_DENIED"):
     }}
 
 
+_DISABLED_DOCS_403 = _google_403(
+    "Google Docs API has not been used in project 1 before or it is disabled",
+    "accessNotConfigured", "usageLimits",
+)
 _NON_PERMISSION_403S = [
     _google_403(
         "Quota exceeded for quota metric 'Write requests'", "rateLimitExceeded",
@@ -58,10 +62,7 @@ _NON_PERMISSION_403S = [
         "User Rate Limit Exceeded", "userRateLimitExceeded", "usageLimits",
         status="RESOURCE_EXHAUSTED",
     ),
-    _google_403(
-        "Google Docs API has not been used in project 1 before or it is disabled",
-        "accessNotConfigured", "usageLimits",
-    ),
+    _DISABLED_DOCS_403,
     _google_403("Daily Limit Exceeded", "dailyLimitExceeded", "usageLimits"),
     {"error": {
         "code": 403, "message": "The caller does not have permission",
@@ -196,13 +197,30 @@ class TestInsertComment:
             insert_comment("doc1", "hello", 10, 25)
         assert not isinstance(exc.value, PreviewUnavailableError)
         assert exc.value.exit_code == 1
-        if "has not been used" in payload["error"]["message"]:
-            # A disabled API is named, not echoed (test_service_disabled.py).
-            assert str(exc.value).startswith(
-                "Google Docs API is disabled for this OAuth client's"
-            )
-        else:
-            assert payload["error"]["message"] in str(exc.value)
+
+    @pytest.mark.parametrize("payload", [
+        p for p in _NON_PERMISSION_403S if p is not _DISABLED_DOCS_403
+    ])
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_non_permission_403_keeps_google_message(self, mock_svc, payload):
+        mock_svc.return_value = _mock_docs_service(
+            batch_error=_http_error(403, json.dumps(payload).encode()),
+        )
+        with pytest.raises(GdocError) as exc:
+            insert_comment("doc1", "hello", 10, 25)
+        assert payload["error"]["message"] in str(exc.value)
+
+    @patch("gdoc.api.docs.get_docs_service")
+    def test_disabled_api_403_is_named(self, mock_svc):
+        # More cases in test_service_disabled.py.
+        mock_svc.return_value = _mock_docs_service(
+            batch_error=_http_error(403, json.dumps(_DISABLED_DOCS_403).encode()),
+        )
+        with pytest.raises(GdocError) as exc:
+            insert_comment("doc1", "hello", 10, 25)
+        assert str(exc.value).startswith(
+            "Google Docs API is disabled for this OAuth client's Cloud project."
+        )
 
     @patch("gdoc.api.docs.get_docs_service")
     def test_other_400_raises_gdoc_error(self, mock_svc):

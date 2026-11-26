@@ -29,9 +29,10 @@ SHEETS_MESSAGE = (
     "enabled this API recently, wait a few minutes for the action to "
     "propagate to our systems and retry."
 )
+NOTE = "(if you just enabled it, wait a few minutes and retry)"
 EXPECTED = (
     "Google Sheets API is disabled for this OAuth client's Cloud project. "
-    f"Enable it: {SHEETS_URL}"
+    f"Enable it: {SHEETS_URL} {NOTE}"
 )
 
 
@@ -137,8 +138,57 @@ class TestMessage:
         assert message == (
             "A Google API this command needs is disabled for this OAuth "
             "client's Cloud project. Enable it in the Google Cloud Console "
-            "under APIs & Services"
+            f"under APIs & Services {NOTE}"
         )
+
+    def test_classic_access_not_configured_prefix_is_not_the_name(self):
+        drive_url = SHEETS_URL.replace("sheets", "drive")
+        body = {"error": {
+            "code": 403,
+            "message": (
+                "Access Not Configured. Drive API has not been used in "
+                f"project {PROJECT} before or it is disabled. Enable it by "
+                f"visiting {drive_url} then retry."
+            ),
+            "errors": [{"reason": "accessNotConfigured", "domain": "usageLimits"}],
+        }}
+        assert service_disabled_message(body) == (
+            "Drive API is disabled for this OAuth client's Cloud project. "
+            f"Enable it: {drive_url} {NOTE}"
+        )
+
+    def test_metadata_from_any_matching_entry(self):
+        body = _disabled_body(message="x")
+        body["error"]["details"].insert(0, {"reason": "SERVICE_DISABLED"})
+        assert service_disabled_message(body) == EXPECTED
+
+    def test_service_name_when_no_title(self):
+        body = _disabled_body(message="x")
+        del body["error"]["details"][0]["metadata"]["serviceTitle"]
+        assert service_disabled_message(body).startswith(
+            "sheets.googleapis.com is disabled"
+        )
+
+    def test_metadata_is_sanitized(self):
+        body = _disabled_body(message="x")
+        body["error"]["details"][0]["metadata"].update(
+            serviceTitle="Google\nSheets  API", activationUrl="javascript:1",
+        )
+        assert service_disabled_message(body) == (
+            "Google Sheets API is disabled for this OAuth client's Cloud "
+            "project. Enable it in the Google Cloud Console under APIs & "
+            f"Services {NOTE}"
+        )
+
+    def test_url_is_never_last(self):
+        # Callers wrap the message in parentheses or end it with a period.
+        assert not service_disabled_message(_disabled_body()).endswith(SHEETS_URL)
+
+    def test_unhashable_reason_beside_a_valid_one(self):
+        body = _disabled_body()
+        body["error"]["details"].insert(0, {"reason": ["x"]})
+        body["error"]["errors"] = [{"reason": {"a": 1}}]
+        assert service_disabled_message(body) == EXPECTED
 
     @pytest.mark.parametrize("content", [
         b"", b"forbidden", "not json", None, [], {}, {"error": "denied"},
@@ -146,6 +196,7 @@ class TestMessage:
         {"error": {"details": [None, 3, {"reason": "SERVICE_DISABLED",
                                          "metadata": "x"}]}},
         [{"error": {"message": "x"}}],
+        {"error": {"details": [{"reason": ["x"]}], "errors": [{"reason": {}}]}},
         b"\xff\xfe",
     ])
     def test_never_raises_on_odd_bodies(self, content):
