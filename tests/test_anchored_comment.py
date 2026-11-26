@@ -196,7 +196,13 @@ class TestInsertComment:
             insert_comment("doc1", "hello", 10, 25)
         assert not isinstance(exc.value, PreviewUnavailableError)
         assert exc.value.exit_code == 1
-        assert payload["error"]["message"] in str(exc.value)
+        if "has not been used" in payload["error"]["message"]:
+            # A disabled API is named, not echoed (test_service_disabled.py).
+            assert str(exc.value).startswith(
+                "Google Docs API is disabled for this OAuth client's"
+            )
+        else:
+            assert payload["error"]["message"] in str(exc.value)
 
     @patch("gdoc.api.docs.get_docs_service")
     def test_other_400_raises_gdoc_error(self, mock_svc):
