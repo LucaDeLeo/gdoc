@@ -406,9 +406,11 @@ $ gdoc cat SHEET_ID   # Sheets API not enabled in the OAuth client's project
 ERR: Google Sheets API is disabled for this OAuth client's Cloud project. Enable it: https://console.developers.google.com/apis/api/sheets.googleapis.com/overview?project=N (if you just enabled it, wait a few minutes and retry)
 ```
 
-A disabled API is a setup problem in the Cloud project behind
-`credentials.json`, not a sharing problem: enable the named API there (README
-setup step 2). `Permission denied: <id>` is reserved for other 403s.
+A disabled API is a setup problem in the Cloud project of the OAuth client
+gdoc is using (`GDOC_CLIENT_ID`/`GDOC_CLIENT_SECRET`, `GDOC_CLIENT_CREDENTIALS`
+or `credentials.json`, whichever is active), not a sharing problem. The link
+Google returns already names that project; enable the API there (README setup
+step 2). `Permission denied: <id>` is reserved for other 403s.
 
 Exit codes: 0=success, 1=API error, 2=auth error, 3=usage error
 (`diff` is the exception: exit 1 means the contents differ, like `diff(1)`)
