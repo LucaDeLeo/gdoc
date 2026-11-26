@@ -4,6 +4,7 @@ from googleapiclient.errors import HttpError
 
 from gdoc.api import get_drive_service
 from gdoc.api.comment_transport import execute_comment_request
+from gdoc.api.errors import raise_if_service_disabled
 from gdoc.util import AuthError, GdocError
 
 
@@ -13,6 +14,7 @@ def _translate_http_error(e: HttpError, file_id: str) -> None:
     if status == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
     if status == 403:
+        raise_if_service_disabled(e.content)
         raise GdocError(f"Permission denied: {file_id}")
     if status == 404:
         raise GdocError(f"Document not found: {file_id}")

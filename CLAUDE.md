@@ -26,7 +26,7 @@ uv sync --extra dev
 
 ## Architecture
 
-**gdoc** is a token-efficient CLI for AI agents to interact with Google Docs and Drive. It uses three Google APIs: Drive v3 (file ops, export, comments), Docs v1 (text replacement), and OAuth2 for auth.
+**gdoc** is a token-efficient CLI for AI agents to interact with Google Docs, Sheets and Drive. It uses Drive v3 (file ops, export, comments), Docs v1 (text replacement), Sheets v4 (spreadsheet reads and writes), and OAuth2 for auth. All three APIs must be enabled in the OAuth client's Cloud project.
 
 ### Layered Design
 
@@ -36,6 +36,8 @@ uv sync --extra dev
    - `api/drive.py` — Drive v3: export, list, search, file info, update content, create, copy, share
    - `api/docs.py` — Docs v1: `replace_all_text` (for the `edit` command); developer-preview requests (`insert_comment`, `get_document_threads`, `decide_suggestion`) keep all preview JSON shapes behind this boundary
    - `api/comments.py` — Drive v3 comments: list (paginated), create comment, create reply
+   - `api/sheets.py` — Sheets v4: spreadsheet metadata, value reads and writes
+   - `api/errors.py` — `raise_if_service_disabled()`, called first in every 403 handler: Google reports an API not enabled in the Cloud project as 403 (`SERVICE_DISABLED`), and this names the API and its enable link instead of "Permission denied"
 
 3. **Awareness system** (`gdoc/state.py` + `gdoc/notify.py`): Tracks per-document state in `~/.config/gdoc/state/{doc_id}.json`. Before most commands, `pre_flight()` detects changes (edits, new comments, resolved/reopened) since last interaction and prints a banner to stderr. The `write` command uses version tracking to prevent conflicts (blocks unless `--force`).
 

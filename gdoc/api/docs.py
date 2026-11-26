@@ -12,6 +12,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from gdoc.api import ACCOUNT_CACHE_SIZE, account_cache_key
+from gdoc.api.errors import raise_if_service_disabled, service_disabled_message
 from gdoc.util import (
     AuthError,
     GdocError,
@@ -39,6 +40,7 @@ def _translate_http_error(e: HttpError, doc_id: str) -> None:
     if status == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
     if status == 403:
+        raise_if_service_disabled(e.content)
         raise GdocError(f"Permission denied: {doc_id}")
     if status == 404:
         raise GdocError(f"Document not found: {doc_id}")
@@ -203,6 +205,12 @@ def insert_comment(
             raise PreviewUnavailableError(
                 "insertComment not available (preview not enabled)"
             ) from e
+        if status == 403:
+            disabled = service_disabled_message(e.content)
+            if disabled:
+                raise GdocError(
+                    f"{disabled} (no fallback comment was created)"
+                ) from e
         if status == 403 and _is_permission_rejection(e):
             raise PreviewUnavailableError(
                 "insertComment not permitted for this user "
@@ -539,6 +547,8 @@ def _run_thread_request(doc_id: str, request: dict) -> dict:
         if _preview_parse_error(e):
             raise GdocError(_PREVIEW_UNAVAILABLE_MSG)
         status = int(e.resp.status)
+        if status == 403:
+            raise_if_service_disabled(e.content)
         if status in (400, 403):
             # Google's author/assignee rules (not the post's author, head
             # post of a suggestion, action or assignment reply, unassigned
@@ -6047,6 +6057,7 @@ def _classify_suggest_error(e: HttpError, doc_id: str) -> None:
             f"(server rejected the request: {e.reason}). No change was made."
         )
     if status == 403:
+        raise_if_service_disabled(e.content)
         raise GdocError(
             f"Permission denied: {doc_id} (suggesting through the API needs "
             "comment or edit access on the document, or the project lacks "
@@ -6182,6 +6193,7 @@ def check_suggest_preview_access(doc_id: str) -> None:
     if status == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
     if status == 403:
+        raise_if_service_disabled(resp.content)
         raise GdocError(
             f"Permission denied: {doc_id} (reading suggestions needs comment "
             "or edit access on the document)"
@@ -6248,6 +6260,10 @@ def get_comment_anchors(doc_id: str) -> dict[str, dict | None]:
     if status == 404:
         raise GdocError(f"Document not found: {doc_id}")
     if status == 403:
+        # Degrade to quoted text as for any 403, but say why.
+        disabled = service_disabled_message(resp.content)
+        if disabled:
+            raise PreviewUnavailableError(disabled)
         raise PreviewUnavailableError(
             "permission denied (403); the comments view needs comment or "
             "edit access"
@@ -6992,6 +7008,7 @@ def decide_suggestion(
             ) from e
         _raise_if_stale_revision(e)
         if status == 403:
+            raise_if_service_disabled(e.content)
             raise GdocError(
                 f"Permission denied: cannot {decision} suggestion "
                 f"{suggestion_id} ({decision} requires {rule})"

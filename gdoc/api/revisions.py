@@ -13,6 +13,7 @@ from functools import lru_cache
 from googleapiclient.errors import HttpError
 
 from gdoc.api import ACCOUNT_CACHE_SIZE, account_cache_key, get_drive_service
+from gdoc.api.errors import raise_if_service_disabled
 from gdoc.mdimport import collapse_nbsp_lines
 from gdoc.revdiff import pruned_error
 from gdoc.util import AuthError, GdocError
@@ -31,6 +32,7 @@ def _translate_http_error(e: HttpError, file_id: str) -> None:
     if status == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
     if status == 403:
+        raise_if_service_disabled(e.content)
         raise GdocError(f"Permission denied: {file_id}")
     if status == 404:
         raise GdocError(f"Document not found: {file_id}")
@@ -145,6 +147,7 @@ def export_revision(
     if response.status_code == 401:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
     if response.status_code == 403:
+        raise_if_service_disabled(response.content)
         # Not an expired token: the session auto-refreshes, so a 403
         # here means export/download is denied for this file.
         raise GdocError(f"Permission denied: {file_id}")

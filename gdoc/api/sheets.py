@@ -3,6 +3,7 @@
 from googleapiclient.errors import HttpError
 
 from gdoc.api import get_sheets_service
+from gdoc.api.errors import raise_if_service_disabled
 from gdoc.util import AuthError, GdocError
 
 
@@ -15,6 +16,7 @@ def _translate_http_error(e: HttpError, spreadsheet_id: str) -> None:
         raise AuthError("Authentication expired. Run `gdoc auth`.")
 
     if status == 403:
+        raise_if_service_disabled(e.content)
         raise GdocError(f"Permission denied: {spreadsheet_id}")
 
     if status == 404:

@@ -41,7 +41,7 @@ Other commands never auto-update — they print a notice to stderr (at most once
 ## Setup
 
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com/)
-2. Enable the **Google Drive API** and **Google Docs API**
+2. Enable the **Google Drive API**, **Google Docs API** and **Google Sheets API**
 3. Create **OAuth 2.0 credentials** (Desktop application type)
 4. Download the credentials JSON and place it at `~/.config/gdoc/credentials.json`
 5. Authenticate:
@@ -70,9 +70,10 @@ gdoc auth --set-default pete@example.com
 ### Org-wide setup (shared OAuth client)
 
 For company rollouts, an admin creates **one** Google Cloud project with an
-**Internal** OAuth consent screen and a Desktop-app OAuth client, then
-distributes that client file so users never touch the Cloud Console. Each
-user authenticates with one command. `gdoc` accepts the client config from
+**Internal** OAuth consent screen and a Desktop-app OAuth client, enables the
+Drive, Docs and Sheets APIs in that project, then distributes that client
+file so users never touch the Cloud Console. Each user authenticates with one
+command. `gdoc` accepts the client config from
 any of these sources (first match wins):
 
 1. `GDOC_CLIENT_ID` + `GDOC_CLIENT_SECRET` — env vars (set via MDM/dotfiles)
@@ -852,7 +853,8 @@ gdoc cells SHEET_ID A1 --append --user-entered -v "=SUM(B:B)"
 
 Values are written literally by default (`RAW`); use `--user-entered` for
 formulas, dates, and number parsing. The existing OAuth scope already covers
-the Sheets API, so no re-authentication is needed.
+the Sheets API, so no re-authentication is needed, but the **Google Sheets
+API** must be enabled in the OAuth client's Cloud project (setup step 2).
 
 ## Annotated view
 
@@ -1340,6 +1342,17 @@ gdoc edit DOC "old" "new"  # ERR: command not allowed: edit
 Exception: `gdoc diff` follows `diff(1)` semantics — exit 1 means the contents differ, 0 means identical.
 
 Errors always print `ERR: <message>` to stderr, even in `--json` mode.
+
+When a Google API isn't enabled in the OAuth client's Cloud project, Google
+answers 403 just as it does for a file you can't access. `gdoc` tells the two
+apart: a disabled API exits 1 with `ERR: <API name> is disabled for this OAuth
+client's Cloud project. Enable it: <link> ...`; re-running `gdoc auth` doesn't
+fix it. One exception: `cat --comments` reads live comment anchors through the
+Docs API only as an optional extra, so a disabled Docs API there prints the
+same text as a `WARN:`, places comments by quoted text, and exits 0. Other
+403s keep their existing messages, usually `ERR: Permission denied: <id>`
+(most often missing access, though Google also uses 403 for some quota and
+rate limits).
 
 ## Configuration
 
