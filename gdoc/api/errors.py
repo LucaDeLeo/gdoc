@@ -63,8 +63,9 @@ def service_disabled_message(content) -> str | None:
         text = (f"{title} is disabled for this OAuth client's Cloud project. "
                 f"Enable it: {url}")
     elif message:
-        # Google's own text already names the API and has the link.
-        text = ("A Google API is disabled for this OAuth client's Cloud "
+        # Google's own text already names the API, has the link and ends
+        # with its own propagation note.
+        return ("A Google API is disabled for this OAuth client's Cloud "
                 f"project. Google said: {message}")
     else:
         text = ("A Google API this command needs is disabled for this OAuth "

@@ -62,7 +62,7 @@ class TestMessage:
     def test_legacy_reason_keeps_googles_message(self):
         assert service_disabled_message(LEGACY) == (
             "A Google API is disabled for this OAuth client's Cloud project. "
-            f"Google said: {GOOGLE_MESSAGE} {NOTE}"
+            f"Google said: {GOOGLE_MESSAGE}"
         )
 
     def test_generic_without_metadata_or_message(self):
