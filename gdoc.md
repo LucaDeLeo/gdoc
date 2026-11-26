@@ -18,6 +18,7 @@ gdoc find "query"                            # Search by name/content
 gdoc cat DOC_ID                              # Export doc as markdown to stdout
 gdoc cat DOC_ID --comments                   # Line-numbered with comment annotations
 gdoc cat DOC_ID --plain                      # Export as plain text
+gdoc cat DOC_ID --footnotes                  # Also show footnotes ([^n]; with --tab/--all-tabs too)
 gdoc cat DOC_ID > local.md                   # Save locally
 
 gdoc edit DOC_ID "old text" "new text"       # Find unique match & replace (works inside tables)

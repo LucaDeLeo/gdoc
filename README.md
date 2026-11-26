@@ -184,6 +184,7 @@ gdoc cat 1aBcDeFg...
 | `cat DOC` | Read the first tab as editable Markdown (`--plain` for text; `--max-bytes N` explicitly marks partial output) |
 | `cat --tab NAME DOC` | Read a specific tab by title or ID |
 | `cat --all-tabs DOC` | Read all tabs with headers |
+| `cat --footnotes DOC` | Also show footnotes as `[^n]` references and definitions (with `--tab` or `--all-tabs` too; a read-only view) |
 | `cat --comments DOC` | Line-numbered content with inline comment annotations |
 | `cat SHEET` | Print a spreadsheet as a markdown table (`--plain` for TSV, `--range A1:C10` for a slice; `--tab`/`--all-tabs` select worksheets) |
 | `tabs DOC` | List all tabs in a document (or worksheets in a spreadsheet) |
@@ -481,8 +482,8 @@ as one tab. `structure --heading "Checklist"` and `structure --table 1 --tab Not
 provide detail for a specific element; complete raw structure remains available.
 
 Complete native Markdown reads establish a baseline for the tabs actually read.
-Metadata, truncated output, plain text, annotated comments and structure selectors
-do not establish a full-content baseline. Truncation is reported on stderr and in
+Metadata, truncated output, plain text, annotated comments, `--footnotes` reads and
+structure selectors do not establish a full-content baseline. Truncation is reported on stderr and in
 JSON scope metadata; `--max-bytes 0` retrieves complete content. `cat --json`
 also reports `tab_count`. When a tab holds content Markdown cannot show (footnotes,
 chips, equations, page breaks, positioned objects, drawings, linked charts,
@@ -933,6 +934,13 @@ gdoc cat --all-tabs DOC
 # === Tab: Notes ===
 # ...content...
 ```
+
+The Markdown read leaves footnotes out. `--footnotes` shows them, with `cat`,
+`--tab` or `--all-tabs`: `[^n]` at each reference and the tab's definitions
+after its body. A single tab's footnotes are numbered from 1, as Docs numbers
+them per tab; `--all-tabs` numbers them on across tabs so labels stay unique.
+`write` does not create footnotes from this syntax, so a `--footnotes` read sets
+no write baseline.
 
 Without `--tab`, `--comments` annotates the whole document's Markdown export and places comments from their live anchors. With `--tab`, it annotates that tab's Markdown and places comments where their quoted text occurs. Drive does not record which tab a quote is in, so a comment whose quote appears only in another tab is listed as `quoted text in another tab`, and one whose quote appears in several tabs as `quoted text ambiguous`. `--all-tabs` cannot be combined with `--comments`. Both tab flags work with `--json` and `--plain`.
 
