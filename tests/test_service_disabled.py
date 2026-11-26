@@ -137,8 +137,8 @@ class TestMessage:
         message = service_disabled_message(body)
         assert message == (
             "A Google API this command needs is disabled for this OAuth "
-            "client's Cloud project. Enable it in the Google Cloud Console "
-            f"under APIs & Services {NOTE}. Google said: Forbidden"
+            "client's Cloud project (Google said: Forbidden). Enable it in "
+            f"the Google Cloud Console under APIs & Services {NOTE}"
         )
 
     def test_unparsed_message_is_kept(self):
@@ -151,10 +151,11 @@ class TestMessage:
         }}
         message = service_disabled_message(body)
         assert message.startswith("A Google API this command needs is disabled")
-        assert message.endswith(
-            f"Google said: API [sheets.googleapis.com] not enabled on project "
-            f"[{PROJECT}]."
+        assert (
+            "(Google said: API [sheets.googleapis.com] not enabled on project "
+            f"[{PROJECT}])." in message
         )
+        assert message.endswith(NOTE)
 
     def test_legacy_reason_ignored_when_error_info_differs(self):
         body = {"error": {
@@ -230,13 +231,46 @@ class TestMessage:
             )
             assert service_disabled_message(body) == (
                 "Google Sheets [2J API is disabled for this OAuth client's "
-                "Cloud project. Enable it in the Google Cloud Console under "
-                f"APIs & Services {NOTE}. Google said: x"
+                "Cloud project (Google said: x). Enable it in the Google Cloud "
+                f"Console under APIs & Services {NOTE}"
             )
 
-    def test_url_is_never_last(self):
+    def test_link_with_shell_syntax_is_refused(self):
+        body = _disabled_body(message="x")
+        body["error"]["details"][0]["metadata"]["activationUrl"] = (
+            "https://console.cloud.google.com/a`id`$(x)'"
+        )
+        assert "Enable it in the Google Cloud Console" in (
+            service_disabled_message(body)
+        )
+
+    def test_bidi_and_zero_width_characters_are_dropped(self):
+        body = _disabled_body()
+        body["error"]["details"][0]["metadata"]["serviceTitle"] = (
+            "Good\u202eevil\u200b API"
+        )
+        assert service_disabled_message(body).startswith("Good evil API is")
+
+    @pytest.mark.parametrize("body", [
+        _disabled_body(),
+        {"error": {"message": f"Enable at {SHEETS_URL}",
+                   "errors": [{"reason": "accessNotConfigured"}]}},
+    ])
+    def test_note_is_always_last(self, body):
         # Callers wrap the message in parentheses or end it with a period.
-        assert not service_disabled_message(_disabled_body()).endswith(SHEETS_URL)
+        assert service_disabled_message(body).endswith(NOTE)
+
+    def test_legacy_reason_beside_another_legacy_reason(self):
+        body = {"error": {"code": 403, "message": "Rate Limit Exceeded", "errors": [
+            {"reason": "rateLimitExceeded", "domain": "usageLimits"},
+            {"reason": "accessNotConfigured"},
+        ]}}
+        assert service_disabled_message(body) is None
+
+    def test_empty_detail_reason_does_not_hide_legacy(self):
+        body = _legacy_body()
+        body["error"]["details"] = [{"reason": ""}]
+        assert service_disabled_message(body) == EXPECTED
 
     def test_unhashable_reason_beside_a_valid_one(self):
         body = _disabled_body()

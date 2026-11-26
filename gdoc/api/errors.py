@@ -9,6 +9,7 @@ first.
 
 import json
 import re
+import unicodedata
 
 from gdoc.util import GdocError
 
@@ -21,8 +22,10 @@ _DISABLED_REASONS = frozenset({"SERVICE_DISABLED", "accessNotConfigured"})
 _TITLE_RE = re.compile(
     r"^(?:Access Not Configured\.\s+)?(.+?) has not been used in project\b"
 )
-_URL_RE = re.compile(r"https://console\.(?:developers|cloud)\.google\.com/\S+")
-_NONPRINTABLE_RE = re.compile(r"[^\x20-\x7e\u00a0-\uffff]")
+# URL-safe characters only, so a printed link can't carry shell syntax.
+_URL_RE = re.compile(
+    r"https://console\.(?:developers|cloud)\.google\.com/[A-Za-z0-9\-._~/?#&=%:+@]+"
+)
 
 _PROPAGATION_NOTE = "(if you just enabled it, wait a few minutes and retry)"
 
@@ -59,11 +62,28 @@ def _disabled_entries(value) -> list[dict]:
     ]
 
 
+def _other_reasons(value) -> bool:
+    """True when a details/errors list names a non-disabled reason."""
+    return isinstance(value, list) and any(
+        isinstance(v, dict)
+        and isinstance(v.get("reason"), str)
+        and v["reason"].strip()
+        and v["reason"] not in _DISABLED_REASONS
+        for v in value
+    )
+
+
 def _text(value) -> str:
     """A printable string field with whitespace collapsed."""
     if not isinstance(value, str):
         return ""
-    return " ".join(_NONPRINTABLE_RE.sub(" ", value).split())
+    # Drop controls, format characters (bidi overrides, zero-width) and
+    # lone surrogates, which could reorder or hide text in a terminal.
+    printable = "".join(
+        " " if unicodedata.category(c) in ("Cc", "Cf", "Cs") else c
+        for c in value
+    )
+    return " ".join(printable.split())
 
 
 def _console_url(value: str) -> str:
@@ -86,13 +106,11 @@ def service_disabled_message(content) -> str | None:
         return None
     infos = _disabled_entries(error.get("details"))
     if not infos:
-        # The legacy reason counts only when no ErrorInfo gives another.
+        # The legacy reason counts only when nothing names another cause.
         if not _disabled_entries(error.get("errors")):
             return None
-        details = error.get("details")
-        if isinstance(details, list) and any(
-            isinstance(d, dict) and isinstance(d.get("reason"), str)
-            for d in details
+        if _other_reasons(error.get("details")) or _other_reasons(
+            error.get("errors")
         ):
             return None
 
@@ -116,16 +134,17 @@ def service_disabled_message(content) -> str | None:
         f"Enable it: {url}" if url
         else "Enable it in the Google Cloud Console under APIs & Services"
     )
-    # The URL is never last, so callers that wrap the message in
-    # parentheses or end it with a period don't glue punctuation onto it.
-    result = (
-        f"{what} disabled for this OAuth client's Cloud project. {enable} "
-        f"{_PROPAGATION_NOTE}"
+    # Keep Google's own words when they couldn't be parsed.
+    said = (
+        f" (Google said: {message.rstrip('.')})"
+        if message and not (title and url) else ""
     )
-    if message and not (title and url):
-        # Keep Google's own words when they couldn't be parsed.
-        result += f". Google said: {message}"
-    return result
+    # The note comes last so callers that wrap the message in parentheses
+    # or end it with a period don't glue punctuation onto a link.
+    return (
+        f"{what} disabled for this OAuth client's Cloud project{said}. "
+        f"{enable} {_PROPAGATION_NOTE}"
+    )
 
 
 def raise_if_service_disabled(content) -> None:

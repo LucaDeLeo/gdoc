@@ -1349,9 +1349,10 @@ apart: a disabled API exits 1 with `ERR: <API name> is disabled for this OAuth
 client's Cloud project. Enable it: <link> ...`; re-running `gdoc auth` doesn't
 fix it. One exception: `cat --comments` reads live comment anchors through the
 Docs API only as an optional extra, so a disabled Docs API there prints the
-same text as a `WARN:`, places comments by quoted text, and exits 0. Other 403s keep their existing messages, usually
-`ERR: Permission denied: <id>` (most often missing access, though Google also
-uses 403 for some quota and rate limits).
+same text as a `WARN:`, places comments by quoted text, and exits 0. Other
+403s keep their existing messages, usually `ERR: Permission denied: <id>`
+(most often missing access, though Google also uses 403 for some quota and
+rate limits).
 
 ## Configuration
 

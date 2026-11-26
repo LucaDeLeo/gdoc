@@ -219,7 +219,7 @@ class TestInsertComment:
         with pytest.raises(GdocError) as exc:
             insert_comment("doc1", "hello", 10, 25)
         assert str(exc.value).startswith(
-            "Google Docs API is disabled for this OAuth client's Cloud project."
+            "Google Docs API is disabled for this OAuth client's Cloud project"
         )
 
     @patch("gdoc.api.docs.get_docs_service")
