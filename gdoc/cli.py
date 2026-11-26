@@ -489,6 +489,19 @@ def cmd_cat(args) -> int:
             exit_code=3,
         )
 
+    footnotes = getattr(args, "footnotes", False)
+    if footnotes:
+        clash = next((flag for flag, on in (
+            ("--comments", getattr(args, "comments", False)),
+            ("--plain", getattr(args, "plain", False)),
+            ("--revision", getattr(args, "revision", None)),
+        ) if on), None)
+        if clash:
+            raise GdocError(
+                f"--footnotes and {clash} are mutually exclusive",
+                exit_code=3,
+            )
+
     max_bytes = getattr(args, "max_bytes", 0)
     no_images = getattr(args, "no_images", False)
 
@@ -510,6 +523,10 @@ def cmd_cat(args) -> int:
     change_info = pre_flight(doc_id, quiet=quiet)
 
     if _file_mime(doc_id, change_info) == SPREADSHEET_MIME:
+        if footnotes:
+            raise GdocError(
+                "--footnotes is only supported for documents", exit_code=3,
+            )
         return _cat_sheet(args, doc_id, change_info)
 
     if getattr(args, "range", None):
@@ -622,6 +639,10 @@ def cmd_cat(args) -> int:
     selected = tabs if all_tabs else [
         resolve_tab(tabs, tab, by_id=tab_from_url) if tab else tabs[0]]
     want_markdown = not getattr(args, "plain", False)
+    # One list numbers footnotes on across --all-tabs, as the whole-document
+    # Drive export does, so the combined view's labels stay unique; a single
+    # tab numbers from 1, as Docs shows it.
+    text_options = {"footnotes": []} if footnotes else {}
     parts = []
     for selected_tab in selected:
         if all_tabs:
@@ -630,7 +651,8 @@ def cmd_cat(args) -> int:
             # Drop the native image elements, not text that looks like an
             # image reference: code keeps its characters and paragraphs stay.
             selected_tab = _without_inline_objects(selected_tab)
-        parts.append(get_tab_text(selected_tab, markdown=want_markdown))
+        parts.append(get_tab_text(selected_tab, markdown=want_markdown,
+                                  **text_options))
     content = "".join(parts)
     annotated = getattr(args, "comments", False)
     if want_markdown and not all_tabs and not annotated:
@@ -654,9 +676,12 @@ def cmd_cat(args) -> int:
     displayed = _truncate_bytes(content, max_bytes)
     truncated = displayed != content
     # Plain text omits supported formatting, and no-images omits objects.
-    baseline = not (truncated or no_images or not want_markdown or annotated) \
-        and _preview_complete(selected)
+    # Footnote syntax is a view: `write` would not recreate the footnotes.
+    baseline = not (truncated or no_images or not want_markdown or annotated
+                    or footnotes) and _preview_complete(selected)
     omitted = _read_omissions(selected) if want_markdown else []
+    if footnotes:
+        omitted = [item for item in omitted if item != "footnotes"]
     scope = {
         "tab_ids": [selected_tab["id"] for selected_tab in selected],
         "complete": baseline and not omitted, "truncated": truncated,
@@ -6132,6 +6157,12 @@ def build_parser() -> GdocArgumentParser:
     cat_p.add_argument(
         "--no-images", action="store_true",
         help="Strip image references from output",
+    )
+    cat_p.add_argument(
+        "--footnotes", action="store_true",
+        help="Show footnotes: [^n] at each reference and the definitions "
+             "after each tab (numbered per tab with --tab, continuously with "
+             "--all-tabs). A read-only view: it sets no write baseline",
     )
     cat_p.add_argument(
         "--revision", metavar="REV",

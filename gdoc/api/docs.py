@@ -1002,6 +1002,9 @@ def _runs_markdown(elements: list[dict]) -> str:
                 image = f"[{image}]({_markdown_destination(link)})"
             parts.append(image)
             continue
+        if "_markdown_footnote_label" in pe:
+            parts.append(f"[^{pe['_markdown_footnote_label']}]")
+            continue
         if text_run is None:
             continue
         content = text_run.get("content", "")
@@ -1402,9 +1405,84 @@ def suggestion_preview_gaps(tab: dict) -> list[str]:
     return gaps
 
 
-def get_tab_text(tab: dict, markdown: bool = False) -> str:
-    """Extract a tab's text, or its Markdown; see _tab_text."""
-    return _tab_text(tab, markdown)
+def get_tab_text(tab: dict, markdown: bool = False,
+                 footnotes: list | None = None) -> str:
+    """Extract a tab's text, or its Markdown; see _tab_text.
+
+    With *footnotes* (a list; Markdown only), each footnote reference reads
+    as ``[^n]`` and the tab's footnote definitions follow its body. ``n``
+    counts on from the footnote IDs already in the list, which gains this
+    tab's IDs in reading order: a fresh list numbers a tab's footnotes from
+    1, as Docs shows them, and one list shared across tabs numbers them
+    continuously, as the whole-document Drive export does. The result is a
+    read-only view: `write` does not create footnotes from this syntax.
+    """
+    if footnotes is None or not markdown:
+        return _tab_text(tab, markdown)
+    first = len(footnotes)
+    text = _tab_text(tab, True, footnotes=footnotes)
+    definitions = [_footnote_definition(tab, number, footnote_id)
+                   for number, footnote_id
+                   in enumerate(footnotes[first:], first + 1)]
+    if not definitions:
+        return text
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + "\n" + "\n\n".join(definitions) + "\n"
+
+
+def _label_footnote_references(content: list, footnotes: list) -> list:
+    """A copy of *content* whose footnote references carry their ``[^n]``
+    labels, numbered on from the IDs already in *footnotes*, which gains
+    each reference's footnote ID in reading order."""
+    from copy import deepcopy
+
+    content = deepcopy(content)
+
+    def label(value):
+        if isinstance(value, list):
+            for child in value:
+                label(child)
+        elif isinstance(value, dict):
+            reference = value.get("footnoteReference")
+            if reference is not None:
+                footnotes.append(reference.get("footnoteId", ""))
+                value["_markdown_footnote_label"] = str(len(footnotes))
+            for child in list(value.values()):
+                label(child)
+
+    label(content)
+    return content
+
+
+def _footnote_definition(tab: dict, number: int, footnote_id: str) -> str:
+    """``[^number]: text`` for one of a tab's footnotes; later paragraphs
+    follow as indented continuation paragraphs."""
+    from copy import deepcopy
+
+    content = deepcopy(tab.get("footnotes", {}).get(footnote_id, {})
+                       .get("content", []))
+    # Docs starts a footnote's text with a space after its number.
+    first = next((element["paragraph"] for element in content
+                  if "paragraph" in element), {})
+    for element in first.get("elements", []):
+        run = element.get("textRun")
+        if run is None:
+            break
+        run["content"] = run.get("content", "").lstrip(" ")
+        if run["content"]:
+            break
+    text = _tab_text({
+        "body": {"content": content},
+        "lists": tab.get("lists", {}),
+        "inlineObjects": tab.get("inlineObjects", {}),
+    }, True)
+    paragraphs = [line for line in text.split("\n") if line.strip()]
+    lead = f"[^{number}]:"
+    if not paragraphs:
+        return lead
+    return "\n\n".join([f"{lead} {paragraphs[0]}"]
+                       + ["    " + line for line in paragraphs[1:]])
 
 
 def list_level_gaps(tab: dict) -> list[str]:
@@ -1425,7 +1503,8 @@ def open_list_items(tab: dict) -> list[tuple[int, int]]:
 
 def _tab_text(tab: dict, markdown: bool = False,
               level_gaps: list | None = None,
-              open_out: dict | None = None) -> str:
+              open_out: dict | None = None,
+              footnotes: list | None = None) -> str:
     """Extract text from a tab's body content.
 
     Handles paragraphs and tables (tab-joined cells per row in plain text). When
@@ -1482,6 +1561,8 @@ def _tab_text(tab: dict, markdown: bool = False,
                     image_alts(child)
 
         image_alts(content)
+    if markdown and footnotes is not None:
+        content = _label_footnote_references(content, footnotes)
     lists = tab.get("lists", {}) if markdown else {}
     parts = []
     ordered_counters: dict = {}

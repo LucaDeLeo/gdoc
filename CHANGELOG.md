@@ -6,6 +6,23 @@ All notable changes to `gdoc` are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- **`cat --footnotes`** shows a tab's footnotes, which the native Markdown
+  read otherwise leaves out (naming them as omitted). Each footnote
+  reference reads as `[^n]` where it sits, including in table cells and
+  list items, and the tab's definitions follow its body as `[^n]: text`,
+  with links and emphasis, and any later paragraphs indented as
+  continuation paragraphs. Docs numbers footnotes per tab, so `cat` and
+  `cat --tab` number a tab's footnotes from 1, as Docs shows them;
+  `--all-tabs` numbers them on across tabs, as the whole-document Drive
+  export did, so the combined view's labels stay unique, and each tab's
+  definitions come before the next `=== Tab:` marker. The read is a view:
+  `write` does not create footnotes from this syntax, so it sets no write
+  baseline and JSON reports `complete: false` without `footnotes` in
+  `omitted`. It cannot be combined with `--comments`, `--plain` or
+  `--revision`. Exposed over MCP as the `footnotes` option of `gdoc_cat`.
+
 ## [0.24.0] — 2026-11-09
 
 ### Added
