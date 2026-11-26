@@ -1347,7 +1347,9 @@ When a Google API isn't enabled in the OAuth client's Cloud project, Google
 answers 403 just as it does for a file you can't access. `gdoc` tells the two
 apart: a disabled API exits 1 with `ERR: <API name> is disabled for this OAuth
 client's Cloud project. Enable it: <link> ...`; re-running `gdoc auth` doesn't
-fix it. Other 403s keep their existing messages, usually
+fix it. One exception: `cat --comments` reads live comment anchors through the
+Docs API only as an optional extra, so a disabled Docs API there prints the
+same text as a `WARN:`, places comments by quoted text, and exits 0. Other 403s keep their existing messages, usually
 `ERR: Permission denied: <id>` (most often missing access, though Google also
 uses 403 for some quota and rate limits).
 

@@ -138,8 +138,59 @@ class TestMessage:
         assert message == (
             "A Google API this command needs is disabled for this OAuth "
             "client's Cloud project. Enable it in the Google Cloud Console "
-            f"under APIs & Services {NOTE}"
+            f"under APIs & Services {NOTE}. Google said: Forbidden"
         )
+
+    def test_unparsed_message_is_kept(self):
+        body = {"error": {
+            "code": 403,
+            "message": (
+                f"API [sheets.googleapis.com] not enabled on project [{PROJECT}]."
+            ),
+            "errors": [{"reason": "accessNotConfigured"}],
+        }}
+        message = service_disabled_message(body)
+        assert message.startswith("A Google API this command needs is disabled")
+        assert message.endswith(
+            f"Google said: API [sheets.googleapis.com] not enabled on project "
+            f"[{PROJECT}]."
+        )
+
+    def test_legacy_reason_ignored_when_error_info_differs(self):
+        body = {"error": {
+            "code": 403,
+            "message": f"Project {PROJECT} has been deleted.",
+            "errors": [{"reason": "accessNotConfigured"}],
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CONSUMER_INVALID",
+            }],
+        }}
+        assert service_disabled_message(body) is None
+
+    def test_title_with_a_period(self):
+        url = SHEETS_URL.replace("sheets", "foo")
+        body = {"error": {
+            "message": (
+                f"Foo v1.5 API has not been used in project {PROJECT} before "
+                f"or it is disabled. Enable it by visiting {url} then retry."
+            ),
+            "errors": [{"reason": "accessNotConfigured"}],
+        }}
+        assert service_disabled_message(body) == (
+            "Foo v1.5 API is disabled for this OAuth client's Cloud project. "
+            f"Enable it: {url} {NOTE}"
+        )
+
+    @pytest.mark.parametrize("body", [
+        "\ufeff" + json.dumps(_legacy_body()),
+        b"\xef\xbb\xbf" + json.dumps(_legacy_body()).encode(),
+    ])
+    def test_bom_prefixed_body(self, body):
+        assert service_disabled_message(body) == EXPECTED
+
+    def test_deeply_nested_body_does_not_raise(self):
+        assert service_disabled_message("[" * 100000) is None
 
     def test_classic_access_not_configured_prefix_is_not_the_name(self):
         drive_url = SHEETS_URL.replace("sheets", "drive")
@@ -171,14 +222,17 @@ class TestMessage:
 
     def test_metadata_is_sanitized(self):
         body = _disabled_body(message="x")
-        body["error"]["details"][0]["metadata"].update(
-            serviceTitle="Google\nSheets  API", activationUrl="javascript:1",
-        )
-        assert service_disabled_message(body) == (
-            "Google Sheets API is disabled for this OAuth client's Cloud "
-            "project. Enable it in the Google Cloud Console under APIs & "
-            f"Services {NOTE}"
-        )
+        for bad_url in ("javascript:1", "https://evil.example/x",
+                        SHEETS_URL + " y"):
+            body["error"]["details"][0]["metadata"].update(
+                serviceTitle="Google\nSheets \x1b[2J API",
+                activationUrl=bad_url,
+            )
+            assert service_disabled_message(body) == (
+                "Google Sheets [2J API is disabled for this OAuth client's "
+                "Cloud project. Enable it in the Google Cloud Console under "
+                f"APIs & Services {NOTE}. Google said: x"
+            )
 
     def test_url_is_never_last(self):
         # Callers wrap the message in parentheses or end it with a period.
@@ -372,19 +426,30 @@ class TestCli:
         assert str(exc.value) == EXPECTED
         assert "comment or edit access" not in str(exc.value)
 
-    def test_cat_spreadsheet_end_to_end(self, capsys, monkeypatch):
+    @pytest.mark.parametrize("argv", [
+        ["cat", "--quiet", "sheet123"],
+        ["tabs", "--quiet", "sheet123"],
+        ["info", "--quiet", "sheet123"],
+        ["cells", "--quiet", "sheet123", "A1", "-v", "1"],
+    ])
+    def test_sheet_commands_end_to_end(self, capsys, monkeypatch, argv):
         from gdoc.cli import run_argv
 
         monkeypatch.setattr(
             "gdoc.cli._file_mime",
             lambda doc_id, change_info: "application/vnd.google-apps.spreadsheet",
         )
-        service = MagicMock()
-        service.spreadsheets.return_value.get.return_value.execute.side_effect = (
-            _http_error(403, _disabled_body())
+        monkeypatch.setattr(
+            "gdoc.api.drive.get_file_info",
+            lambda doc_id: {
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+            },
         )
+        service = MagicMock()
+        # Every Sheets request fails, whichever one the command makes first.
+        service.spreadsheets.side_effect = _http_error(403, _disabled_body())
         with patch("gdoc.api.sheets.get_sheets_service", return_value=service):
-            code = run_argv(["cat", "--quiet", "sheet123"], check_updates=False)
+            code = run_argv(argv, check_updates=False)
         assert code == 1
         err = capsys.readouterr().err
         assert f"ERR: {EXPECTED}" in err

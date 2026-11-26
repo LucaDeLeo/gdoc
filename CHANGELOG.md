@@ -16,8 +16,9 @@ All notable changes to `gdoc` are documented here. This project follows
   disabled for this OAuth client's Cloud project. Enable it: <link>`, taking
   the API name and link from Google's error. All 403 paths (Drive, Docs,
   Sheets, comments, revisions, and the Docs suggestion and native comment
-  paths) check for it first; `cat --comments` still falls back to quoted text
-  and its warning says why. Other 403s are unchanged.
+  paths) check for it first. `cat --comments` still falls back to quoted text
+  and exits 0 when only its optional live-anchor read hits a disabled Docs
+  API; its `WARN:` now names the API and link. Other 403s are unchanged.
 - README setup now lists the **Google Sheets API** among the APIs to enable
   (Sheets support needs it, and setup never said so), including for
   org-wide shared OAuth clients.
